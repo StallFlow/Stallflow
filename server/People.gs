@@ -158,3 +158,16 @@ function sfCheckGoogle() {
   }
   ui.alert('Google sign-in check', lines.join('\n'), ui.ButtonSet.OK);
 }
+
+/**
+ * Same check, for the Apps Script editor (Run ▸ sfGrantGoogle). The editor
+ * picks the account from its own address, so this works even when the browser
+ * has several Google accounts signed in and the sheet menu runs as the wrong
+ * one. The result shows in the editor's execution log.
+ */
+function sfGrantGoogle() {
+  var res = UrlFetchApp.fetch('https://oauth2.googleapis.com/tokeninfo?id_token=check',
+                              { muteHttpExceptions: true });
+  Logger.log('Running as ' + Session.getEffectiveUser().getEmail() +
+             '. Google answered ' + res.getResponseCode() + ', so the permission is in place.');
+}
