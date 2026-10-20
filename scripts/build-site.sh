@@ -15,6 +15,7 @@ rm -rf "$OUT"
 mkdir -p "$OUT"
 touch "$OUT/.nojekyll"
 cp web/landing.html "$OUT/index.html"
+cp web/privacy.html "$OUT/privacy.html"
 
 for dir in stalls/*/; do
   slug="$(basename "$dir")"
