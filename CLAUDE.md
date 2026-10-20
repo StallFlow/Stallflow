@@ -32,9 +32,10 @@ scripts/build-site.sh  builds _site/<slug>/ for every stall
                      CLASPRC_JSON secret)
 ```
 
-Request flow: the phone calls the stall's Apps Script `/exec` URL with
-`?action=…` (GET) or a `text/plain` JSON body (POST; `application/json`
-would trigger a CORS preflight Apps Script cannot answer). `SF.dispatch` in
+Request flow: the staff app sends every request, reads included, as a
+`text/plain` JSON POST to the stall's Apps Script `/exec` URL, so tokens never
+appear in a URL (`application/json` would trigger a CORS preflight Apps Script
+cannot answer). Only the public order page uses GET (`?action=catalogue`). `SF.dispatch` in
 Core.gs checks the signed token against the action's capability, and writes
 go through `SF.once` so a retried request never runs twice.
 
@@ -65,6 +66,14 @@ go through `SF.once` so a retried request never runs twice.
 - **Money and stock are ledgers.** Stock on hand is the sum of `Movements`;
   never write a stock count directly.
 - **Never write a customer's phone number into the audit trail.**
+- **Write to the sheet only through `SF.append` / `SF.setCell`.** They pass
+  values through `SF.safe`, which stops text starting with `= + - @` being run
+  as a formula. Writing with `getRange().setValue()` directly skips that.
+- **Public order protections:** at most `SF.MAX_OPEN_PER_PHONE` unpaid orders
+  per phone per market; pre-orders close by themselves once the live market's
+  date has passed (`SF.marketPassed`); customer details of finished markets are
+  wiped by `SF.purgeCustomers` (daily on first `boot`, and when a new market is
+  made live).
 - Server code is plain Apps Script (V8, no modules). Every `.gs` shares one
   global scope; plugins register themselves with `SF.definePlugin`.
 

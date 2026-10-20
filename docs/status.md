@@ -47,7 +47,6 @@ key should move to that account too.
 
 - **Stock import** for Duxie's (products, prices, batch costs) before their
   next market. Nothing is built yet.
-- Auto-delete customer names and numbers after a market (the order page and
-  `web/privacy.html` both promise this).
-- Close or update the past market (5 Sep 2026, still "planned").
+- Add Duxie's next market and make it live (Numbers). Pre-orders stay closed
+  until then, because the 5 Sep market has passed.
 - Optional: bump GitHub Actions to Node 24 versions (deprecation warnings).

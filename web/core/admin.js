@@ -40,6 +40,12 @@
           '<button class="' + (d.preordersOpen ? 'bad' : 'ok') + ' sm" onclick="SFA.togglePre(' +
           (d.preordersOpen ? 'false' : 'true') + ')">' +
           (d.preordersOpen ? 'Close' : 'Open') + '</button></div>' +
+        (d.marketPassed ? '<div class="notice warn" style="border-radius:10px;margin-bottom:14px">' +
+          'This market\'s date has passed, so the order page is closed. Add the next market ' +
+          'below and make it live.</div>' : '') +
+        (d.summary.outstanding > 0 ? '<button class="ghost block" style="margin-bottom:14px" ' +
+          'onclick="SFA.askRelease()">Release unpaid reservations (' +
+          moneyShort(d.summary.outstanding) + ')</button>' : '') +
 
         '<div class="grid g4" style="margin-bottom:14px">' +
           figure('Taken', moneyShort(s.revenue),
@@ -420,6 +426,22 @@
      ================================================================== */
 
   window.SFA = {
+    askRelease: function () {
+      SF.openSheet('<h2>Release unpaid reservations?</h2>' +
+        '<div class="sub" style="margin-bottom:14px">Every order for this market that has not ' +
+        'been paid is cancelled and its stock goes back on the shelf. Use it for no-shows or ' +
+        'fake orders.</div>' +
+        '<div class="row"><button class="ghost" onclick="SF.closeSheet()">Keep them</button>' +
+        '<button class="bad" style="flex:2" onclick="SFA.release()">Release them</button></div>');
+    },
+    release: function () {
+      SF.closeSheet();
+      SF.post({ action: 'releaseUnpaid', opId: SF.uid('op') }).then(function (res) {
+        if (!res || res.ok === false) { SF.toast((res && res.message) || 'That did not work.', true); return; }
+        SF.toast(res.released + ' released');
+        SF.load('numbers');
+      }).catch(function () { SF.toast('No signal. Try again when you have some.', true); });
+    },
     people: null,
     loadPeople: function () {
       SF.get('people').then(function (res) {

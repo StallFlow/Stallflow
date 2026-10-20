@@ -288,6 +288,7 @@ function onOpen() {
     .addSeparator()
     .addItem('Health check', 'sfHealth')
     .addItem('Check Google sign-in', 'sfCheckGoogle')
+    .addItem('Delete past customers\' details', 'sfPurge')
     .addItem('Export orders', 'sfExport')
     .addItem('Clear trading data', 'sfClear')
     .addToUi();
@@ -447,4 +448,9 @@ function sfDemo() {
 
   ui.alert('Sample stall loaded — one stocked, one made-to-order, one weighed.' +
     '\n\nEvery figure in it is invented. Clear it before trading.');
+}
+
+function sfPurge() {
+  var n = SF.purgeCustomers();
+  SpreadsheetApp.getUi().alert(n + ' finished orders had their customer details removed.');
 }

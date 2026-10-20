@@ -230,8 +230,46 @@ SF.markets = function () {
   });
 };
 
+SF.today = function () { return Utilities.formatDate(new Date(), SF.TZ, 'yyyy-MM-dd'); };
+
+/** The live market has a date and it is already behind us. */
+SF.marketPassed = function () {
+  var id = SF.activeMarket(), passed = false;
+  SF.markets().forEach(function (m) {
+    if (m.id === id && /^\d{4}-\d{2}-\d{2}$/.test(m.date) && m.date < SF.today()) passed = true;
+  });
+  return passed;
+};
+
+/** Open only when switched on AND the live market has not been and gone. */
 SF.preordersOpen = function () {
-  return String(SF.get('preordersOpen', 'yes')).toLowerCase() !== 'no';
+  return String(SF.get('preordersOpen', 'yes')).toLowerCase() !== 'no' && !SF.marketPassed();
+};
+
+SF.MAX_OPEN_PER_PHONE = 2;
+
+/**
+ * Wipe customer names, numbers and notes from orders of markets that are
+ * over: not the live market, and dated before today (or undated). The order
+ * itself stays, so the numbers still add up. The order page promises this.
+ */
+SF.purgeCustomers = function () {
+  var live = SF.activeMarket(), today = SF.today(), over = {};
+  SF.markets().forEach(function (m) {
+    if (m.id !== live && (!m.date || m.date < today)) over[m.id] = true;
+  });
+  var n = 0;
+  SF.rows('orders').forEach(function (o) {
+    if (!over[String(o.MarketId)] || String(o.Channel) !== 'preorder') return;
+    if (!o.Phone && String(o.Customer) === 'Customer') return;
+    SF.setCell('orders', o._row, 'Customer', 'Customer');
+    SF.setCell('orders', o._row, 'Phone', '');
+    SF.setCell('orders', o._row, 'Note', '');
+    n++;
+  });
+  SF.set('lastPurge', today);
+  if (n) SF.audit({ role: 'system' }, 'purgeCustomers', '', n + ' orders', 'ok');
+  return n;
 };
 
 /* =========================================================================
@@ -320,6 +358,15 @@ SF.action('placeOrder', null, 'write', function (p, ctx) {
   if (!p.consent) return { ok: false, message: 'Please tick the box so we may keep your details for the day.' };
   if (!SF.preordersOpen()) {
     return { ok: false, message: 'Pre-orders are closed. Come by the stall — we always keep some back.' };
+  }
+  var digits = phone.replace(/\D/g, ''), open = 0, market = SF.activeMarket();
+  SF.orders().forEach(function (o) {
+    if (o.marketId === market && o.status === 'reserved' &&
+        o.phone.replace(/\D/g, '') === digits) open++;
+  });
+  if (open >= SF.MAX_OPEN_PER_PHONE) {
+    return { ok: false, message: 'This number already has ' + open + ' orders waiting. ' +
+                                 'Collect those first, or message the stall.' };
   }
 
   var built = SF.buildLines(p.lines, ctx, { max: SF.num(SF.get('maxPerLine', 12)) || 12 });
@@ -637,7 +684,8 @@ SF.action('dashboard', 'reports', 'read', function (p) {
                revenue: s.revenue, expenses: s.expenses, profit: s.profit, units: s.units };
     }).sort(function (a, b) { return String(b.date).localeCompare(String(a.date)); }),
     stock: { value: stockValue, units: Math.round(stockUnits * 100) / 100 },
-    preordersOpen: SF.preordersOpen()
+    preordersOpen: SF.preordersOpen(),
+    marketPassed: SF.marketPassed()
   };
 });
 
@@ -649,12 +697,13 @@ SF.action('addMarket', 'reports', 'write', function (p) {
     MarketId: id, Name: name, Date: String(p.date || ''),
     Location: String(p.location || '').slice(0, 80), Status: 'planned', Note: ''
   });
-  if (p.makeActive) SF.set('activeMarket', id);
+  if (p.makeActive) { SF.set('activeMarket', id); SF.purgeCustomers(); }
   return { ok: true, id: id };
 });
 
 SF.action('setActiveMarket', 'reports', 'write', function (p) {
   SF.set('activeMarket', String(p.marketId || ''));
+  SF.purgeCustomers();
   return { ok: true };
 });
 
@@ -693,7 +742,21 @@ SF.action('deleteExpense', 'expenses', 'write', function (p) {
    9. ACTIONS — profile and settings
    ========================================================================= */
 
+/** Owner or manager: put every unpaid reservation for the live market back on the shelf. */
+SF.action('releaseUnpaid', 'reports', 'write', function (p, ctx) {
+  var market = SF.activeMarket(), n = 0;
+  SF.orders().forEach(function (o) {
+    if (o.marketId !== market || o.status !== 'reserved') return;
+    SF.commitLines(o.lines, o.no, 1);
+    SF.setCell('orders', o.row, 'Status', 'cancelled');
+    n++;
+  });
+  return { ok: true, released: n };
+});
+
 SF.action('boot', 'sell', 'read', function (p, ctx) {
+  // Once a day, the first person to open the app clears finished markets' customers.
+  if (String(SF.get('lastPurge', '')) !== SF.today()) SF.purgeCustomers();
   var pr = SF.profile();
   return {
     version: SF.VERSION,

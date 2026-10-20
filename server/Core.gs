@@ -66,14 +66,24 @@ SF.rows = function (key) {
   return out;
 };
 
+/**
+ * Text that starts with = + - or @ is a formula to Google Sheets. A customer
+ * typing =IMAGE("https://…"&D2) as their name would otherwise make the sheet
+ * send other customers' details to a stranger. A leading apostrophe makes
+ * Sheets store it as plain text, and it reads back without the apostrophe.
+ */
+SF.safe = function (v) {
+  return typeof v === 'string' && /^[=+\-@]/.test(v) ? "'" + v : v;
+};
+
 SF.append = function (key, obj) {
   SF.sheet(key).appendRow(SF.SHEETS[key].map(function (h) {
-    return obj[h] == null ? '' : obj[h];
+    return obj[h] == null ? '' : SF.safe(obj[h]);
   }));
 };
 
 SF.setCell = function (key, row, header, value) {
-  SF.sheet(key).getRange(row, SF.SHEETS[key].indexOf(header) + 1).setValue(value);
+  SF.sheet(key).getRange(row, SF.SHEETS[key].indexOf(header) + 1).setValue(SF.safe(value));
 };
 
 SF.num = function (v) { var n = Number(v); return isNaN(n) ? 0 : n; };
