@@ -38,8 +38,9 @@ go through `SF.once` so a retried request never runs twice.
 
 ## Sign-in
 
-- While `SF.PLATFORM.googleClientId` is blank, a stall uses role PINs.
-- Once it is set, Google is the only way in: PIN sign-in is refused and old
+- Until `SF.PLATFORM` has both a `googleClientId` and at least one admin
+  (`SF.googleOn()`), a stall uses role PINs.
+- Once both are set, Google is the only way in: PIN sign-in is refused and old
   PIN tokens stop working. The phone sends Google's ID token to
   `signInGoogle`; the server checks it with Google and issues its own token
   carrying the email.
