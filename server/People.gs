@@ -130,3 +130,31 @@ SF.action('savePerson', 'people', 'write', function (p, ctx) {
   SF.audit(ctx, 'savePerson', email, role + (active === 'No' ? ' (off)' : ''), 'ok');
   return { ok: true };
 });
+
+/**
+ * Sheet menu: StallFlow › Check Google sign-in. Running it from the menu also
+ * makes Google ask the account that clicked it for any permission the script
+ * is missing, which is how the "contact Google" permission gets granted.
+ */
+function sfCheckGoogle() {
+  var ui = SpreadsheetApp.getUi();
+  var lines = [
+    'Running as: ' + (Session.getEffectiveUser().getEmail() || 'unknown'),
+    'Client ID set: ' + (SF.PLATFORM.googleClientId ? 'yes' : 'no'),
+    'Admins: ' + (SF.PLATFORM.admins.join(', ') || 'none'),
+    'Google sign-in on: ' + (SF.googleOn() ? 'yes' : 'no')
+  ];
+  try {
+    var res = UrlFetchApp.fetch('https://oauth2.googleapis.com/tokeninfo?id_token=check',
+                                { muteHttpExceptions: true });
+    lines.push('Can reach Google: yes (' + res.getResponseCode() + ')');
+  } catch (e) {
+    lines.push('Can reach Google: NO — ' + e.message);
+  }
+  var errors = SF.rows('audit').filter(function (r) { return r.Outcome === 'error'; });
+  if (errors.length) {
+    var last = errors[errors.length - 1];
+    lines.push('', 'Last error: ' + last.Action + ' — ' + last.Detail);
+  }
+  ui.alert('Google sign-in check', lines.join('\n'), ui.ButtonSet.OK);
+}

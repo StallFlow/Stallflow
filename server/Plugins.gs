@@ -287,6 +287,7 @@ function onOpen() {
     .addItem('Show my web address', 'sfLinks')
     .addSeparator()
     .addItem('Health check', 'sfHealth')
+    .addItem('Check Google sign-in', 'sfCheckGoogle')
     .addItem('Export orders', 'sfExport')
     .addItem('Clear trading data', 'sfClear')
     .addToUi();
