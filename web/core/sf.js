@@ -336,12 +336,10 @@ window.SF = (function () {
    */
   function warm() {
     if (Outbox.pending().length) return Promise.resolve();
-    return Object.keys(SOURCE)
+    return Promise.all(Object.keys(SOURCE)
       .filter(function (v) { return can(screens[v] ? screens[v].cap : 'sell'); })
-      .reduce(function (chain, v) {
-        return chain.then(function () { return fetchInto(v); });
-      }, Promise.resolve())
-      .then(function () { S.online = true; render(); })
+      .map(function (v) { return fetchInto(v).catch(function () {}); })
+    ).then(function () { S.online = true; render(); })
       .catch(function () { /* the caches we have will do */ });
   }
 
@@ -884,20 +882,31 @@ window.SF = (function () {
     });
   }
 
+  /**
+   * A phone that has opened the shop before paints it straight from its saved
+   * copy and refreshes underneath, so nobody waits on the server to see the
+   * till. A first visit still waits for boot.
+   */
   function start() {
+    var cached = LS.get('sf.boot', null);
+    if (cached) { S.boot = cached; begin(); }
     return get('boot').then(function (res) {
       if (res && res.code === 'auth') { signOut(true); return; }
       if (!res || res.ok === false) throw new Error('boot refused');
       S.boot = res.data;
       LS.set('sf.boot', res.data);
-      begin();
+      if (cached) refreshBoot(); else begin();
     }).catch(function () {
-      var cached = LS.get('sf.boot', null);
-      if (!cached) { paintSignIn('No signal, and this phone has not loaded the shop yet.'); return; }
-      S.boot = cached;
-      S.online = false;
-      begin();
+      if (cached) { S.online = false; render(); return; }
+      paintSignIn('No signal, and this phone has not loaded the shop yet.');
     });
+  }
+
+  function refreshBoot() {
+    S.vocab = S.boot.profile.vocab || S.vocab;
+    S.marketId = S.boot.marketId || S.marketId;
+    paintTheme(S.boot.profile);
+    render();
   }
 
   function begin() {
