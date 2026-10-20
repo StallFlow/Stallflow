@@ -427,7 +427,11 @@ window.SF = (function () {
     params.device = device();
     return get(action, params).then(function (res) {
       var d = res && res.data;
-      if (!d || !d.ok) return { ok: false, message: (d && d.message) || 'Could not sign in.' };
+      // A refusal comes back inside data; a server error comes back on the
+      // outside. Show whichever message there is.
+      if (!d || !d.ok) {
+        return { ok: false, message: (d && d.message) || (res && res.message) || 'Could not sign in.' };
+      }
       S.token = d.token; S.role = d.role; S.user = d.user || '';
       LS.set('sf.auth', { token: d.token, role: d.role, user: S.user });
       return { ok: true, role: d.role, unlocked: d.unlocked };
