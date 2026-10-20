@@ -93,10 +93,13 @@ function load(googleTokens) {
     ContentService: {}, HtmlService: {}
   };
   vm.createContext(ctx);
+  // Start every test from "Google off", whatever Platform.gs currently holds.
   const dir = path.join(__dirname, '..', 'server');
   fs.readdirSync(dir).filter((f) => f.endsWith('.gs')).sort().forEach((f) => {
     vm.runInContext(fs.readFileSync(path.join(dir, f), 'utf8'), ctx, { filename: f });
   });
+  ctx.SF.PLATFORM.googleClientId = '';
+  ctx.SF.PLATFORM.admins = [];
   ctx.SF.migrate();
   return { SF: ctx.SF, sheets };
 }
@@ -139,6 +142,15 @@ test('without a client ID, Google sign-in is refused', () => {
   assert.strictEqual(signIn(SF, 'admin').ok, false);
 });
 
+test('a client ID with no admins leaves PINs on, so nobody is locked out', () => {
+  const { SF } = load(TOKENS);
+  SF.PLATFORM.googleClientId = CLIENT;
+  SF.PLATFORM.admins = [];
+  assert.strictEqual(SF.googleOn(), false);
+  SF.setPin('owner', '4321');
+  assert.strictEqual(SF.dispatch('signIn', { pin: '4321', device: 'd1' }).data.ok, true);
+});
+
 /* ---------- Google mode ---------- */
 
 function google() {
@@ -176,6 +188,7 @@ test('PINs stop working once Google is on', () => {
   SF.setPin('owner', '4321');
   const pinToken = SF.dispatch('signIn', { pin: '4321', device: 'd1' }).data.token;
   SF.PLATFORM.googleClientId = CLIENT;
+  SF.PLATFORM.admins = ['boss@stallflow.co.za'];
   assert.strictEqual(SF.dispatch('signIn', { pin: '4321', device: 'd1' }).data.ok, false);
   assert.strictEqual(SF.dispatch('signIn', { pin: '', device: 'd1' }).data.ok, false,
     'a blank PIN must not give owner access any more');

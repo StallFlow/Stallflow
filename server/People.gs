@@ -15,7 +15,9 @@
 
 SF.SHEETS.users = ['Email', 'Name', 'Role', 'Active', 'AddedAt', 'AddedBy', 'LastSeen'];
 
-SF.googleOn = function () { return !!SF.PLATFORM.googleClientId; };
+SF.googleOn = function () {
+  return !!SF.PLATFORM.googleClientId && SF.PLATFORM.admins.length > 0;
+};
 
 SF.cleanEmail = function (v) { return String(v || '').trim().toLowerCase(); };
 
