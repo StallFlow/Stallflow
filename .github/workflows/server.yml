@@ -1,0 +1,74 @@
+name: Update the stall spreadsheets
+
+# Pushes server/*.gs plus each stall's own .gs files into that stall's Apps
+# Script project, then moves its existing web-app deployment to the new code
+# so the address the phones use never changes.
+#
+# Needs one repository secret, CLASPRC_JSON: the contents of ~/.clasprc.json
+# after `clasp login` as the StallFlow Google account. Until it is set, this
+# workflow reports that and stops; nothing else is affected.
+#
+# A stall is only updated when its stall.json has a scriptId. Without a
+# deploymentId the code is pushed but the live web app keeps running the old
+# version until someone deploys it by hand.
+
+on:
+  push:
+    branches: [main]
+    paths: ['server/**', 'stalls/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: server
+  cancel-in-progress: false
+
+jobs:
+  push:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Check credentials
+        id: creds
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+        run: |
+          if [ -z "$CLASPRC_JSON" ]; then
+            echo "::notice::CLASPRC_JSON is not set yet, so no spreadsheet was updated. See docs/support.md."
+            echo "ready=no" >> "$GITHUB_OUTPUT"
+          else
+            printf '%s' "$CLASPRC_JSON" > ~/.clasprc.json
+            echo "ready=yes" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Install clasp
+        if: steps.creds.outputs.ready == 'yes'
+        run: npm install -g @google/clasp@2.4.2
+      - name: Push to each stall
+        if: steps.creds.outputs.ready == 'yes'
+        run: |
+          set -euo pipefail
+          for dir in stalls/*/; do
+            slug="$(basename "$dir")"
+            conf="$dir/stall.json"
+            [ -f "$conf" ] || continue
+            script_id="$(node -e 'process.stdout.write(require(process.argv[1]).scriptId||"")' "$PWD/$conf")"
+            deploy_id="$(node -e 'process.stdout.write(require(process.argv[1]).deploymentId||"")' "$PWD/$conf")"
+            if [ -z "$script_id" ]; then echo "skip $slug: no scriptId"; continue; fi
+
+            work="$(mktemp -d)"
+            cp server/*.gs server/appsscript.json "$work/"
+            cp "$dir"/*.gs "$work/" 2>/dev/null || true
+            printf '{"scriptId":"%s","rootDir":"."}' "$script_id" > "$work/.clasp.json"
+            ( cd "$work" && clasp push --force )
+            if [ -n "$deploy_id" ]; then
+              ( cd "$work" && clasp deploy --deploymentId "$deploy_id" --description "${GITHUB_SHA::7}" )
+              echo "updated $slug and its live deployment"
+            else
+              echo "::warning::$slug code pushed, but it has no deploymentId, so the live app still runs the old version."
+            fi
+          done

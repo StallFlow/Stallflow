@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>StallFlow</title>
+<meta name="theme-color" content="#7B2D43">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="icon" href="icon-192.png">
+<link rel="stylesheet" href="../core/ui.css">
+<link rel="stylesheet" href="../core/components.css">
+</head>
+<body>
+<header class="rail" id="rail"></header>
+<div id="notices"></div>
+<main id="view"><div class="loading">Starting up…</div></main>
+<nav class="tabs" id="tabs"></nav>
+<div id="toast"></div>
+
+<!-- config first: everything else reads it -->
+<script src="../config.js"></script>
+<script src="../core/qr.js"></script>
+<script src="../core/sf.js"></script>
+<script src="../core/screens.js"></script>
+<script src="../core/admin.js"></script>
+<script src="../core/scan.js"></script>
+
+<!-- Plugins. Adding one is adding a line here; the core does not change.
+     A plugin only runs if the market preset has switched it on. -->
+<script src="../plugins/kitchen.js"></script>
+<script src="../plugins/scale.js"></script>
+<script src="../plugins/cashup.js"></script>
+
+<script>
+  SF.init();
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', function () {
+      navigator.serviceWorker.register('sw.js').catch(function (err) {
+        console.warn('Service worker did not register:', err);
+      });
+    });
+  }
+</script>
+</body>
+</html>

@@ -1,0 +1,177 @@
+/* StallFlow — the components each screen is built from.
+   ui.css holds the tokens and the shell; this holds the parts. */
+
+/* ---- till tiles --------------------------------------------------------- */
+.tiles{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
+@media(min-width:620px){.tiles{grid-template-columns:repeat(3,1fr)}}
+@media(min-width:960px){.tiles{grid-template-columns:repeat(4,1fr)}}
+.tile{background:var(--surface);border:1.5px solid var(--rule);border-radius:12px;
+  padding:12px;text-align:left;color:var(--ink);min-height:92px;display:flex;
+  flex-direction:column;justify-content:space-between;gap:8px;font-weight:600}
+.tile .nm{font-size:15px;font-weight:700;line-height:1.25}
+.tile .vr{font-weight:600;color:var(--muted);font-size:12.5px}
+.tile .bot{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+.tile .pr{font-weight:800;font-family:var(--mono)}
+.tile .per{font-weight:600;color:var(--muted);font-size:11px}
+.tile .st{font-size:11.5px;color:var(--muted);font-weight:700;white-space:nowrap}
+.tile .st.low{color:var(--warn)}
+.tile .st.sold{color:var(--bad)}
+.tile.out{opacity:.45}
+
+.cart{position:fixed;left:0;right:0;bottom:calc(var(--tabbar) + env(safe-area-inset-bottom));
+  z-index:54;background:var(--surface);border-top:1px solid var(--rule);
+  padding:12px var(--pad);box-shadow:0 -6px 26px rgba(27,26,24,.14)}
+.cart .lines{max-height:136px;overflow-y:auto;margin-bottom:10px}
+.cart .l{display:flex;justify-content:space-between;gap:10px;font-size:14.5px;padding:4px 0}
+.cart .tot{display:flex;justify-content:space-between;align-items:center;
+  border-top:1px solid var(--rule);padding-top:10px;margin-bottom:10px}
+.cart .amt{font-size:24px;font-weight:800;font-family:var(--mono)}
+
+button.opt.picked{background:var(--brand);color:var(--brand-ink);border-color:var(--brand)}
+button.opt.picked .muted{color:rgba(255,255,255,.8)}
+
+/* ---- taking payment ------------------------------------------------------
+   Notes are tapped as they are handed over, so the buttons are big and the
+   change is the largest thing on the screen. */
+.moneyrow{display:flex;justify-content:space-between;align-items:baseline;gap:12px;
+  padding:10px 0;border-bottom:1px solid var(--rule);font-size:16px}
+.moneyrow:last-of-type{border-bottom:none}
+.moneyrow b{font-family:var(--mono);font-size:22px;font-weight:800}
+.gotwrap{font-family:var(--mono);font-size:22px;font-weight:800;display:flex;
+  align-items:baseline;gap:4px}
+.gotwrap input{width:120px;text-align:right;font:inherit;padding:6px 8px;min-height:0;
+  border-radius:8px}
+
+.cash{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.cash button{min-height:52px;font-size:16px;font-weight:800;font-family:var(--mono)}
+
+.change{border-radius:14px;padding:16px;text-align:center;margin:14px 0;
+  background:var(--ok-bg);border:2px solid var(--ok)}
+.change i{font-style:normal;display:block;font-size:11px;letter-spacing:.14em;
+  text-transform:uppercase;font-weight:800;color:var(--ok)}
+.change b{display:block;font-family:var(--mono);font-size:40px;font-weight:800;
+  letter-spacing:-.02em;line-height:1.1;margin-top:4px;color:var(--ok)}
+.change.short{background:var(--bad-bg);border-color:var(--bad)}
+.change.short i,.change.short b{color:var(--bad)}
+
+.give{text-align:center;padding:18px 0 22px}
+.give i{font-style:normal;display:block;font-size:12px;letter-spacing:.16em;
+  text-transform:uppercase;font-weight:800;color:var(--muted)}
+.give b{display:block;font-family:var(--mono);font-size:52px;font-weight:800;
+  letter-spacing:-.03em;line-height:1.05;margin:6px 0;color:var(--ok)}
+.give span{color:var(--muted);font-size:14px}
+
+/* ---- collection --------------------------------------------------------- */
+.serving{background:var(--brand);color:var(--brand-ink);border-radius:var(--radius);
+  padding:22px 18px;text-align:center;margin-bottom:14px;box-shadow:var(--shadow)}
+.serving .k{font-size:11px;letter-spacing:.16em;text-transform:uppercase;opacity:.82;
+  font-weight:800}
+.serving .nm{font-size:38px;font-weight:800;letter-spacing:-.025em;line-height:1.05;
+  margin:8px 0 4px;word-break:break-word}
+.serving .no{font-size:13px;opacity:.82;font-weight:700;letter-spacing:.08em}
+.serving .what{background:rgba(0,0,0,.18);border-radius:10px;padding:11px 14px;
+  margin:14px 0 12px;font-size:15px;text-align:left;display:inline-block;min-width:62%}
+.serving .waited{font-size:12.5px;opacity:.82;margin-bottom:14px}
+.serving button{background:var(--surface);color:var(--accent);width:100%;font-size:16px}
+
+.rowitem .pos{width:30px;height:30px;border-radius:50%;color:#fff;font-weight:800;
+  font-size:13px;display:flex;align-items:center;justify-content:center;flex:none}
+.done .rowitem{opacity:.55}
+
+/* ---- costing ------------------------------------------------------------ */
+.costline{display:flex;gap:8px;margin-bottom:8px;align-items:center}
+.costline input.lbl{flex:2}
+.costline input.amt{flex:1;max-width:140px;text-align:right}
+.costline button.x{flex:none;background:none;color:var(--muted);min-height:0;
+  padding:8px 10px;font-size:20px;line-height:1;border:none}
+.answer{background:var(--brand);color:var(--brand-ink);border-radius:12px;padding:16px;
+  margin:14px 0}
+.answer .r{display:flex;justify-content:space-between;align-items:baseline;padding:3px 0}
+.answer .r span{opacity:.85;font-size:13.5px}
+.answer .r b{font-size:16px;font-family:var(--mono)}
+.answer .r.big{border-top:1px solid rgba(255,255,255,.28);margin-top:9px;padding-top:11px}
+.answer .r.big b{font-size:29px;font-weight:800;letter-spacing:-.02em}
+.answer .warnline{font-size:12.5px;opacity:.92;margin-top:8px}
+
+input.pricebox{width:100px;text-align:right;padding:9px 10px;min-height:40px}
+.runrow{border-bottom:1px solid var(--rule);padding:11px 0}
+.runrow:last-child{border-bottom:none}
+.runrow .hd{display:flex;justify-content:space-between;gap:10px;align-items:baseline}
+.runrow .hd b{font-size:15px}
+.runrow .det{font-size:12.5px;color:var(--muted);margin-top:3px}
+
+/* ---- market view -------------------------------------------------------- */
+.behead{font-size:20px;font-weight:800;letter-spacing:-.015em;margin-bottom:3px}
+.track{height:20px;border-radius:999px;background:var(--surface-2);overflow:hidden;
+  margin:14px 0 8px}
+.track .fill{height:100%;background:var(--warn);transition:width .4s ease}
+.track .fill.done{background:var(--ok)}
+@media(prefers-reduced-motion:reduce){.track .fill{transition:none}}
+.ends{display:flex;justify-content:space-between;font-size:12px;color:var(--muted);
+  font-family:var(--mono)}
+.ledger{margin-top:14px;border-top:1px solid var(--rule);padding-top:12px}
+.ledger > div{display:flex;justify-content:space-between;gap:12px;padding:5px 0;font-size:14.5px}
+.ledger > div.sum{border-top:1px solid var(--rule);margin-top:6px;padding-top:9px;font-weight:800}
+.bar{height:8px;border-radius:999px;background:var(--brand);min-width:3px;margin-top:6px}
+.toggle{display:flex;align-items:center;gap:10px;justify-content:space-between;
+  background:var(--surface-2);border-radius:12px;padding:12px 14px;margin-bottom:12px}
+.toggle .t{font-size:14.5px;font-weight:700}
+.toggle .s{font-size:12.5px;color:var(--muted)}
+tr.here{background:var(--surface-2)}
+
+/* ---- labels ------------------------------------------------------------- */
+.pick{display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--rule)}
+.pick:last-child{border-bottom:none}
+.pick input[type=checkbox]{width:24px;height:24px;min-height:0;flex:none;accent-color:var(--brand)}
+.pick .info{flex:1;min-width:0}
+.pick .info b{display:block}
+.pick .info span{font-size:12.5px;color:var(--muted)}
+.pick input[type=number]{width:80px;text-align:center;min-height:40px}
+
+#sheet{background:#fff;padding:8mm;border:1px solid var(--rule);border-radius:var(--radius)}
+.labels{display:grid;grid-template-columns:repeat(3,1fr);gap:4mm}
+.label{border:1px dashed #c9bfb4;border-radius:3mm;padding:4mm 3mm;text-align:center;
+  break-inside:avoid;page-break-inside:avoid;display:flex;flex-direction:column;
+  align-items:center;background:#fff;color:#000}
+.label .shopname{font-size:7.5pt;letter-spacing:.14em;text-transform:uppercase;
+  font-weight:800;color:var(--brand);margin-bottom:1.5mm}
+.label .nm{font-size:11pt;font-weight:800;line-height:1.15}
+.label .vr{font-size:8pt;color:#555;margin-bottom:2mm}
+.label .qr{width:26mm;margin:0 auto}
+.label .code{font-size:7pt;letter-spacing:.1em;color:#666;margin-top:1.5mm;font-weight:700}
+.label .pr{font-size:13pt;font-weight:800;margin-top:1.5mm}
+
+.poster{background:#fff;border:1px solid var(--rule);border-radius:var(--radius);
+  padding:10mm;text-align:center;max-width:150mm;margin:0 auto;color:#000}
+.poster h1{font-size:30pt;color:var(--brand);letter-spacing:-.02em}
+.poster .tag2{color:#555;margin:2mm 0 6mm;font-size:11pt}
+.poster .qr{width:70mm;margin:0 auto}
+.poster .cta{font-size:14pt;font-weight:800;margin-top:6mm}
+.poster .sub2{font-size:10pt;color:#555;margin-top:2mm}
+.poster .url{font-size:7pt;color:#999;margin-top:6mm;word-break:break-all}
+
+@media print{
+  #sheet,.poster{border:none;border-radius:0;padding:0;margin:0;max-width:none}
+  .labels{gap:3mm}
+  .label{border:1px dashed #bbb}
+  @page{size:A4;margin:10mm}
+}
+
+/* ---- scanner ------------------------------------------------------------ */
+#scan{position:fixed;inset:0;background:#000;z-index:95;display:none}
+#scan video{width:100%;height:100%;object-fit:cover}
+#scan .x{position:absolute;top:calc(14px + env(safe-area-inset-top));right:14px;z-index:2}
+#scan .hint{position:absolute;left:0;right:0;bottom:calc(30px + env(safe-area-inset-bottom));
+  text-align:center;color:#fff;font-weight:700;text-shadow:0 1px 6px #000}
+#scan .box{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:64vw;
+  max-width:280px;aspect-ratio:1;border:3px solid rgba(255,255,255,.85);border-radius:18px}
+
+/* ---- kitchen board (plugin) -------------------------------------------- */
+.ticket{background:var(--surface);border:1px solid var(--rule);border-left:5px solid var(--warn);
+  border-radius:12px;padding:14px;margin-bottom:10px}
+.ticket.paid{border-left-color:var(--ok)}
+.ticket .hd{display:flex;justify-content:space-between;align-items:baseline;gap:10px}
+.ticket .hd b{font-size:17px}
+.ticket .it{font-size:15px;margin-top:8px;line-height:1.5}
+.ticket .it .q{font-family:var(--mono);font-weight:800}
+.ticket .opts{color:var(--muted);font-size:13px}

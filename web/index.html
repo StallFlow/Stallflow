@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Order ahead</title>
+<meta name="description" content="Reserve before the market and skip the queue. Pay at the stall.">
+<link rel="stylesheet" href="core/ui.css">
+<style>
+  main{padding-bottom:0}
+  .hero{background:var(--brand);color:var(--brand-ink);padding:26px 18px 22px;text-align:center}
+  .hero h1{font-size:29px;letter-spacing:-.02em}
+  .hero .tag{opacity:.86;font-size:14.5px;margin-top:6px}
+  .hero .when{display:inline-block;margin-top:14px;background:rgba(255,255,255,.18);
+    border-radius:999px;padding:6px 14px;font-size:13px;font-weight:700}
+  .steps{display:flex;gap:10px;justify-content:center;margin-top:16px;flex-wrap:wrap;
+    font-size:11.5px;font-weight:700;letter-spacing:.03em}
+  .steps b{display:inline-block;width:18px;height:18px;line-height:18px;border-radius:50%;
+    background:rgba(255,255,255,.24);text-align:center;font-size:11px;margin-right:5px}
+
+  .cat{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);
+    font-weight:800;margin:18px 0 4px}
+  .item{display:flex;align-items:center;gap:12px;padding:13px 0;border-bottom:1px solid var(--rule)}
+  .item:last-child{border-bottom:none}
+  .item .info{flex:1;min-width:0}
+  .item .nm{font-weight:700}
+  .item .meta{font-size:12.5px;color:var(--muted);margin-top:3px}
+  .item.out{opacity:.45}
+  .stepper{display:flex;align-items:center;border:1.5px solid var(--rule);border-radius:10px;
+    overflow:hidden;background:var(--surface)}
+  .stepper button{background:var(--surface);color:var(--brand);border:none;width:42px;
+    min-height:42px;font-size:21px;font-weight:800;padding:0}
+  .stepper button:disabled{color:var(--rule)}
+  .stepper .q{width:44px;text-align:center;font-weight:800;font-family:var(--mono);font-size:14px}
+
+  .basket{position:sticky;bottom:0;background:var(--surface);border-top:1px solid var(--rule);
+    padding:12px var(--pad) calc(12px + env(safe-area-inset-bottom));z-index:30;
+    box-shadow:0 -6px 24px rgba(27,26,24,.1)}
+  .basket .line{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
+  .basket .amt{font-size:22px;font-weight:800;font-family:var(--mono)}
+
+  .consent{display:flex;gap:12px;align-items:flex-start;background:var(--surface-2);
+    border-radius:12px;padding:13px}
+  .consent input{width:24px;height:24px;min-height:0;flex:none;accent-color:var(--brand);
+    margin-top:2px}
+  .consent label{text-transform:none;letter-spacing:0;font-size:13.5px;font-weight:500;
+    color:var(--ink);margin:0;line-height:1.45}
+
+  .done{text-align:center;padding:30px 18px}
+  .done .tick{width:66px;height:66px;border-radius:50%;background:var(--ok);color:#fff;
+    font-size:34px;line-height:66px;margin:0 auto 16px}
+  .done .no{font-size:34px;font-weight:800;letter-spacing:-.02em;margin:10px 0;
+    font-family:var(--mono)}
+  .say{background:var(--warn-bg);border:1px solid var(--rule);color:var(--warn);
+    border-radius:12px;padding:13px 15px;font-size:14px;margin-bottom:14px;text-align:left}
+</style>
+</head>
+<body>
+<main id="app"><div class="loading">Loading the stall…</div></main>
+<div id="toast"></div>
+
+<script src="config.js"></script>
+<script>
+var CFG = window.STALLFLOW, DATA = null, CART = {};
+
+function el(id){ return document.getElementById(id); }
+function esc(s){
+  return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+/* Rands the South African way: space thousands, point decimal. Written by hand
+   because toLocaleString('en-ZA') uses a comma for the decimal separator. */
+function money(v){
+  var n = Number(v)||0, neg = n<0; n = Math.abs(n);
+  var p = n.toFixed(2).split('.');
+  return (neg?'-':'') + 'R ' + p[0].replace(/\B(?=(\d{3})+(?!\d))/g,' ') + '.' + p[1];
+}
+function qty(n, unit){
+  if (unit === 'each' || !unit) return String(Math.round(n));
+  return (Math.round(n*1000)/1000) + ' ' + unit;
+}
+function toast(msg, bad){
+  var t = el('toast');
+  t.textContent = msg;
+  t.className = 'show' + (bad ? ' bad' : '');
+  clearTimeout(t._t);
+  t._t = setTimeout(function(){ t.className=''; }, bad ? 4500 : 2600);
+}
+function apiGet(action){
+  return fetch(CFG.api + '?action=' + encodeURIComponent(action)).then(function(r){ return r.json(); });
+}
+function apiPost(body){
+  // text/plain keeps this a "simple" request so the browser skips the CORS
+  // preflight that Apps Script cannot answer.
+  return fetch(CFG.api, { method:'POST',
+    headers:{'Content-Type':'text/plain;charset=utf-8'}, body: JSON.stringify(body)
+  }).then(function(r){ return r.json(); });
+}
+
+window.addEventListener('load', function(){
+  if (!CFG.api){
+    el('app').innerHTML = '<div class="wrap"><div class="card"><div class="say">' +
+      '<b>Not connected yet.</b><br>The <code>api</code> address is blank in config.js.' +
+      '</div></div></div>';
+    return;
+  }
+  apiGet('catalogue').then(function(res){
+    if (!res || res.ok === false) throw new Error('no');
+    DATA = res.data;
+    var r = document.documentElement.style;
+    r.setProperty('--brand', DATA.profile.colour);
+    r.setProperty('--ink', DATA.profile.ink);
+    r.setProperty('--paper', DATA.profile.paper);
+    document.title = DATA.profile.name + ' — order ahead';
+    draw();
+  }).catch(function(){
+    el('app').innerHTML = '<div class="wrap"><div class="card"><div class="say">' +
+      '<b>We could not load the stall.</b><br>Check your signal and pull down to refresh. ' +
+      'If it keeps happening, come by the table — we will sort you out there.</div></div></div>';
+  });
+});
+
+function unitOf(id){ var p = product(id); return p ? p.unit : 'each'; }
+function product(id){
+  var out = null;
+  DATA.products.forEach(function(p){ if (p.id === id) out = p; });
+  return out;
+}
+function step(p){ return p.weighed ? (p.unit === 'kg' ? 0.25 : 1) : 1; }
+
+function totals(){
+  var value = 0, count = 0;
+  Object.keys(CART).forEach(function(id){
+    var p = product(id);
+    if (!p) return;
+    value += p.price * CART[id];
+    count += p.weighed ? 1 : CART[id];
+  });
+  return { value: value, count: count };
+}
+
+function draw(){
+  var pr = DATA.profile, t = totals();
+  var head = '<div class="hero"><h1>' + esc(pr.name) + '</h1>' +
+    (pr.tagline ? '<div class="tag">' + esc(pr.tagline) + '</div>' : '') +
+    (DATA.market && DATA.market.name
+      ? '<div class="when">' + esc(DATA.market.name) +
+        (DATA.market.date ? ' · ' + esc(DATA.market.date) : '') + '</div>' : '') +
+    '<div class="steps"><span><b>1</b>Reserve</span><span><b>2</b>Collect</span>' +
+      '<span><b>3</b>Pay at the stall</span></div></div>';
+
+  if (!DATA.open){
+    el('app').innerHTML = head + '<div class="wrap"><div class="card"><div class="say">' +
+      '<b>Pre-orders are closed.</b><br>Come by on the day — we always keep some back for ' +
+      'the people who walk up.</div></div></div>';
+    return;
+  }
+  var anything = DATA.products.some(function(p){ return p.available === null || p.available > 0; });
+  if (!anything){
+    el('app').innerHTML = head + '<div class="wrap"><div class="card"><div class="say">' +
+      '<b>Everything is reserved.</b><br>Come past anyway — orders do get cancelled.' +
+      '</div></div></div>';
+    return;
+  }
+
+  var groups = {};
+  DATA.products.forEach(function(p){ (groups[p.category||''] = groups[p.category||'']||[]).push(p); });
+  var list = Object.keys(groups).sort().map(function(cat){
+    return (cat ? '<div class="cat">' + esc(cat) + '</div>' : '') +
+      groups[cat].map(itemRow).join('');
+  }).join('');
+
+  el('app').innerHTML = head +
+    '<div class="wrap"><div class="card"><h2>Choose what you want</h2>' +
+      '<div class="sub">Nothing is paid now. You pay at the table when you fetch it.</div>' +
+      list + '</div>' +
+      '<div class="card"' + (t.count ? '' : ' style="display:none"') + '>' +
+        '<h2>Who is it for?</h2>' +
+        '<div class="sub">So we can call your name when it is ready.</div>' +
+        '<div class="field"><label for="nm">Name</label>' +
+          '<input id="nm" autocomplete="name" placeholder="First name and surname"></div>' +
+        '<div class="field"><label for="ph">Phone</label>' +
+          '<input id="ph" type="tel" autocomplete="tel" placeholder="072 123 4567"></div>' +
+        '<div class="field"><label for="nt">Anything we should know? (optional)</label>' +
+          '<input id="nt" placeholder="Collecting after 11, gift wrap, …"></div>' +
+        '<div class="consent"><input type="checkbox" id="cs">' +
+          '<label for="cs">' + esc(DATA.consentText) + '</label></div>' +
+      '</div>' +
+      '<div class="foot">Powered by StallFlow</div></div>' +
+    (t.count
+      ? '<div class="basket"><div class="line">' +
+        '<span class="muted small">' + t.count + ' reserved</span>' +
+        '<span class="amt">' + money(t.value) + '</span></div>' +
+        '<button class="block" id="go" onclick="submit()">Reserve — pay at the stall</button></div>'
+      : '');
+}
+
+function itemRow(p){
+  var have = CART[p.id] || 0;
+  var out = p.available !== null && p.available <= 0;
+  var left = p.available === null
+    ? '<span class="tag">made to order</span>'
+    : out ? '<span class="tag bad">Sold out</span>'
+    : p.available <= 4 ? '<span class="tag warn">' + qty(p.available,p.unit) + ' left</span>'
+    : '<span class="tag">' + qty(p.available,p.unit) + ' available</span>';
+
+  var price = money(p.price) + (p.weighed ? ' per ' + esc(p.unit) : '');
+  var shown = p.weighed ? qty(have, p.unit) : String(have);
+
+  return '<div class="item' + (out ? ' out' : '') + '">' +
+    '<div class="info"><div class="nm">' + esc(p.name) +
+      (p.variant ? ' <span class="muted small">' + esc(p.variant) + '</span>' : '') + '</div>' +
+      '<div class="meta">' + price + ' &nbsp; ' + left +
+      (p.weighed ? '<br><span class="muted">Weighed at the stall — this reserves about ' +
+        'that much.</span>' : '') + '</div></div>' +
+    (out ? '' :
+      '<div class="stepper">' +
+        '<button aria-label="Less ' + esc(p.name) + '" onclick="bump(\'' + p.id + '\',-1)"' +
+          (have ? '' : ' disabled') + '>&minus;</button>' +
+        '<span class="q">' + shown + '</span>' +
+        '<button aria-label="More ' + esc(p.name) + '" onclick="bump(\'' + p.id + '\',1)">+</button>' +
+      '</div>') +
+  '</div>';
+}
+
+function bump(id, dir){
+  var p = product(id);
+  if (!p) return;
+  var s = step(p);
+  var cap = p.available === null ? Infinity : p.available;
+  if (!p.weighed) cap = Math.min(cap, DATA.maxPerLine);
+  var next = Math.max(0, Math.min(cap, (CART[id] || 0) + dir * s));
+  next = Math.round(next * 1000) / 1000;
+  if (next) CART[id] = next; else delete CART[id];
+  draw();
+}
+
+function submit(){
+  var name = (el('nm').value||'').trim(), phone = (el('ph').value||'').trim();
+  if (name.length < 2){ toast('We still need your name.', true); el('nm').focus(); return; }
+  if (phone.replace(/\D/g,'').length < 9){
+    toast('We need a working phone number.', true); el('ph').focus(); return;
+  }
+  if (!el('cs').checked){
+    toast('Please tick the box so we may keep your details for the day.', true);
+    el('cs').focus(); return;
+  }
+  var lines = Object.keys(CART).map(function(id){ return { id:id, qty:CART[id] }; });
+  if (!lines.length){ toast('Choose at least one thing.', true); return; }
+
+  var btn = el('go');
+  btn.disabled = true; btn.textContent = 'Reserving…';
+
+  apiPost({ action:'placeOrder', opId:'c-' + Date.now().toString(36) + '-' +
+              Math.random().toString(36).slice(2,8),
+            name:name, phone:phone, note:el('nt').value||'', consent:true, lines:lines })
+    .then(function(res){
+      if (!res.ok){
+        toast(res.message, true);
+        btn.disabled = false; btn.textContent = 'Reserve — pay at the stall';
+        return apiGet('catalogue').then(function(r2){ if (r2.ok){ DATA = r2.data; draw(); } });
+      }
+      confirmed(res);
+    })
+    .catch(function(){
+      toast('That did not go through — check your signal and try again.', true);
+      btn.disabled = false; btn.textContent = 'Reserve — pay at the stall';
+    });
+}
+
+function confirmed(res){
+  var pr = DATA.profile;
+  el('app').innerHTML =
+    '<div class="hero"><h1>' + esc(pr.name) + '</h1>' +
+      (pr.tagline ? '<div class="tag">' + esc(pr.tagline) + '</div>' : '') + '</div>' +
+    '<div class="wrap"><div class="card done"><div class="tick">&check;</div>' +
+      '<h2>Thanks, ' + esc(String(res.name||'').split(' ')[0]) + '</h2>' +
+      '<div class="no">' + esc(res.orderNo) + '</div>' +
+      '<p class="muted small">Put aside for you.</p>' +
+      '<p style="font-size:26px;font-weight:800;margin:14px 0" class="num">' +
+        money(res.total) + '</p>' +
+      '<div class="say"><b>Give your name at the stall.</b><br>You pay there — cash or card, ' +
+        'whatever you like. Nothing has been charged.</div>' +
+      (pr.whatsapp ? '<p class="muted small">Need to change it? WhatsApp ' +
+        esc(pr.whatsapp) + '.</p>' : '') +
+    '</div><div class="foot">Powered by StallFlow</div></div>';
+  window.scrollTo(0,0);
+}
+</script>
+</body>
+</html>
