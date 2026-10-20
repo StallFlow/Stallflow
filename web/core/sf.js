@@ -423,14 +423,32 @@ window.SF = (function () {
     return d;
   }
 
-  function signIn(pin) {
-    return get('signIn', { pin: pin, device: device() }).then(function (res) {
+  function signInWith(action, params) {
+    params.device = device();
+    return get(action, params).then(function (res) {
       var d = res && res.data;
       if (!d || !d.ok) return { ok: false, message: (d && d.message) || 'Could not sign in.' };
-      S.token = d.token; S.role = d.role;
-      LS.set('sf.auth', { token: d.token, role: d.role });
+      S.token = d.token; S.role = d.role; S.user = d.user || '';
+      LS.set('sf.auth', { token: d.token, role: d.role, user: S.user });
       return { ok: true, role: d.role, unlocked: d.unlocked };
     });
+  }
+
+  function signIn(pin) { return signInWith('signIn', { pin: pin }); }
+
+  /** Google's sign-in button script, loaded once and only when needed. */
+  var gsi = null;
+  function loadGoogle() {
+    if (gsi) return gsi;
+    gsi = new Promise(function (resolve, reject) {
+      var s = document.createElement('script');
+      s.src = 'https://accounts.google.com/gsi/client';
+      s.async = true;
+      s.onload = resolve;
+      s.onerror = function () { gsi = null; reject(new Error('gsi')); };
+      document.head.appendChild(s);
+    });
+    return gsi;
   }
 
   /**
@@ -464,9 +482,12 @@ window.SF = (function () {
     closeSheet();
     LS.del('sf.auth');
     Cache.clear();                 // cached reads only — the outbox survives
-    S.token = null; S.role = null; S.ready = false;
+    S.token = null; S.role = null; S.user = ''; S.ready = false;
+    if (window.google && google.accounts && google.accounts.id) {
+      google.accounts.id.disableAutoSelect();   // so the next person picks their own account
+    }
     S.data = {}; S.at = {};        // nothing of the last person left in memory
-    if (expired) toast('Your sign-in expired. Please enter the PIN again.', true);
+    if (expired) toast('Please sign in again.', true);
     paintSignIn();
   }
 
@@ -700,7 +721,7 @@ window.SF = (function () {
     var extra = registry.screens.filter(function (sc) {
       return pluginOn(sc.plugin) && can(sc.cap);
     });
-    var core = ['labels', 'settings', 'health'].filter(function (id) {
+    var core = ['labels', 'people', 'settings', 'health'].filter(function (id) {
       return screens[id] && can(screens[id].cap);
     }).map(function (id) { return screens[id]; });
 
@@ -716,7 +737,8 @@ window.SF = (function () {
         '<button class="ghost" onclick="SF.signOut()">Sign out</button>' +
       '</div>' +
       '<div class="foot">StallFlow ' + esc((S.boot && S.boot.version) || '') +
-        ' · signed in as ' + esc(S.role) + '</div>');
+        ' · signed in as ' + (S.user ? esc(S.user) + ' (' + esc(S.role) + ')' : esc(S.role)) +
+        '</div>');
   }
 
   function toggleTheme() {
@@ -746,10 +768,85 @@ window.SF = (function () {
     if (saved) document.documentElement.setAttribute('data-theme', saved);
   }
 
+  /**
+   * The server says whether this stall uses Google or PINs. The last answer
+   * is kept on the phone so the right screen paints at once; a fresh answer
+   * only repaints if it changed, so nobody loses a half-typed PIN.
+   */
   function paintSignIn(message) {
     el('rail').innerHTML = '<div class="line"><span class="shop">StallFlow</span></div>';
     el('notices').innerHTML = '';
     el('tabs').innerHTML = '';
+    var known = LS.get('sf.authcfg', null);
+    if (known) drawSignIn(known, message);
+    else el('view').innerHTML = '<div class="wrap" style="max-width:420px;padding-top:40px">' +
+      '<div class="card"><div class="loading">Opening the shop…</div></div></div>';
+
+    get('authConfig').then(function (res) {
+      // A server from before Google sign-in does not know this action: that
+      // simply means PINs, not an error.
+      var d = res && res.ok !== false && res.data ? res.data : {};
+      var cfg = { google: !!d.google, clientId: d.clientId || '' };
+      LS.set('sf.authcfg', cfg);
+      if (!known || JSON.stringify(known) !== JSON.stringify(cfg)) drawSignIn(cfg, message);
+    }).catch(function () {
+      if (!known) drawSignIn({ google: false }, message ||
+        'Could not reach the shop. Sign in once with signal, then it works offline.');
+    });
+  }
+
+  function drawSignIn(cfg, message) {
+    if (cfg.google) { drawGoogleSignIn(cfg, message); return; }
+    drawPinSignIn(message);
+  }
+
+  function drawGoogleSignIn(cfg, message) {
+    el('view').innerHTML =
+      '<div class="wrap" style="max-width:420px;padding-top:40px">' +
+        '<div class="card">' +
+          '<h2>Sign in</h2>' +
+          '<div class="sub">Use the Google account the owner added to this stall.</div>' +
+          (message ? '<div class="notice bad" style="border-radius:10px;margin-bottom:12px">' +
+            esc(message) + '</div>' : '') +
+          '<div id="gsi" style="display:flex;justify-content:center;min-height:44px">' +
+            '<div class="loading">Loading Google sign-in…</div></div>' +
+          '<p class="muted small" style="margin-top:12px;text-align:center">' +
+            'Not on the list yet? Ask the owner to add your email address under ' +
+            'More &rsaquo; People.</p>' +
+        '</div>' +
+      '</div>';
+
+    loadGoogle().then(function () {
+      var box = el('gsi');
+      if (!box) return;
+      box.innerHTML = '';
+      google.accounts.id.initialize({
+        client_id: cfg.clientId,
+        callback: function (r) {
+          box.innerHTML = '<div class="loading">Checking…</div>';
+          signInWith('signInGoogle', { credential: r.credential }).then(function (res) {
+            if (!res.ok) { drawGoogleSignIn(cfg, res.message); return; }
+            start();
+          }).catch(function () {
+            drawGoogleSignIn(cfg, 'Could not reach the shop. Check your signal and try again.');
+          });
+        }
+      });
+      var dark = document.documentElement.getAttribute('data-theme') === 'dark' ||
+        (!document.documentElement.getAttribute('data-theme') &&
+         window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches);
+      google.accounts.id.renderButton(box, {
+        theme: dark ? 'filled_black' : 'outline', size: 'large', shape: 'pill',
+        text: 'signin_with', width: Math.min(340, box.clientWidth || 340)
+      });
+    }).catch(function () {
+      var box = el('gsi');
+      if (box) box.innerHTML = '<div class="notice bad" style="border-radius:10px">' +
+        'Google sign-in did not load. Check your signal and refresh.</div>';
+    });
+  }
+
+  function drawPinSignIn(message) {
     el('view').innerHTML =
       '<div class="wrap" style="max-width:420px;padding-top:40px">' +
         '<div class="card">' +
@@ -770,10 +867,10 @@ window.SF = (function () {
       var btn = el('signin');
       btn.disabled = true; btn.textContent = 'Checking…';
       signIn(el('pin').value || '').then(function (r) {
-        if (!r.ok) { paintSignIn(r.message); return; }
+        if (!r.ok) { drawPinSignIn(r.message); return; }
         start();
       }).catch(function () {
-        paintSignIn('Could not reach the shop. Sign in once with signal, then it works offline.');
+        drawPinSignIn('Could not reach the shop. Sign in once with signal, then it works offline.');
       });
     };
     el('pin').addEventListener('keydown', function (e) {
@@ -821,7 +918,9 @@ window.SF = (function () {
     if (density) document.documentElement.setAttribute('data-density', density);
 
     var auth = LS.get('sf.auth', null);
-    if (auth && auth.token) { S.token = auth.token; S.role = auth.role; start(); }
+    if (auth && auth.token) {
+      S.token = auth.token; S.role = auth.role; S.user = auth.user || ''; start();
+    }
     else paintSignIn();
 
     window.addEventListener('hashchange', route);

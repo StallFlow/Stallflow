@@ -335,12 +335,15 @@ function sfLinks() {
 }
 
 function sfHealth() {
-  var h = SF.dispatch('health', { token: SF.mintToken('owner', 'sheet') }).data;
+  // Called from the sheet's own menu, so whoever clicked it already has the
+  // sheet open; there is no phone and no token to check.
+  var h = SF.CORE_ACTIONS.health.fn({}, { role: 'owner', device: 'sheet' });
   SpreadsheetApp.getUi().alert(
     'StallFlow ' + h.version + '\n' +
     'Schema ' + h.schema.at + ' of ' + h.schema.expected + '\n' +
     'Market type: ' + h.preset + '\n' +
-    'PIN lock: ' + (h.locked ? 'on' : 'OFF — anyone with the link is an owner') + '\n\n' +
+    'Sign-in: ' + (h.google ? 'Google' : h.locked ? 'PINs' :
+                   'OFF — anyone with the link is an owner') + '\n\n' +
     'Plugins:\n• ' + h.plugins.map(function (p) {
       return p.name + ' ' + p.version + (p.on ? '' : ' (off)'); }).join('\n• ') + '\n\n' +
     (h.problems.length ? 'Problems:\n• ' + h.problems.join('\n• ') : 'No problems found.'));

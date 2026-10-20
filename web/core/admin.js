@@ -246,7 +246,11 @@
             '<input id="sc" type="color" value="' + esc(p.colour) + '" style="height:52px"></div>' +
           '<button class="block" onclick="SFA.saveProfile()">Save</button></div>' +
 
-        '<div class="card"><h2>Who can do what</h2>' +
+        (b.auth && b.auth.google
+          ? '<div class="card"><h2>Who can do what</h2>' +
+              '<div class="sub">Everyone signs in with their own Google account.</div>' +
+              '<button class="ghost block" onclick="SF.go(\'people\')">Manage people</button></div>'
+          : '<div class="card"><h2>Who can do what</h2>' +
           '<div class="sub">A PIN each. The server checks the role on every change, so a ' +
             'cashier cannot change prices even with the link.</div>' +
           ['owner', 'manager', 'cashier', 'viewer'].map(function (r) {
@@ -257,7 +261,7 @@
               '\')">Set</button></div></div>';
           }).join('') +
           '<div class="muted small">owner: everything · manager: everything but PINs · ' +
-            'cashier: sell and hand over · viewer: numbers only</div></div>' +
+            'cashier: sell and hand over · viewer: numbers only</div></div>') +
 
         '<div class="card"><h2>Plugins</h2>' +
           '<div class="sub">Switched on by the market type. Each one adds behaviour the ' +
@@ -274,6 +278,88 @@
         '<div class="foot">StallFlow ' + esc(b.version) + '</div></div>';
     }
   });
+
+  /* ==================================================================
+     PEOPLE — who may sign in, and as what
+     ================================================================== */
+
+  var ROLE_HELP = {
+    owner: 'Everything, including adding people. This is an admin.',
+    manager: 'Selling, stock, prices, costs and the numbers.',
+    cashier: 'Selling and handing over orders.',
+    viewer: 'Sees the numbers only.'
+  };
+
+  SF.screen({
+    id: 'people', title: 'People', cap: 'people',
+    render: function () {
+      if (!(SF.state.boot.auth && SF.state.boot.auth.google)) {
+        return '<div class="wrap"><div class="card"><h2>People</h2>' +
+          '<div class="sub">This stall still uses PINs. People appears once Google ' +
+          'sign-in is switched on.</div></div></div>';
+      }
+      setTimeout(SFA.loadPeople, 0);
+      return '<div class="wrap"><div id="peoplebox">' +
+        '<div class="card"><div class="loading">Fetching the list…</div></div></div>' +
+        '<div class="foot">StallFlow · people</div></div>';
+    }
+  });
+
+  function roleSelect(id, current) {
+    return '<select id="' + id + '">' + ['owner', 'manager', 'cashier', 'viewer'].map(function (r) {
+      return '<option value="' + r + '"' + (r === current ? ' selected' : '') + '>' +
+        (r === 'owner' ? 'owner (admin)' : r) + '</option>';
+    }).join('') + '</select>';
+  }
+
+  function drawPeople(d) {
+    var me = SF.state.user;
+    var rows = d.people.map(function (p, i) {
+      var self = p.email === me;
+      return '<div class="card flat" style="border:1px solid var(--rule);margin-bottom:10px">' +
+        '<div style="display:flex;gap:10px;align-items:baseline;flex-wrap:wrap">' +
+          '<b style="flex:1;min-width:0;word-break:break-all">' + esc(p.email) + '</b>' +
+          '<span class="tag' + (p.active ? ' ok' : '') + '">' + (p.active ? 'can sign in' : 'off') +
+          '</span></div>' +
+        '<div class="muted small" style="margin:2px 0 10px">' + esc(p.name || '') +
+          (p.lastSeen ? ' · last in ' + esc(p.lastSeen) : ' · not signed in yet') + '</div>' +
+        (self ? '<div class="muted small">This is you.</div>' :
+          '<div class="row" style="align-items:flex-end">' +
+            '<div class="field" style="margin:0"><label for="pr-' + i + '">Role</label>' +
+              roleSelect('pr-' + i, p.role) + '</div>' +
+            '<div style="flex:none"><button class="ghost" onclick="SFA.savePerson(' + i +
+              ', true)">Save</button></div>' +
+            '<div style="flex:none"><button class="' + (p.active ? 'bad' : 'ok') +
+              ' sm" onclick="SFA.savePerson(' + i + ', ' + (p.active ? 'false' : 'true') + ')">' +
+              (p.active ? 'Switch off' : 'Switch on') + '</button></div>' +
+          '</div>') +
+        '</div>';
+    }).join('');
+
+    SF.el('peoplebox').innerHTML =
+      '<div class="card"><h2>Add someone</h2>' +
+        '<div class="sub">They sign in with Google using exactly this address. It does not ' +
+          'have to be Gmail: any email they have made a Google account with works.</div>' +
+        '<div class="field"><label for="pe">Their Google account email</label>' +
+          '<input id="pe" type="email" autocomplete="off" placeholder="name@example.com"></div>' +
+        '<div class="field"><label for="prole">Role</label>' + roleSelect('prole', 'cashier') +
+        '</div>' +
+        '<button class="block" onclick="SFA.addPerson()">Add</button>' +
+        '<div class="muted small" style="margin-top:10px">' +
+          Object.keys(ROLE_HELP).map(function (r) {
+            return '<b>' + r + '</b>: ' + esc(ROLE_HELP[r]);
+          }).join('<br>') + '</div></div>' +
+      '<div class="card"><h2>Who has access</h2>' +
+        '<div class="sub">Changes apply on their next tap. Nobody needs to sign in again.</div>' +
+        d.admins.map(function (a) {
+          return '<div class="rowitem"><div class="who"><b>' + esc(a) + '</b>' +
+            '<span>StallFlow admin · owner on every stall</span></div>' +
+            '<span class="tag ok">always</span></div>';
+        }).join('') +
+        (rows || '<div class="empty" style="margin-top:10px">Nobody else yet.</div>') +
+      '</div>';
+    SFA.people = d;
+  }
 
   /* ==================================================================
      HEALTH
@@ -298,6 +384,7 @@
     addBatch: 'A costing run', setPrice: 'A price change', adjustStock: 'A stock adjustment',
     saveProduct: 'A product', addExpense: 'A cost', deleteExpense: 'Removing a cost',
     setActive: 'Hiding or showing a product', addMarket: 'A new market',
+    savePerson: 'A change to who has access',
     setActiveMarket: 'Changing the live market', setPreordersOpen: 'Opening or closing pre-orders',
     'cashup.record': 'A cash-up'
   };
@@ -333,6 +420,48 @@
      ================================================================== */
 
   window.SFA = {
+    people: null,
+    loadPeople: function () {
+      SF.get('people').then(function (res) {
+        if (!SF.el('peoplebox')) return;
+        if (!res || res.ok === false) {
+          SF.el('peoplebox').innerHTML = '<div class="card"><div class="empty">' +
+            esc((res && res.message) || 'Could not fetch the list. This needs signal.') +
+            '</div></div>';
+          return;
+        }
+        drawPeople(res.data);
+      }).catch(function () {
+        if (SF.el('peoplebox')) SF.el('peoplebox').innerHTML = '<div class="card"><div class="empty">' +
+          'Could not fetch the list. This needs signal.</div></div>';
+      });
+    },
+    addPerson: function () {
+      var email = String(SF.el('pe').value || '').trim().toLowerCase();
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+        SF.toast('Type their full email address.', true); return;
+      }
+      SFA.sendPerson({ email: email, role: SF.el('prole').value, active: true }, 'Added ' + email);
+    },
+    savePerson: function (i, active) {
+      var p = SFA.people && SFA.people.people[i];
+      if (!p) return;
+      var role = SF.el('pr-' + i) ? SF.el('pr-' + i).value : p.role;
+      SFA.sendPerson({ email: p.email, role: role, active: active },
+        active ? 'Saved' : p.email + ' is switched off');
+    },
+    sendPerson: function (payload, done) {
+      // Sent directly, not through the outbox: access changes need an answer now,
+      // and a refusal (e.g. changing your own access) must be shown, not queued.
+      SF.post({ action: 'savePerson', opId: SF.uid('op'), email: payload.email,
+                role: payload.role, active: payload.active }).then(function (res) {
+        if (!res || res.ok === false) {
+          SF.toast((res && res.message) || 'That did not save.', true); return;
+        }
+        SF.toast(done);
+        SFA.loadPeople();
+      }).catch(function () { SF.toast('No signal. Try again when you have some.', true); });
+    },
     pickMarket: function (id) { SF.state.marketId = id; SF.load('numbers'); },
     makeLive: function () {
       SF.write('setActiveMarket', { marketId: SF.state.marketId });

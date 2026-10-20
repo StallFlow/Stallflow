@@ -693,10 +693,12 @@ SF.action('deleteExpense', 'expenses', 'write', function (p) {
    9. ACTIONS — profile and settings
    ========================================================================= */
 
-SF.action('boot', 'sell', 'read', function () {
+SF.action('boot', 'sell', 'read', function (p, ctx) {
   var pr = SF.profile();
   return {
     version: SF.VERSION,
+    me: { user: ctx.user || '', role: ctx.role },
+    auth: { google: SF.googleOn() },
     profile: pr,
     marketId: SF.activeMarket(),
     units: SF.UNITS,

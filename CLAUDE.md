@@ -15,6 +15,8 @@ web/                 the front end, one copy for every stall
 server/              Apps Script, identical in every stall's sheet
   Core.gs            sheets, settings, identity, audit, plugin host, router, migrations
   Domain.gs          catalogue, stock, orders, costing, markets, dashboard
+  People.gs          Google sign-in, the Users tab, the People screen's actions
+  Platform.gs        Google client ID and StallFlow admins, same for every stall
   Plugins.gs         presets, scale/kitchen/cash-up plugins, the sheet menu
   appsscript.json    manifest (web app: execute as owner, anyone can call)
 stalls/<slug>/       one folder per stall
@@ -33,6 +35,19 @@ Request flow: the phone calls the stall's Apps Script `/exec` URL with
 would trigger a CORS preflight Apps Script cannot answer). `SF.dispatch` in
 Core.gs checks the signed token against the action's capability, and writes
 go through `SF.once` so a retried request never runs twice.
+
+## Sign-in
+
+- While `SF.PLATFORM.googleClientId` is blank, a stall uses role PINs.
+- Once it is set, Google is the only way in: PIN sign-in is refused and old
+  PIN tokens stop working. The phone sends Google's ID token to
+  `signInGoogle`; the server checks it with Google and issues its own token
+  carrying the email.
+- On every request `SF.dispatch` looks the email up again (`SF.roleOf`), so
+  role changes and switch-offs apply on the person's next tap.
+- `SF.PLATFORM.admins` are owner on every stall and cannot be changed from a
+  stall. Everyone else is a row in the stall's `Users` tab.
+- Any email that has a Google account works; it does not have to be Gmail.
 
 ## Rules that are easy to break
 
@@ -67,6 +82,7 @@ action needs an owner or manager token.
 ```
 for f in web/core/*.js web/plugins/*.js web/app/sw.js; do node --check "$f"; done
 for f in server/*.gs stalls/*/*.gs; do cp "$f" /tmp/c.js && node --check /tmp/c.js; done
+node tests/server.test.js      # runs the real server code against a fake sheet
 scripts/build-site.sh
 ```
 

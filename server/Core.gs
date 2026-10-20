@@ -18,7 +18,7 @@
 var SF = SF || {};
 
 SF.VERSION = '2.0.0';
-SF.SCHEMA = 4;                        // bump when SHEETS changes; see MIGRATIONS
+SF.SCHEMA = 5;                        // bump when SHEETS changes; see MIGRATIONS
 SF.TZ = 'Africa/Johannesburg';
 
 /* =========================================================================
@@ -183,6 +183,9 @@ SF.setPin = function (role, pin) {
 };
 
 SF.signIn = function (p) {
+  if (SF.googleOn()) {
+    return { ok: false, message: 'This stall uses Google sign-in now. Refresh the page.' };
+  }
   var pin = String(p.pin || '').replace(/\D/g, '');
   var device = String(p.device || '').slice(0, 60) || 'unknown';
   var pins = SF.json(SF.get('pins', '{}'), {});
@@ -203,18 +206,24 @@ SF.signIn = function (p) {
   return { ok: true, token: SF.mintToken(role, device), role: role };
 };
 
-SF.mintToken = function (role, device) {
-  var body = role + '|' + device + '|' + (Date.now() + 1000 * 60 * 60 * 24 * 30);
+/**
+ * role|device|expiry|signature for a PIN sign-in, and
+ * role|device|expiry|email|signature for a Google one. The role inside a
+ * Google token is only a hint; SF.dispatch looks the person up again.
+ */
+SF.mintToken = function (role, device, user) {
+  var body = role + '|' + device + '|' + (Date.now() + 1000 * 60 * 60 * 24 * 30) +
+             (user ? '|' + user : '');
   return body + '|' + SF.hash(body);
 };
 
 SF.readToken = function (token) {
   var parts = String(token || '').split('|');
-  if (parts.length !== 4) return null;
-  var body = parts.slice(0, 3).join('|');
-  if (SF.hash(body) !== parts[3]) return null;
+  if (parts.length !== 4 && parts.length !== 5) return null;
+  var sig = parts.pop();
+  if (SF.hash(parts.join('|')) !== sig) return null;
   if (Number(parts[2]) < Date.now()) return null;
-  return { role: parts[0], device: parts[1] };
+  return { role: parts[0], device: parts[1], user: parts[3] || '' };
 };
 
 SF.can = function (role, capability) {
@@ -230,7 +239,8 @@ SF.audit = function (ctx, action, target, detail, outcome) {
   try {
     SF.append('audit', {
       When: new Date(),
-      Actor: (ctx && ctx.role ? ctx.role : 'system') + '@' + (ctx && ctx.device ? ctx.device : '-'),
+      Actor: ctx && ctx.user ? ctx.user
+        : (ctx && ctx.role ? ctx.role : 'system') + '@' + (ctx && ctx.device ? ctx.device : '-'),
       Role: ctx && ctx.role ? ctx.role : 'system',
       Device: ctx && ctx.device ? ctx.device : '-',
       Action: action,
@@ -346,6 +356,12 @@ SF.dispatch = function (action, p) {
   if (def.capability) {
     var who = SF.readToken(p.token);
     if (!who) return { ok: false, code: 'auth', message: 'Please sign in again.' };
+    if (SF.googleOn()) {
+      // Once Google is on, PIN tokens stop working, and a person's role is
+      // whatever the Users tab says now, not what it said when they signed in.
+      who.role = who.user ? SF.roleOf(who.user) : null;
+      if (!who.role) return { ok: false, code: 'auth', message: 'Please sign in again.' };
+    }
     if (!SF.can(who.role, def.capability)) {
       SF.audit(who, action, '', 'needs ' + def.capability, 'refused');
       return { ok: false, code: 'forbidden',
@@ -482,7 +498,8 @@ SF.MIGRATIONS = [
       var s = SF.sheet('orders'), head = SF.SHEETS.orders;
       var have = s.getRange(1, 1, 1, s.getLastColumn()).getValues()[0];
       if (have.indexOf('Consent') === -1) s.getRange(1, 1, 1, head.length).setValues([head]);
-    } }
+    } },
+  { to: 5, what: 'Add the Users tab for Google sign-in', run: function () { SF.sheet('users'); } }
 ];
 
 SF.migrate = function () {
@@ -535,7 +552,8 @@ SF.action('health', 'reports', 'read', function () {
       return { id: p.id, name: p.name, version: p.version, on: SF.enabled(p.id) };
     }),
     counts: counts,
-    locked: Object.keys(SF.json(SF.get('pins', '{}'), {})).length > 0,
+    locked: SF.googleOn() || Object.keys(SF.json(SF.get('pins', '{}'), {})).length > 0,
+    google: SF.googleOn(),
     problems: problems,
     checkedAt: Date.now()
   };
@@ -547,5 +565,6 @@ SF.action('signIn', null, 'read', function (p) { return SF.signIn(p); });
 
 SF.action('setPin', 'reports', 'write', function (p, ctx) {
   if (ctx.role !== 'owner') return { ok: false, message: 'Only the owner can set PINs.' };
+  if (SF.googleOn()) return { ok: false, message: 'PINs are off. Add people under People.' };
   return SF.setPin(String(p.role), String(p.pin));
 });
