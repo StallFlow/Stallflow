@@ -9,7 +9,7 @@ _Last updated 20 October 2026._
 | Duxie's order page | https://stallflow.github.io/Stallflow/duxies/ |
 | Duxie's staff app | https://stallflow.github.io/Stallflow/duxies/app/ |
 | Server | Apps Script bound to Duxie's sheet, deployment `AKfycbzT…w4w` (in `stalls/duxies/stall.json`) |
-| Sign-in | **PINs.** Google sign-in is built and tested but paused (see below). |
+| Sign-in | **Google.** Switched on 20 Oct after `sfGrantGoogle` ran as StallFlow. Add staff under More › People. |
 | Code updates | Push to `main`: Pages republishes the app; the server workflow pushes `server/` into the sheet and redeploys in place (key: `CLASPRC_JSON` secret, StallFlow Google account). |
 
 The older site, `stallflow.github.io/duxies/` (repo `StallFlow/duxies`), uses
