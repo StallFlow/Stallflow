@@ -16,5 +16,8 @@
 
 SF.PLATFORM = {
   googleClientId: '385335470126-0c11amdmojlqns2tdhv9qfch6227ti7c.apps.googleusercontent.com',
-  admins: ['stallflow910803@gmail.com']
+  // Paused: Google sign-in needs stallflow910803@gmail.com to grant the
+  // script permission to contact Google, and that account is locked out.
+  // Put it back in this list once someone can sign in to it again.
+  admins: []
 };
