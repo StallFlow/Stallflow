@@ -16,5 +16,5 @@
 
 SF.PLATFORM = {
   googleClientId: '385335470126-0c11amdmojlqns2tdhv9qfch6227ti7c.apps.googleusercontent.com',
-  admins: []
+  admins: ['stallflow910803@gmail.com']
 };
