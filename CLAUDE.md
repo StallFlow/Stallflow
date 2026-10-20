@@ -1,5 +1,7 @@
 # StallFlow
 
+**Start with `docs/status.md`**: what is live, which accounts own what, and what is next.
+
 Pre-orders, an offline-first till, stock and market numbers for market stalls.
 One codebase serves every stall. Each stall's data lives in its own Google
 Sheet, owned by the StallFlow Google account and shared with the stall owner.
