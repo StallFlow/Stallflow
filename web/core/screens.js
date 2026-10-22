@@ -597,10 +597,9 @@
       setTimeout(drawCook, 0);
 
       var st = s.stocktake && !s.stocktake.loaded && SF.can('people')
-        ? '<div class="card" style="border:2px solid var(--brand)"><h2>' + esc(s.stocktake.ref) + '</h2>' +
-          '<div class="sub">The jams, sizes, prices and counts are ready to go in. Old ' +
-          'placeholder products are switched off, not deleted.</div>' +
-          '<button class="block bigbtn" id="stgo" onclick="SFS.loadStocktake()">Load it now</button></div>'
+        ? '<div class="card stcard"><div><b>' + esc(s.stocktake.ref) + '</b>' +
+          '<div class="muted small">Ready to load. Only you see this.</div></div>' +
+          '<button id="stgo" onclick="SFS.loadStocktake()">Load</button></div>'
         : '';
       return '<div class="wrap wide">' + st +
         // The snapshot stays put whichever tab is open.
@@ -672,14 +671,14 @@
             esc(l.price) + '" oninput="SFS.cookSet(' + i + ',\'price\',this.value)" aria-label="Price">' + x + '</div>';
       }
       return '<div class="cookline">' +
-        '<span class="lbl">' + esc(l.label) + '</span>' +
+        '<span class="lbl">' + esc(l.label) + '</span>' + x +
         (fixed ? '<span class="muted">this pot</span>'
           : '<input class="q num" type="number" inputmode="decimal" min="0" step="0.1" value="' +
             esc(l.qty) + '" oninput="SFS.cookSet(' + i + ',\'qty\',this.value)" aria-label="How much">' +
             '<span class="muted">' + esc(l.unit) + ' at R</span>') +
         '<input class="p num" type="number" inputmode="decimal" min="0" step="0.5" value="' +
           esc(l.price) + '" oninput="SFS.cookSet(' + i + ',\'price\',this.value)" aria-label="Price">' +
-        (fixed ? '' : '<span class="muted">a ' + esc(l.unit) + '</span>') + x + '</div>';
+        (fixed ? '' : '<span class="muted">a ' + esc(l.unit) + '</span>') + '</div>';
     }).join('');
     var sizes = cook.pot.sizes.map(function (z) {
       var n = cook.jars[z.productId] || 0;
@@ -849,7 +848,7 @@
 
     loadStocktake: function () {
       var b = SF.el('stgo');
-      b.disabled = true; b.textContent = 'Loading… this takes about a minute';
+      b.disabled = true; b.textContent = 'Loading…';
       var opId = SF.uid(), tries = 0;
       function done() {
         SF.toast('The stocktake is in.');
@@ -867,7 +866,7 @@
           SF.toast('Still not in after 5 minutes. Check your signal and try again.', true);
           return;
         }
-        b.textContent = 'Still working… (' + tries * 20 + ' seconds)';
+        b.textContent = 'Working…';
         SF.post({ action: 'stock' }).then(function (res) {
           var st = res && res.data && res.data.stocktake;
           if (st && st.loaded) { done(); return; }
