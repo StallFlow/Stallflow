@@ -607,7 +607,8 @@
         '<div class="snap">' +
           figure('On the shelf', qty(onShelf, 'each'), counted.length + ' products') +
           figure('What it cost', moneyShort(s.stockValue), 'in stock') +
-          figure('If it all sells', moneyShort(ifSold), 'today’s prices') +
+          figure('If it all sells', moneyShort(ifSold),
+                 moneyShort(ifSold - s.stockValue) + ' profit') +
         '</div>' +
         stockTabs(s, v) +
         SF.slot('stock.after', ctx) +
