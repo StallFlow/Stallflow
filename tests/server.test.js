@@ -347,6 +347,7 @@ test('the Duxies stocktake loads prices and counts, and running it twice changes
   SF.newPot = (n) => ctx.sfNewPot(n);   // in Apps Script every file shares one global scope
   const first = ctx.sfApplyStocktake();
   assert.strictEqual(first.off, 1, 'the old placeholder jam is switched off');
+  assert.strictEqual(SF.onHand().P01, 0, 'and its jars no longer count');
   const ps = SF.products();
   const find = (n, v) => ps.find((p) => p.name === n && p.variant === v);
   assert.strictEqual(find('Strawberry', '125 ml').onHand, 17);

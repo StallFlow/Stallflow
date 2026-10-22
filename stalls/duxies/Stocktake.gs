@@ -12,6 +12,9 @@
 
 var STOCKTAKE = {
   ref: 'Stocktake 22 Oct 2026',
+  // Bump when this file changes in a way the stall must load again; the
+  // Stock screen offers the button until this version is in.
+  version: 2,
 
   sizes: {
     L: '352 ml',
@@ -133,7 +136,7 @@ function sfLoadStocktake() {
       ui.ButtonSet.YES_NO) !== ui.Button.YES) return;
   SF.migrate();
   var r = sfApplyStocktake();
-  SF.set('stocktakeLoaded', STOCKTAKE.ref);
+  SF.set('stocktakeLoaded', STOCKTAKE.ref + ' v' + STOCKTAKE.version);
   ui.alert('Stocktake loaded.\n\n' + r.added + ' new products · ' + r.updated + ' updated · ' +
     r.off + ' switched off\n' + r.moved + ' stock adjustments · ' + r.jars + ' jars on the shelf\n' +
     r.costed + ' products costed (see Costing.gs)\n\n' +
@@ -179,10 +182,14 @@ function sfApplyStocktake() {
   });
 
   SF.rows('products').forEach(function (p) {
-    if (!wanted[key(p.Name, p.Variant)] && String(p.Active).toLowerCase() !== 'no') {
+    if (wanted[key(p.Name, p.Variant)]) return;
+    if (String(p.Active).toLowerCase() !== 'no') {
       SF.setCell('products', p._row, 'Active', 'No');
       r.off++;
     }
+    // Not on the count sheet means none on the shelf.
+    var left = hand[String(p.ProductId)] || 0;
+    if (left) { SF.move(String(p.ProductId), -left, 'adjust', STOCKTAKE.ref + ' (not counted)'); r.moved++; }
   });
 
   sfSeedPantry();

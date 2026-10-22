@@ -514,7 +514,7 @@ SF.action('stock', 'stock', 'read', function () {
   return { products: ps, batches: batches, stockValue: value, units: SF.UNITS,
            pantry: SF.pantry(), pots: SF.pots(),
            stocktake: typeof STOCKTAKE !== 'undefined'
-             ? { ref: STOCKTAKE.ref, loaded: String(SF.get('stocktakeLoaded', '')) === STOCKTAKE.ref }
+             ? { ref: STOCKTAKE.ref, loaded: String(SF.get('stocktakeLoaded', '')) === STOCKTAKE.ref + ' v' + STOCKTAKE.version }
              : null };
 });
 
@@ -534,7 +534,7 @@ SF.action('loadStocktake', 'people', 'write', function (p, ctx) {
   if (typeof sfApplyStocktake !== 'function') return { ok: false, message: 'No stocktake to load.' };
   SF.migrate();
   var r = sfApplyStocktake();
-  SF.set('stocktakeLoaded', STOCKTAKE.ref);
+  SF.set('stocktakeLoaded', STOCKTAKE.ref + ' v' + STOCKTAKE.version);
   return { ok: true, result: r };
 });
 

@@ -589,7 +589,7 @@
     render: function (ctx) {
       var s = ctx.data;
       var v = SF.state.vocab;
-      var counted = s.products.filter(function (p) { return p.type !== 'made'; });
+      var counted = s.products.filter(function (p) { return p.type !== 'made' && p.active; });
       var onShelf = counted.reduce(function (a, p) { return a + p.onHand; }, 0);
       var ifSold = counted.reduce(function (a, p) { return a + p.onHand * p.price; }, 0);
 
