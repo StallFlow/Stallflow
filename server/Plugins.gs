@@ -282,6 +282,7 @@ function onOpen() {
   // A tenant file (e.g. Duxies.gs) adds itself here just by existing.
   if (typeof sfSeedTenant === 'function') menu.addItem('Load this stall', 'sfSeedTenant');
   if (typeof sfPractiseStock === 'function') menu.addItem('Add practice stock', 'sfPractiseStock');
+  if (typeof sfLoadStocktake === 'function') menu.addItem('Load stocktake', 'sfLoadStocktake');
 
   menu.addItem('Load the sample stall', 'sfDemo')
     .addItem('Show my web address', 'sfLinks')

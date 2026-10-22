@@ -337,5 +337,24 @@ test('customer details are wiped once their market is over, and only then', () =
   assert.strictEqual(row[8], 70, 'the money stays');
 });
 
+test('the Duxies stocktake loads prices and counts, and running it twice changes nothing', () => {
+  const { SF } = shop(day(3));
+  const ctx = vm.createContext(Object.assign({}, { SF, SpreadsheetApp: {} }));
+  // Stocktake.gs only needs SF, so run it in a small context that shares it.
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'stalls', 'duxies', 'Stocktake.gs'), 'utf8'), ctx);
+  const first = ctx.sfApplyStocktake();
+  assert.strictEqual(first.off, 1, 'the old placeholder jam is switched off');
+  const ps = SF.products();
+  const find = (n, v) => ps.find((p) => p.name === n && p.variant === v);
+  assert.strictEqual(find('Strawberry', '125 ml').onHand, 17);
+  assert.strictEqual(find('Strawberry', '352 ml').price, 70);
+  assert.strictEqual(find('Fig', '125 ml').price, 50);
+  assert.strictEqual(find('Orange Marmalade Whiskey', 'Medium (odd bottle)').price, 60);
+  assert.strictEqual(find('Butter Biscuits', '300 g pack').type, 'made');
+  assert.strictEqual(first.jars, 225);
+  const again = ctx.sfApplyStocktake();
+  assert.deepStrictEqual([again.added, again.moved], [0, 0]);
+});
+
 console.log(failures ? '\n' + failures + ' failed' : '\nall passed');
 process.exit(failures ? 1 : 0);
