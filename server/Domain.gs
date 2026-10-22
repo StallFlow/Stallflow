@@ -512,7 +512,10 @@ SF.action('stock', 'stock', 'read', function () {
   ps.forEach(function (p) { if (p.type !== 'made') value += p.onHand * p.cost; });
 
   return { products: ps, batches: batches, stockValue: value, units: SF.UNITS,
-           pantry: SF.pantry(), pots: SF.pots() };
+           pantry: SF.pantry(), pots: SF.pots(),
+           stocktake: typeof STOCKTAKE !== 'undefined'
+             ? { ref: STOCKTAKE.ref, loaded: String(SF.get('stocktakeLoaded', '')) === STOCKTAKE.ref }
+             : null };
 });
 
 /**
@@ -522,6 +525,18 @@ SF.action('stock', 'stock', 'read', function () {
  * the Stock screen just shows the plain "I made a batch" card.
  */
 SF.pots = function () { return typeof sfPots === 'function' ? sfPots() : []; };
+
+/**
+ * The stall's stocktake file, run from the app. The sheet menu does the same,
+ * but custom menus do not show in the Google Sheets phone app. Owner only.
+ */
+SF.action('loadStocktake', 'people', 'write', function (p, ctx) {
+  if (typeof sfApplyStocktake !== 'function') return { ok: false, message: 'No stocktake to load.' };
+  SF.migrate();
+  var r = sfApplyStocktake();
+  SF.set('stocktakeLoaded', STOCKTAKE.ref);
+  return { ok: true, result: r };
+});
 
 /** A recipe saved from the app, or null. Lines: [{label, item, qty, unit, price}]. */
 SF.recipe = function (name) {

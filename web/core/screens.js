@@ -596,7 +596,13 @@
       setTimeout(drawRunLines, 0);
       setTimeout(drawCook, 0);
 
-      return '<div class="wrap wide">' +
+      var st = s.stocktake && !s.stocktake.loaded && SF.can('people')
+        ? '<div class="card" style="border:2px solid var(--brand)"><h2>' + esc(s.stocktake.ref) + '</h2>' +
+          '<div class="sub">The jams, sizes, prices and counts are ready to go in. Old ' +
+          'placeholder products are switched off, not deleted.</div>' +
+          '<button class="block bigbtn" id="stgo" onclick="SFS.loadStocktake()">Load it now</button></div>'
+        : '';
+      return '<div class="wrap wide">' + st +
         '<div class="grid g3" style="margin-bottom:14px">' +
           figure('On the shelf', qty(onShelf, 'each'),
                  'across ' + counted.length + ' products') +
@@ -817,6 +823,21 @@
         '<div class="r"><span>How many it made</span><b>' + (made || '—') + '</b></div>' +
         '<div class="r big"><span>Cost per ' + esc(v.unit) + '</span><b>' +
           (made > 0 && total > 0 ? money(per) : '—') + '</b></div>' + verdict + '</div>';
+    },
+
+    loadStocktake: function () {
+      var b = SF.el('stgo');
+      b.disabled = true; b.textContent = 'Loading… this takes about a minute';
+      SF.post({ action: 'loadStocktake', opId: SF.uid() }).then(function (res) {
+        if (!res || res.ok === false) throw new Error((res && res.message) || 'refused');
+        var r = res.data.result;
+        SF.toast(r.jars + ' jars on the shelf · ' + r.added + ' products added');
+        SF.cache.clear && SF.cache.clear();
+        SF.load('stock');
+      }).catch(function (e) {
+        b.disabled = false; b.textContent = 'Try again';
+        SF.toast('It did not load: ' + e.message, true);
+      });
     },
 
     cookPick: function (name) {

@@ -133,6 +133,7 @@ function sfLoadStocktake() {
       ui.ButtonSet.YES_NO) !== ui.Button.YES) return;
   SF.migrate();
   var r = sfApplyStocktake();
+  SF.set('stocktakeLoaded', STOCKTAKE.ref);
   ui.alert('Stocktake loaded.\n\n' + r.added + ' new products · ' + r.updated + ' updated · ' +
     r.off + ' switched off\n' + r.moved + ' stock adjustments · ' + r.jars + ' jars on the shelf\n' +
     r.costed + ' products costed (see Costing.gs)\n\n' +
