@@ -365,5 +365,32 @@ test('the Duxies stocktake loads prices and counts, and running it twice changes
   assert.strictEqual(SF.rows('batches').length, again.costed, 'running it again updates, never duplicates');
 });
 
+test('a sale between markets is kept apart from the live market', () => {
+  const { SF } = shop(day(3));
+  SF.setPin('owner', '4321');
+  const tok = SF.dispatch('signIn', { pin: '4321', device: 'd' }).data.token;
+  SF.dispatch('sell', { token: tok, opId: 's1', lines: [{ id: 'P01', qty: 1 }] });
+  SF.dispatch('sell', { token: tok, opId: 's2', where: 'home', lines: [{ id: 'P01', qty: 2 }] });
+  const at = SF.dispatch('dashboard', { token: tok, marketId: 'M01' }).data;
+  const home = SF.dispatch('dashboard', { token: tok, marketId: 'HOME' }).data;
+  assert.ok(at.markets.some((m) => m.id === 'HOME'), 'Numbers can pick it');
+  assert.strictEqual(SF.onHand().P01, 7, 'both sales come off the shelf');
+  const total = (d) => JSON.stringify(d).match(/"revenue":(\d+)/)[1];
+  assert.strictEqual(total(at), '70');
+  assert.strictEqual(total(home), '140');
+});
+
+test('uncooked stock is a list she can add to and update', () => {
+  const { SF } = shop(day(3));
+  SF.setPin('owner', '4321');
+  const tok = SF.dispatch('signIn', { pin: '4321', device: 'd' }).data.token;
+  SF.dispatch('savePantry', { token: tok, opId: 'p1', item: 'Sugar', qty: 5, unit: 'kg' });
+  SF.dispatch('savePantry', { token: tok, opId: 'p2', item: 'sugar', qty: 2.5, unit: 'kg' });
+  SF.dispatch('savePantry', { token: tok, opId: 'p3', item: '352 ml bottles', qty: 24, unit: 'each' });
+  const p = SF.dispatch('stock', { token: tok }).data.pantry;
+  assert.strictEqual(JSON.stringify(p.map((r) => [r.item, r.qty])), '[["352 ml bottles",24],["Sugar",2.5]]');
+  assert.strictEqual(SF.dispatch('savePantry', { token: tok, opId: 'p4', item: 'x', qty: 1 }).ok, false);
+});
+
 console.log(failures ? '\n' + failures + ' failed' : '\nall passed');
 process.exit(failures ? 1 : 0);

@@ -18,7 +18,7 @@
 var SF = SF || {};
 
 SF.VERSION = '2.0.0';
-SF.SCHEMA = 5;                        // bump when SHEETS changes; see MIGRATIONS
+SF.SCHEMA = 6;                        // bump when SHEETS changes; see MIGRATIONS
 SF.TZ = 'Africa/Johannesburg';
 
 /* =========================================================================
@@ -37,6 +37,7 @@ SF.SHEETS = {
   markets:   ['MarketId', 'Name', 'Date', 'Location', 'Status', 'Note'],
   expenses:  ['ExpenseId', 'MarketId', 'Description', 'Amount', 'Category', 'When'],
   ops:       ['OpId', 'When', 'Action', 'Result'],
+  pantry:    ['Item', 'Qty', 'Unit', 'Note', 'UpdatedAt', 'UpdatedBy'],
   audit:     ['When', 'Actor', 'Role', 'Device', 'Action', 'Target', 'Detail', 'Outcome']
 };
 
@@ -509,7 +510,8 @@ SF.MIGRATIONS = [
       var have = s.getRange(1, 1, 1, s.getLastColumn()).getValues()[0];
       if (have.indexOf('Consent') === -1) s.getRange(1, 1, 1, head.length).setValues([head]);
     } },
-  { to: 5, what: 'Add the Users tab for Google sign-in', run: function () { SF.sheet('users'); } }
+  { to: 5, what: 'Add the Users tab for Google sign-in', run: function () { SF.sheet('users'); } },
+  { to: 6, what: 'Add the Pantry tab for uncooked stock', run: function () { SF.sheet('pantry'); } }
 ];
 
 SF.migrate = function () {

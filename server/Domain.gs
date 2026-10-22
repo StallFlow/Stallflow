@@ -217,6 +217,13 @@ SF.showQty = function (n, unit) {
 
 SF.activeMarket = function () { return String(SF.get('activeMarket', '')); };
 
+/**
+ * Sales made away from a market (at home, to a friend, over WhatsApp) are
+ * kept under this id, so they count in the totals without landing on
+ * whichever market happens to be live. It is not a row in Markets.
+ */
+SF.HOME = 'HOME';
+
 SF.markets = function () {
   return SF.rows('markets').map(function (m) {
     return {
@@ -227,7 +234,8 @@ SF.markets = function () {
       status: String(m.Status || 'planned'),
       note: String(m.Note || '')
     };
-  });
+  }).concat([{ id: SF.HOME, row: null, name: 'Sales between markets', date: '',
+               location: '', status: 'ongoing', note: '' }]);
 };
 
 SF.today = function () { return Utilities.formatDate(new Date(), SF.TZ, 'yyyy-MM-dd'); };
@@ -423,9 +431,10 @@ SF.action('sell', 'sell', 'write', function (p, ctx) {
   if (!built.ok) return built;
 
   var no = SF.nextOrderNo(), now = new Date();
+  var home = p.where === 'home';
   SF.append('orders', {
-    OrderNo: no, When: now, MarketId: SF.activeMarket(), Channel: 'till',
-    Customer: String(p.customer || 'Walk-up').slice(0, 60), Phone: '',
+    OrderNo: no, When: now, MarketId: home ? SF.HOME : SF.activeMarket(), Channel: 'till',
+    Customer: String(p.customer || (home ? 'Between markets' : 'Walk-up')).slice(0, 60), Phone: '',
     Lines: JSON.stringify(built.lines), Units: built.units, Total: built.total,
     Cost: built.cost, Status: 'collected', PaidAt: now, CollectedAt: now,
     Note: '', Consent: ''
@@ -502,7 +511,38 @@ SF.action('stock', 'stock', 'read', function () {
   var value = 0;
   ps.forEach(function (p) { if (p.type !== 'made') value += p.onHand * p.cost; });
 
-  return { products: ps, batches: batches, stockValue: value, units: SF.UNITS };
+  return { products: ps, batches: batches, stockValue: value, units: SF.UNITS,
+           pantry: SF.pantry() };
+});
+
+/* Uncooked stock: fruit, sugar, empty bottles. A plain count she updates
+   when she checks the cupboard, not a ledger: nothing is sold from it. */
+SF.PANTRY_UNITS = ['kg', 'g', 'litre', 'each'];
+
+SF.pantry = function () {
+  return SF.rows('pantry').map(function (r) {
+    return { row: r._row, item: String(r.Item), qty: SF.num(r.Qty),
+             unit: String(r.Unit || 'kg'), note: String(r.Note || ''),
+             updated: r.UpdatedAt instanceof Date
+               ? Utilities.formatDate(r.UpdatedAt, SF.TZ, 'd MMM') : '' };
+  }).filter(function (r) { return r.item; })
+    .sort(function (a, b) { return a.item.localeCompare(b.item); });
+};
+
+SF.action('savePantry', 'stock', 'write', function (p, ctx) {
+  var item = String(p.item || '').trim().slice(0, 40);
+  var unit = SF.PANTRY_UNITS.indexOf(p.unit) === -1 ? 'kg' : String(p.unit);
+  var qty = Math.round(SF.num(p.qty) * 1000) / 1000;
+  if (item.length < 2) return { ok: false, message: 'Say what it is, e.g. Sugar.' };
+  if (qty < 0) return { ok: false, message: 'The amount cannot be below nothing.' };
+  var found = null;
+  SF.pantry().forEach(function (r) { if (r.item.toLowerCase() === item.toLowerCase()) found = r; });
+  var fields = { Item: item, Qty: qty, Unit: unit, Note: String(p.note || '').slice(0, 60),
+                 UpdatedAt: new Date(), UpdatedBy: ctx.user || ctx.role };
+  if (found) fields.Item = found.item;   // keep the spelling it was first saved with
+  if (found) Object.keys(fields).forEach(function (k) { SF.setCell('pantry', found.row, k, fields[k]); });
+  else SF.append('pantry', fields);
+  return { ok: true };
 });
 
 SF.action('addBatch', 'stock', 'write', function (p, ctx) {

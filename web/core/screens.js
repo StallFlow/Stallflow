@@ -86,7 +86,8 @@
           '<h2 style="flex:1">Ring up a sale</h2>' +
           '<button class="ghost sm" onclick="SFT.scan()">Scan</button>' +
           SF.slot('till.actions', ctx) +
-        '</div><div class="sub">Tap what they are buying.</div>' + tiles + '</div>' +
+        '</div>' + whereSwitch() +
+        '<div class="sub">Tap what they are buying.</div>' + tiles + '</div>' +
         '<div class="card"><h2>Pre-orders still to pay</h2>' +
           '<div class="sub">Already put aside. Tap <b>Paid</b> when the money is in.</div>' +
           unpaid + '</div>' +
@@ -94,6 +95,24 @@
         '<div class="foot">StallFlow · till</div></div>' + cartBar();
     }
   });
+
+  /* At a market, or a sale in between (at home, a friend, WhatsApp)?
+     Remembered on this phone, so she sets it once when she gets home. */
+  function where() { return SF.ls.get('sf.where', 'market'); }
+
+  function whereSwitch() {
+    var home = where() === 'home';
+    var btn = function (v, label, on) {
+      return '<button class="' + (on ? '' : 'ghost ') + 'sm" onclick="SFT.where(\'' + v + '\')">' +
+        label + '</button>';
+    };
+    return '<div style="display:flex;gap:8px;align-items:center;margin:8px 0;flex-wrap:wrap">' +
+      '<span class="muted small">Selling</span>' +
+      btn('market', 'At the market', !home) + btn('home', 'Between markets', home) + '</div>' +
+      (home ? '<div class="notice" style="border-radius:10px;margin-bottom:8px">' +
+        'These sales are kept under <b>Sales between markets</b> on Numbers, not the live market. ' +
+        'Switch back before the next market.</div>' : '');
+  }
 
   function tile(p) {
     var left = availableNow(p);
@@ -130,6 +149,7 @@
 
   /* Till behaviour, exposed for the inline handlers above. */
   window.SFT = {
+    where: function (v) { SF.ls.set('sf.where', v); SF.render(); },
     tap: function (id) {
       var p = SF.find(SF.state.data.till.products, id);
       if (!p) return;
@@ -337,7 +357,7 @@
       });
       var snapshot = cart.slice();
       cart = [];
-      SF.write('sell', { lines: lines, customer: 'Walk-up' }, function () {
+      SF.write('sell', { lines: lines, where: where() }, function () {
         var till = SF.state.data.till, stock = SF.state.data.stock;
         snapshot.forEach(function (l) {
           [till, stock].forEach(function (d) {
@@ -582,11 +602,37 @@
           figure('What it cost', moneyShort(s.stockValue), 'money sitting in stock') +
           figure('If it all sells', moneyShort(ifSold), 'at today’s prices') +
         '</div>' +
-        runCard(s, v) + priceTable(s) + runHistory(s, v) +
+        runCard(s, v) + priceTable(s) + pantryCard(s) + runHistory(s, v) +
         SF.slot('stock.after', ctx) +
         '<div class="foot">StallFlow · stock &amp; costing</div></div>';
     }
   });
+
+  function pantryCard(s) {
+    var items = s.pantry || [];
+    var units = ['kg', 'g', 'litre', 'each'];
+    var rows = items.length ? items.map(function (r) {
+      return '<tr><td>' + esc(r.item) + (r.note ? ' <span class="muted small">' + esc(r.note) + '</span>' : '') +
+        '</td><td class="num"><b>' + esc(r.qty) + '</b> ' + esc(r.unit) + '</td>' +
+        '<td class="muted small">' + esc(r.updated) + '</td>' +
+        '<td><button class="quiet" onclick="SFS.editPantry(\'' + esc(r.item).replace(/'/g, '&#39;') +
+        '\',' + r.qty + ',\'' + r.unit + '\')">change</button></td></tr>';
+    }).join('') : '<tr><td colspan="4" class="empty">Nothing yet. Add fruit, sugar, ' +
+      'empty bottles — whatever is waiting to be cooked.</td></tr>';
+    return '<div class="card"><h2>Uncooked stock</h2>' +
+      '<div class="sub">Fruit, sugar, bottles and bags in the cupboard. Type the new amount ' +
+        'whenever you check; set it to 0 when it is used up.</div>' +
+      '<table><tbody>' + rows + '</tbody></table>' +
+      '<div class="row" style="margin-top:12px">' +
+        '<div class="field" style="flex:2"><label for="pi">What</label>' +
+          '<input id="pi" placeholder="Strawberries, sugar, 352 ml bottles…"></div>' +
+        '<div class="field"><label for="pq">How much</label>' +
+          '<input id="pq" type="number" inputmode="decimal" min="0" step="0.01" placeholder="3"></div>' +
+        '<div class="field"><label for="pu">Unit</label><select id="pu">' +
+          units.map(function (u) { return '<option>' + u + '</option>'; }).join('') +
+        '</select></div></div>' +
+      '<button class="block" onclick="SFS.savePantry()">Save</button></div>';
+  }
 
   function runCard(s, v) {
     var opts = s.products.filter(function (p) { return p.active; }).map(function (p) {
@@ -659,6 +705,26 @@
         '<div class="r"><span>How many it made</span><b>' + (made || '—') + '</b></div>' +
         '<div class="r big"><span>Cost per ' + esc(v.unit) + '</span><b>' +
           (made > 0 && total > 0 ? money(per) : '—') + '</b></div>' + verdict + '</div>';
+    },
+
+    editPantry: function (item, qty, unit) {
+      SF.el('pi').value = item; SF.el('pq').value = qty; SF.el('pu').value = unit;
+      SF.el('pq').focus();
+    },
+
+    savePantry: function () {
+      var item = SF.el('pi').value.trim(), qty = Number(SF.el('pq').value), unit = SF.el('pu').value;
+      if (item.length < 2) { SF.toast('Say what it is, e.g. Sugar.', true); return; }
+      if (!(qty >= 0) || SF.el('pq').value === '') { SF.toast('How much is there?', true); return; }
+      SF.write('savePantry', { item: item, qty: qty, unit: unit }, function () {
+        var s = SF.state.data.stock;
+        if (!s) return;
+        s.pantry = (s.pantry || []).filter(function (r) {
+          return r.item.toLowerCase() !== item.toLowerCase();
+        }).concat([{ item: item, qty: qty, unit: unit, note: '', updated: 'now' }])
+          .sort(function (a, b) { return a.item.localeCompare(b.item); });
+      });
+      SF.toast(item + ': ' + qty + ' ' + unit);
     },
 
     saveRun: function () {

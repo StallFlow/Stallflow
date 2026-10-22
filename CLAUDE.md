@@ -74,6 +74,10 @@ go through `SF.once` so a retried request never runs twice.
   date has passed (`SF.marketPassed`); customer details of finished markets are
   wiped by `SF.purgeCustomers` (daily on first `boot`, and when a new market is
   made live).
+- **Sales between markets** go under the market id `SF.HOME` ('HOME'), a
+  virtual market `SF.markets()` adds; it is not a row in Markets.
+- **Uncooked stock** (the `Pantry` tab) is a plain count list, not a ledger:
+  nothing is sold from it, so `savePantry` overwrites the amount.
 - Server code is plain Apps Script (V8, no modules). Every `.gs` shares one
   global scope; plugins register themselves with `SF.definePlugin`.
 
