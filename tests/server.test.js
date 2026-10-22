@@ -352,8 +352,12 @@ test('the Duxies stocktake loads prices and counts, and running it twice changes
   assert.strictEqual(find('Orange Marmalade Whiskey', 'Medium (odd bottle)').price, 60);
   assert.strictEqual(find('Butter Biscuits', '300 g pack').type, 'made');
   assert.strictEqual(first.jars, 225);
+  assert.strictEqual(find('Strawberry', '352 ml').cost, 8.64);
+  assert.strictEqual(find('Strawberry', '125 ml').cost, 7.8);
+  assert.strictEqual(find('Strawberry', 'Medium (odd bottle)').cost, 0);
+  assert.strictEqual(find('Strawberry', '352 ml').onHand, 14, 'a bottle cost adds no stock');
   const again = ctx.sfApplyStocktake();
-  assert.deepStrictEqual([again.added, again.moved], [0, 0]);
+  assert.deepStrictEqual([again.added, again.moved, again.costed], [0, 0, 0]);
 });
 
 console.log(failures ? '\n' + failures + ' failed' : '\nall passed');
