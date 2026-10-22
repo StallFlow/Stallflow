@@ -192,3 +192,15 @@ details.card summary{cursor:pointer;padding:6px 0;font-size:16px}
 .cookline input.lbl{flex:1 1 100%;width:auto;text-align:left}
 .cookline select{font-size:17px;padding:8px;width:auto;flex:none}
 .cookline button.x{background:none;color:var(--muted);font-size:22px;min-height:44px;min-width:44px;margin-left:auto}
+
+/* Stock: snapshot always on top, sections as tabs */
+.snap{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px}
+.snap .figure{padding:10px 12px}
+.snap .figure .k{font-size:10.5px;letter-spacing:.05em}
+.snap .figure .v{font-size:21px;margin-top:4px}
+.snap .figure .n{font-size:11.5px}
+.stabs{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 12px;padding:4px 0;
+  position:sticky;top:0;z-index:2;background:var(--bg,var(--paper))}
+.stabs button{flex:1 1 auto;min-height:48px;font-size:16px;padding:0 14px;border-radius:999px;
+  background:var(--surface);color:var(--ink);border:1px solid var(--rule)}
+.stabs button.on{background:var(--brand);color:var(--brand-ink);border-color:var(--brand)}

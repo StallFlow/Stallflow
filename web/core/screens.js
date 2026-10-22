@@ -603,18 +603,13 @@
           '<button class="block bigbtn" id="stgo" onclick="SFS.loadStocktake()">Load it now</button></div>'
         : '';
       return '<div class="wrap wide">' + st +
-        '<div class="grid g3" style="margin-bottom:14px">' +
-          figure('On the shelf', qty(onShelf, 'each'),
-                 'across ' + counted.length + ' products') +
-          figure('What it cost', moneyShort(s.stockValue), 'money sitting in stock') +
-          figure('If it all sells', moneyShort(ifSold), 'at today’s prices') +
+        // The snapshot stays put whichever tab is open.
+        '<div class="snap">' +
+          figure('On the shelf', qty(onShelf, 'each'), counted.length + ' products') +
+          figure('What it cost', moneyShort(s.stockValue), 'in stock') +
+          figure('If it all sells', moneyShort(ifSold), 'today’s prices') +
         '</div>' +
-        ((s.pots || []).length
-          ? '<div class="card" id="cookbox"></div>' +
-            '<details class="card"><summary><b>Something else</b> — biscuits, crochet, ' +
-            'anything that is not a pot of jam</summary>' + runCard(s, v) + '</details>'
-          : runCard(s, v)) +
-        pantryCard(s) + priceTable(s) + runHistory(s, v) +
+        stockTabs(s, v) +
         SF.slot('stock.after', ctx) +
         '<div class="foot">StallFlow · stock &amp; costing</div></div>';
     }
@@ -726,6 +721,30 @@
     go.disabled = !t.count;
   }
 
+  /* One section at a time, picked from tabs, remembered on the phone. */
+  function stockTabs(s, v) {
+    var pots = (s.pots || []).length;
+    var tabs = [
+      ['cook', pots ? 'Cook a pot' : 'Add a ' + v.run],
+      ['shelf', 'Shelf & prices'],
+      ['cupboard', 'Cupboard'],
+      ['history', 'History']
+    ];
+    if (pots) tabs.splice(3, 0, ['other', 'Other']);
+    var on = SF.ls.get('sf.stocktab', 'cook');
+    if (!tabs.some(function (t) { return t[0] === on; })) on = 'cook';
+    var body = on === 'cook' ? (pots ? '<div class="card" id="cookbox"></div>' : runCard(s, v))
+      : on === 'other' ? '<div class="sub" style="margin:4px 2px 10px">Biscuits, crochet, anything ' +
+          'that is not a pot of jam.</div>' + runCard(s, v)
+      : on === 'shelf' ? priceTable(s)
+      : on === 'cupboard' ? pantryCard(s)
+      : runHistory(s, v);
+    return '<div class="stabs" role="tablist">' + tabs.map(function (t) {
+      return '<button role="tab" aria-selected="' + (t[0] === on) + '" class="' +
+        (t[0] === on ? 'on' : '') + '" onclick="SFS.tab(\'' + t[0] + '\')">' + esc(t[1]) + '</button>';
+    }).join('') + '</div>' + body;
+  }
+
   function pantryCard(s) {
     var items = s.pantry || [];
     var units = ['kg', 'g', 'litre', 'each'];
@@ -824,6 +843,8 @@
         '<div class="r big"><span>Cost per ' + esc(v.unit) + '</span><b>' +
           (made > 0 && total > 0 ? money(per) : '—') + '</b></div>' + verdict + '</div>';
     },
+
+    tab: function (t) { SF.ls.set('sf.stocktab', t); SF.render(); window.scrollTo(0, 0); },
 
     loadStocktake: function () {
       var b = SF.el('stgo');
