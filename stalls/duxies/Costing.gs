@@ -222,7 +222,9 @@ function sfCostProduct(productId, row) {
   var rec = { Made: 1, CostLines: JSON.stringify(lines), TotalCost: total,
               CostPerUnit: total, Note: COSTING.note };
   if (mine) {
-    Object.keys(rec).forEach(function (k) { SF.setCell('batches', mine._row, k, rec[k]); });
+    Object.keys(rec).forEach(function (k) {
+      if (String(mine[k]) !== String(rec[k])) SF.setCell('batches', mine._row, k, rec[k]);
+    });
   } else {
     var id = 'B-' + ('000' + (SF.rows('batches').length + 1)).slice(-3);
     SF.append('batches', Object.assign({ BatchId: id, When: new Date(), ProductId: productId }, rec));

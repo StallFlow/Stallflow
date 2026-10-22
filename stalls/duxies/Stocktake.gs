@@ -155,11 +155,11 @@ function sfApplyStocktake() {
     var p = existing[k];
     if (p) {
       id = String(p.ProductId);
-      SF.setCell('products', p._row, 'Price', row[4]);
-      SF.setCell('products', p._row, 'Category', row[2]);
-      SF.setCell('products', p._row, 'Type', row[3]);
-      SF.setCell('products', p._row, 'Active', 'Yes');
-      SF.setCell('products', p._row, 'Sort', (i + 1) * 10);
+      // Only write what changed: every cell write is a slow round trip.
+      var want = { Price: row[4], Category: row[2], Type: row[3], Active: 'Yes', Sort: (i + 1) * 10 };
+      Object.keys(want).forEach(function (k) {
+        if (String(p[k]) !== String(want[k])) SF.setCell('products', p._row, k, want[k]);
+      });
       r.updated++;
     } else {
       next++;

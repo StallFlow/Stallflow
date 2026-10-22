@@ -828,16 +828,37 @@
     loadStocktake: function () {
       var b = SF.el('stgo');
       b.disabled = true; b.textContent = 'Loading… this takes about a minute';
-      SF.post({ action: 'loadStocktake', opId: SF.uid() }).then(function (res) {
-        if (!res || res.ok === false) throw new Error((res && res.message) || 'refused');
-        var r = res.data.result;
-        SF.toast(r.jars + ' jars on the shelf · ' + r.added + ' products added');
+      var opId = SF.uid(), tries = 0;
+      function done() {
+        SF.toast('The stocktake is in.');
         SF.cache.clear && SF.cache.clear();
-        SF.load('stock');
-      }).catch(function (e) {
-        b.disabled = false; b.textContent = 'Try again';
-        SF.toast('It did not load: ' + e.message, true);
-      });
+        SF.load('till'); SF.load('stock');
+      }
+      // A slow first run can outlast the phone's patience while it carries on
+      // at Google, and a second tap then finds it busy. So instead of giving
+      // up, check every 20 seconds whether it has landed, and ask again
+      // (same opId, so it never runs twice) until it has.
+      function check() {
+        tries++;
+        if (tries > 15) {
+          b.disabled = false; b.textContent = 'Try again';
+          SF.toast('Still not in after 5 minutes. Check your signal and try again.', true);
+          return;
+        }
+        b.textContent = 'Still working… (' + tries * 20 + ' seconds)';
+        SF.post({ action: 'stock' }).then(function (res) {
+          var st = res && res.data && res.data.stocktake;
+          if (st && st.loaded) { done(); return; }
+          attempt();
+        }).catch(function () { setTimeout(check, 20000); });
+      }
+      function attempt() {
+        SF.post({ action: 'loadStocktake', opId: opId }).then(function (res) {
+          if (res && res.ok !== false) { done(); return; }
+          setTimeout(check, 20000);
+        }).catch(function () { setTimeout(check, 20000); });
+      }
+      attempt();
     },
 
     cookPick: function (name) {
