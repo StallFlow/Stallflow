@@ -135,7 +135,7 @@ function sfLoadStocktake() {
   ui.alert('Stocktake loaded.\n\n' + r.added + ' new products · ' + r.updated + ' updated · ' +
     r.off + ' switched off\n' + r.moved + ' stock adjustments · ' + r.jars + ' jars on the shelf\n' +
     r.costed + ' products costed (see Costing.gs)\n\n' +
-    'Recipes are on the Recipes tab.');
+    'Baking notes are on the Recipe notes tab.');
 }
 
 /** The work itself, without the dialogs, so it can be tested. */
@@ -215,7 +215,7 @@ function sfSeedPantry() {
 function sfWriteRecipes() {
   if (typeof SpreadsheetApp === 'undefined' || !SpreadsheetApp.getActive) return;
   var ss = SpreadsheetApp.getActive();
-  var s = ss.getSheetByName('Recipes') || ss.insertSheet('Recipes');
+  var s = ss.getSheetByName('Recipe notes') || ss.insertSheet('Recipe notes');
   s.clear();
   var data = [['Recipe', 'Makes', 'Oven / cooking time', 'Ingredients']]
     .concat(STOCKTAKE.recipes);
