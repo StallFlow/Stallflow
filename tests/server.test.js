@@ -341,7 +341,8 @@ test('the Duxies stocktake loads prices and counts, and running it twice changes
   const { SF } = shop(day(3));
   const ctx = vm.createContext(Object.assign({}, { SF, SpreadsheetApp: {} }));
   // Stocktake.gs only needs SF, so run it in a small context that shares it.
-  vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'stalls', 'duxies', 'Stocktake.gs'), 'utf8'), ctx);
+  ['Costing.gs', 'Stocktake.gs'].forEach((f) => vm.runInContext(
+    fs.readFileSync(path.join(__dirname, '..', 'stalls', 'duxies', f), 'utf8'), ctx));
   const first = ctx.sfApplyStocktake();
   assert.strictEqual(first.off, 1, 'the old placeholder jam is switched off');
   const ps = SF.products();
@@ -352,12 +353,16 @@ test('the Duxies stocktake loads prices and counts, and running it twice changes
   assert.strictEqual(find('Orange Marmalade Whiskey', 'Medium (odd bottle)').price, 60);
   assert.strictEqual(find('Butter Biscuits', '300 g pack').type, 'made');
   assert.strictEqual(first.jars, 225);
-  assert.strictEqual(find('Strawberry', '352 ml').cost, 8.64);
-  assert.strictEqual(find('Strawberry', '125 ml').cost, 7.8);
-  assert.strictEqual(find('Strawberry', 'Medium (odd bottle)').cost, 0);
+  const big = find('Strawberry', '352 ml').cost, small = find('Strawberry', '125 ml').cost;
+  assert.ok(big > 30 && big < 40, 'a big strawberry jar costs about R34, got ' + big);
+  assert.ok(small > 7.8 && small < big, 'a small jar costs its bottle and less fruit');
+  assert.ok(find('Butter Biscuits', '300 g pack').cost > 20);
+  assert.strictEqual(find('Crunchies', '300 g pack').cost, 0, 'no recipe, no guess');
   assert.strictEqual(find('Strawberry', '352 ml').onHand, 14, 'a bottle cost adds no stock');
   const again = ctx.sfApplyStocktake();
-  assert.deepStrictEqual([again.added, again.moved, again.costed], [0, 0, 0]);
+  assert.deepStrictEqual([again.added, again.moved], [0, 0]);
+  assert.strictEqual(find('Strawberry', '352 ml').cost, SF.products().find((p) => p.name === 'Strawberry' && p.variant === '352 ml').cost);
+  assert.strictEqual(SF.rows('batches').length, again.costed, 'running it again updates, never duplicates');
 });
 
 console.log(failures ? '\n' + failures + ' failed' : '\nall passed');

@@ -23,10 +23,6 @@ var STOCKTAKE = {
   // override them below.
   price: { L: 70, M: 50, S: 40 },
 
-  // What an empty bottle costs her (Markets spreadsheet, General tab). The
-  // medium odd bottles have no known cost, so they get none.
-  bottle: { L: 8.64, S: 7.80 },
-  bottleNote: 'Bottle only. Ingredients not costed yet',
   premium: {
     'Fig':                     { L: 80, M: 60, S: 50 },
     'Fig Chunky':              { L: 80 },
@@ -121,10 +117,10 @@ function sfStocktakeRows() {
     });
   });
   STOCKTAKE.biscuits.forEach(function (b) {
-    out.push([b[0], b[1], 'Biscuits', 'made', b[2], null]);
+    out.push([b[0], b[1], 'Biscuits', 'made', b[2], null, null]);
   });
   STOCKTAKE.handmade.forEach(function (h) {
-    out.push([h[0], 'each', h[1], 'stocked', h[2], null]);
+    out.push([h[0], 'each', h[1], 'stocked', h[2], null, null]);
   });
   return out;
 }
@@ -138,7 +134,7 @@ function sfLoadStocktake() {
   var r = sfApplyStocktake();
   ui.alert('Stocktake loaded.\n\n' + r.added + ' new products · ' + r.updated + ' updated · ' +
     r.off + ' switched off\n' + r.moved + ' stock adjustments · ' + r.jars + ' jars on the shelf\n' +
-    r.costed + ' jars given their bottle cost\n\n' +
+    r.costed + ' products costed (see Costing.gs)\n\n' +
     'Recipes are on the Recipes tab.');
 }
 
@@ -150,8 +146,6 @@ function sfApplyStocktake() {
   var hand = SF.onHand();
   var next = SF.rows('products').length;
   var wanted = {}, r = { added: 0, updated: 0, off: 0, moved: 0, jars: 0, costed: 0 };
-  var costed = {};
-  SF.rows('batches').forEach(function (b) { costed[String(b.ProductId)] = true; });
 
   sfStocktakeRows().forEach(function (row, i) {
     var name = row[0], variant = row[1], k = key(name, variant), id;
@@ -175,7 +169,7 @@ function sfApplyStocktake() {
       });
       r.added++;
     }
-    if (STOCKTAKE.bottle[row[6]] && !costed[id]) { sfBottleCost(id, row); r.costed++; }
+    if (sfCostProduct(id, row)) r.costed++;
     if (row[5] === null) return;
     var delta = row[5] - (hand[id] || 0);
     if (delta) { SF.move(id, delta, 'adjust', STOCKTAKE.ref); r.moved++; }
@@ -193,21 +187,6 @@ function sfApplyStocktake() {
   SF.audit({ role: 'owner', device: 'sheet' }, 'stocktake', STOCKTAKE.ref,
            r.added + ' added, ' + r.updated + ' updated, ' + r.moved + ' adjusted', 'ok');
   return r;
-}
-
-/**
- * A costing record for the bottle, one jar's worth. It adds no stock: the
- * jars are already on the shelf from the count. When she enters a real batch
- * on the Stock screen, that run is averaged in with it.
- */
-function sfBottleCost(productId, row) {
-  var amount = STOCKTAKE.bottle[row[6]];
-  var id = 'B-' + ('000' + (SF.rows('batches').length + 1)).slice(-3);
-  SF.append('batches', {
-    BatchId: id, When: new Date(), ProductId: productId, Made: 1,
-    CostLines: JSON.stringify([{ label: 'Bottle ' + row[1], amount: amount }]),
-    TotalCost: amount, CostPerUnit: amount, Note: STOCKTAKE.bottleNote
-  });
 }
 
 /** A plain reference tab. It is not one of SF.SHEETS, so the app never reads it. */
