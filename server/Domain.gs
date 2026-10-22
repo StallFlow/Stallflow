@@ -523,6 +523,51 @@ SF.action('stock', 'stock', 'read', function () {
  */
 SF.pots = function () { return typeof sfPots === 'function' ? sfPots() : []; };
 
+/** A recipe saved from the app, or null. Lines: [{label, item, qty, unit, price}]. */
+SF.recipe = function (name) {
+  var key = String(name || '').toLowerCase(), out = null;
+  SF.rows('recipes').forEach(function (r) {
+    if (String(r.Name).toLowerCase() === key) {
+      out = { row: r._row, name: String(r.Name), makes: SF.num(r.Makes), lines: SF.json(r.Lines, []) };
+    }
+  });
+  return out;
+};
+
+SF.RECIPE_UNITS = ['kg', 'g', 'litre', 'each', 'pot'];
+SF.newPot = function (name) { if (typeof sfNewPot === 'function') sfNewPot(name); };
+
+/**
+ * Save the usual recipe for a pot. A name the stall has no product for yet
+ * is a new jam: the stall's own file (sfNewPot) puts it on the shelf list.
+ */
+SF.action('saveRecipe', 'stock', 'write', function (p, ctx) {
+  var name = String(p.name || '').trim().slice(0, 50);
+  if (name.length < 2) return { ok: false, message: 'Give the jam a name.' };
+  var lines = (p.lines || []).map(function (l) {
+    var label = String(l.label || '').trim().slice(0, 40);
+    var unit = SF.RECIPE_UNITS.indexOf(l.unit) === -1 ? 'kg' : String(l.unit);
+    return { label: label, item: unit === 'pot' ? '' : String(l.item || label).trim().slice(0, 40),
+             qty: Math.max(0, Math.round(SF.num(l.qty) * 1000) / 1000), unit: unit,
+             price: Math.max(0, Math.round(SF.num(l.price) * 100) / 100) };
+  }).filter(function (l) { return l.label && l.qty > 0; });
+  if (!lines.length) return { ok: false, message: 'Add at least one ingredient.' };
+  var makes = Math.max(1, Math.round(SF.num(p.makes) || 6));
+
+  var known = SF.pots().some(function (x) { return x.name.toLowerCase() === name.toLowerCase(); });
+  if (!known) SF.newPot(name);
+
+  var fields = { Name: name, Makes: makes, Lines: JSON.stringify(lines),
+                 UpdatedAt: new Date(), UpdatedBy: ctx.user || ctx.role };
+  var have = SF.recipe(name);
+  if (have) {
+    fields.Name = have.name;
+    Object.keys(fields).forEach(function (k) { SF.setCell('recipes', have.row, k, fields[k]); });
+  } else SF.append('recipes', fields);
+  SF.audit(ctx, 'saveRecipe', name, lines.length + ' ingredients', 'ok');
+  return { ok: true, isNew: !known };
+});
+
 /** Take an amount out of the cupboard, if the cupboard lists it. Never below 0. */
 SF.usePantry = function (item, qty, unit, ctx) {
   if (!item || !(qty > 0)) return null;

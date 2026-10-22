@@ -343,7 +343,8 @@ test('the Duxies stocktake loads prices and counts, and running it twice changes
   // Stocktake.gs only needs SF, so run it in a small context that shares it.
   ['Costing.gs', 'Stocktake.gs'].forEach((f) => vm.runInContext(
     fs.readFileSync(path.join(__dirname, '..', 'stalls', 'duxies', f), 'utf8'), ctx));
-  SF.pots = () => ctx.sfPots();   // in Apps Script every file shares one global scope
+  SF.pots = () => ctx.sfPots();
+  SF.newPot = (n) => ctx.sfNewPot(n);   // in Apps Script every file shares one global scope
   const first = ctx.sfApplyStocktake();
   assert.strictEqual(first.off, 1, 'the old placeholder jam is switched off');
   const ps = SF.products();
@@ -383,6 +384,17 @@ test('the Duxies stocktake loads prices and counts, and running it twice changes
   assert.strictEqual(SF.onHand()[bigId], before + 5);
   const left = Object.fromEntries(SF.pantry().map((r) => [r.item, r.qty]));
   assert.deepStrictEqual([left.Strawberries, left.Sugar, left['352 ml bottles']], [2, 0, 5]);
+  // Changing the usual recipe, and starting a new jam.
+  const lines2 = pot.lines.concat([{ label: 'Lemon juice', qty: 1, unit: 'pot', price: 5 }]);
+  assert.strictEqual(SF.dispatch('saveRecipe', { token: tok, opId: 'r1', name: 'Strawberry',
+                                                 makes: 6, lines: lines2 }).ok, true);
+  const pot2 = SF.dispatch('stock', { token: tok }).data.pots.find((x) => x.name === 'Strawberry');
+  assert.ok(pot2.lines.some((l) => l.label === 'Lemon juice'), 'the saved recipe is used');
+  const nu = SF.dispatch('saveRecipe', { token: tok, opId: 'r2', name: 'Quince', makes: 6,
+                                         lines: [{ label: 'Quinces', qty: 3, unit: 'kg', price: 20 }] });
+  assert.strictEqual(nu.isNew, true);
+  const q = SF.dispatch('stock', { token: tok }).data.pots.find((x) => x.name === 'Quince');
+  assert.strictEqual(q.sizes.length, 2, 'a new jam gets its sizes on the shelf list');
   assert.strictEqual(SF.dispatch('cookPot', { token: tok, opId: 'c5', name: 'Strawberry',
                                               lines: pot.lines, jars: {} }).ok, false);
 });

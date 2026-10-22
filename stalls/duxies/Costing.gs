@@ -154,6 +154,9 @@ function sfCostLines(row) {
  */
 function sfPotLines(name) {
   var C = COSTING, pot = /marmalade/i.test(name) ? C.marmalade : C.jam;
+  // A recipe she saved in the app wins over the one written here.
+  var saved = typeof SF !== 'undefined' && SF.recipe ? SF.recipe(name) : null;
+  if (saved && saved.lines.length) return { jars: saved.makes || pot.jars, lines: saved.lines };
   var lines = (C.jamFruit[name] || [[name, 1]]).map(function (f) {
     var known = f[0] in C.fruitPrice;
     return { label: f[0] + (known ? '' : ' (estimate)'), item: f[0], qty: r2(pot.fruit * f[1]),
@@ -172,7 +175,11 @@ function sfPots() {
   var products = SF.rows('products').filter(function (p) {
     return String(p.Active).toLowerCase() !== 'no';
   });
-  return STOCKTAKE.jams.map(function (j) {
+  var names = STOCKTAKE.jams.map(function (j) { return j[0]; });
+  SF.rows('recipes').forEach(function (r) {
+    if (names.indexOf(String(r.Name)) === -1) names.push(String(r.Name));
+  });
+  return names.map(function (n) { return [n]; }).map(function (j) {
     var pot = sfPotLines(j[0]);
     var sizes = [];
     ['L', 'M', 'S'].forEach(function (k) {
@@ -221,4 +228,20 @@ function sfCostProduct(productId, row) {
     SF.append('batches', Object.assign({ BatchId: id, When: new Date(), ProductId: productId }, rec));
   }
   return true;
+}
+
+/**
+ * A new jam saved from the app: put it on the shelf list in the two sizes
+ * she always makes, at her usual prices. She can change them on Stock.
+ */
+function sfNewPot(name) {
+  var n = SF.rows('products').length;
+  [['L', 70], ['S', 40]].forEach(function (z) {
+    n++;
+    SF.append('products', {
+      ProductId: 'P' + ('00' + n).slice(-2), Name: name, Variant: STOCKTAKE.sizes[z[0]],
+      Type: 'stocked', Category: /marmalade/i.test(name) ? 'Marmalades' : 'Jams',
+      Unit: 'each', Price: z[1], Capacity: 0, Options: '[]', Active: 'Yes', Sort: n * 10
+    });
+  });
 }

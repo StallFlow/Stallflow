@@ -189,3 +189,6 @@ h3.step{font-size:18px;margin:20px 0 4px}
 .jarrow .n{min-width:40px;text-align:center;font-size:26px}
 button.bigbtn{font-size:20px;min-height:60px;margin-top:14px}
 details.card summary{cursor:pointer;padding:6px 0;font-size:16px}
+.cookline input.lbl{flex:1 1 100%;width:auto;text-align:left}
+.cookline select{font-size:17px;padding:8px;width:auto;flex:none}
+.cookline button.x{background:none;color:var(--muted);font-size:22px;min-height:44px;min-width:44px;margin-left:auto}
