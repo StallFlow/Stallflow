@@ -71,16 +71,7 @@
     id: 'till', title: 'Till', cap: 'sell',
     render: function (ctx) {
       var d = ctx.data, t = d.totals;
-      var groups = {};
-      d.products.forEach(function (p) {
-        var key = p.category || '';
-        (groups[key] = groups[key] || []).push(p);
-      });
-
-      var tiles = Object.keys(groups).sort().map(function (cat) {
-        return (cat ? '<div class="tag" style="margin:14px 0 8px">' + esc(cat) + '</div>' : '') +
-          '<div class="tiles">' + groups[cat].map(tile).join('') + '</div>';
-      }).join('');
+      var tiles = picker(d);
 
       var unpaid = d.unpaid.length ? d.unpaid.map(function (o) {
         return '<div class="rowitem"><div class="who"><b>' + esc(o.customer) + '</b>' +
@@ -107,8 +98,7 @@
               '<h2 style="flex:1">Ring up a sale</h2>' +
               '<button class="ghost sm" onclick="SFT.scan()">Scan</button>' +
               SF.slot('till.actions', ctx) +
-            '</div>' + whereSwitch() +
-            '<div class="sub">Tap what they are buying.</div>' + tiles + '</div>'
+            '</div>' + marketPicker(d) + tiles + '</div>'
           : '<div class="card"><h2>Pre-orders still to pay</h2>' +
               '<div class="sub">Already put aside. Tap <b>Paid</b> when the money is in.</div>' +
               unpaid + '</div>') +
@@ -117,24 +107,79 @@
     }
   });
 
-  /* At a market, or a sale in between (at home, a friend, WhatsApp)?
-     Remembered on this phone, so she sets it once when she gets home. */
-  function where() { return SF.ls.get('sf.where', 'market'); }
+  /* Which market this phone is selling at. Several can run on the same
+     day, so each phone remembers its own; blank means the live market. */
+  function sellAt() { return SF.ls.get('sf.sellAt', ''); }
 
-  function whereSwitch() {
-    var home = where() === 'home';
-    var btn = function (v, label, on) {
-      return '<button class="' + (on ? 'on' : '') + '" onclick="SFT.where(\'' + v + '\')">' +
-        label + '</button>';
-    };
-    return '<div class="seg">' +
-      btn('market', 'At the market', !home) + btn('home', 'Between markets', home) + '</div>' +
-      (home ? '<div class="notice" style="border-radius:10px;margin-bottom:8px"><span>' +
-        'These sales are kept under <b>Sales between markets</b> on Numbers, not the live market. ' +
-        'Switch back before the next market.</span></div>' : '');
+  function marketPicker(d) {
+    var at = sellAt() || d.marketId;
+    var opts = (d.markets || []).map(function (m) {
+      var label = m.id === 'HOME' ? 'Between markets (home, friends, WhatsApp)'
+        : m.name + (m.date ? ' · ' + m.date : '');
+      return '<option value="' + (m.id === 'HOME' ? 'home' : esc(m.id)) + '"' +
+        ((m.id === at || (m.id === 'HOME' && (at === 'HOME' || at === 'home'))) ? ' selected' : '') + '>' +
+        esc(label) + '</option>';
+    }).join('');
+    return '<div class="field" style="margin:10px 0 4px"><label for="sellat">Selling at</label>' +
+      '<select id="sellat" class="bigsel" onchange="SFT.sellAt(this.value)">' + opts + '</select></div>';
   }
 
-  function tile(p) {
+  /* Type first, then the product, then its size: never a long list. */
+  var pickName = null;
+
+  function picker(d) {
+    var groups = {}, order = [];
+    d.products.forEach(function (p) {
+      var cat = p.category || 'Other';
+      if (!groups[cat]) { groups[cat] = []; order.push(cat); }
+      groups[cat].push(p);
+    });
+    order.sort();
+    if (!order.length) return '<div class="empty">No products yet.</div>';
+    var cat = SF.ls.get('sf.tillcat', order[0]);
+    if (!groups[cat]) cat = order[0];
+
+    var chips = '<div class="chips">' + order.map(function (c) {
+      return '<button class="' + (c === cat ? 'on' : '') + '" onclick="SFT.cat(\'' +
+        esc(c).replace(/'/g, '&#39;') + '\')">' + esc(c) + '</button>';
+    }).join('') + '</div>';
+
+    var byName = {}, names = [];
+    groups[cat].forEach(function (p) {
+      if (!byName[p.name]) { byName[p.name] = []; names.push(p.name); }
+      byName[p.name].push(p);
+    });
+
+    if (pickName && byName[pickName]) {
+      var sizes = byName[pickName];
+      return chips + '<div class="sizepick"><div class="sizehead">' +
+        '<button class="ghost sm" onclick="SFT.back()">‹ Back</button>' +
+        '<b>' + esc(pickName) + '</b><span class="muted">choose the size</span></div>' +
+        '<div class="tiles">' + sizes.map(function (p) { return tile(p, true); }).join('') + '</div></div>';
+    }
+
+    return chips + '<div class="tiles">' + names.map(function (n) {
+      var list = byName[n];
+      if (list.length === 1) return tile(list[0]);
+      var left = 0, open = false, from = Infinity;
+      list.forEach(function (p) {
+        var l = availableNow(p);
+        if (l === null) open = true; else left += Math.max(0, l);
+        from = Math.min(from, p.price);
+      });
+      var out = !open && left <= 0;
+      return '<button class="tile' + (out ? ' out' : '') + '"' + (out ? ' disabled' : '') +
+        ' onclick="SFT.name(\'' + esc(n).replace(/'/g, '&#39;') + '\')">' +
+        '<span class="nm">' + esc(n) + ' <span class="vr">' + list.length + ' sizes · tap to choose</span></span>' +
+        '<span class="bot"><span class="pr">' + money(from) + '</span>' +
+        (out ? '<span class="st sold">SOLD OUT</span>'
+             : open ? '<span class="st">to order</span>'
+             : '<span class="st' + (left <= 4 ? ' low' : '') + '">' + left + ' left</span>') +
+        '</span></button>';
+    }).join('') + '</div>';
+  }
+
+  function tile(p, sizeOnly) {
     var left = availableNow(p);
     var out = left !== null && left <= 0;
     var state = left === null ? '<span class="st">to order</span>'
@@ -142,8 +187,8 @@
       : '<span class="st' + (left <= 4 ? ' low' : '') + '">' + qty(left, p.unit) + ' left</span>';
     return '<button class="tile' + (out ? ' out' : '') + '"' + (out ? ' disabled' : '') +
       ' onclick="SFT.tap(\'' + p.id + '\')">' +
-      '<span class="nm">' + esc(p.name) +
-        (p.variant ? ' <span class="vr">' + esc(p.variant) + '</span>' : '') + '</span>' +
+      '<span class="nm">' + (sizeOnly ? esc(p.variant || p.name) : esc(p.name) +
+        (p.variant ? ' <span class="vr">' + esc(p.variant) + '</span>' : '')) + '</span>' +
       '<span class="bot"><span class="pr">' + money(p.price) +
         (p.weighed ? '<span class="per">/' + esc(p.unit) + '</span>' : '') + '</span>' +
         state + '</span></button>';
@@ -169,12 +214,16 @@
 
   /* Till behaviour, exposed for the inline handlers above. */
   window.SFT = {
-    where: function (v) { SF.ls.set('sf.where', v); SF.render(); },
+    sellAt: function (v) { SF.ls.set('sf.sellAt', v); SF.load('till'); },
+    cat: function (c) { SF.ls.set('sf.tillcat', c); pickName = null; SF.render(); },
+    name: function (n) { pickName = n; SF.render(); },
+    back: function () { pickName = null; SF.render(); },
     tap: function (id) {
       var p = SF.find(SF.state.data.till.products, id);
       if (!p) return;
       if (p.weighed) return SFT.weigh(p);
       if ((p.options || []).length) return SFT.options(p);
+      pickName = null;   // back to the jams for the next item
       SFT.add(p, 1, []);
     },
 
@@ -192,7 +241,8 @@
         var pr = priceOf(p, existing);
         existing.total = pr.total; existing.units = pr.units;
       } else {
-        var line = { key: key, id: p.id, name: p.name, unit: p.unit, type: p.type,
+        var line = { key: key, id: p.id, name: p.name + (p.variant ? ' ' + p.variant : ''),
+                     unit: p.unit, type: p.type,
                      qty: n, options: options || [] };
         var priced = priceOf(p, line);
         line.each = priced.each; line.total = priced.total; line.units = priced.units;
@@ -377,7 +427,8 @@
       });
       var snapshot = cart.slice();
       cart = [];
-      SF.write('sell', { lines: lines, where: where() }, function () {
+      var till = SF.state.data.till || {};
+      SF.write('sell', { lines: lines, marketId: sellAt() || till.marketId }, function () {
         var till = SF.state.data.till, stock = SF.state.data.stock;
         snapshot.forEach(function (l) {
           [till, stock].forEach(function (d) {

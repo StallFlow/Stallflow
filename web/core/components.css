@@ -216,3 +216,10 @@ details.card summary{cursor:pointer;padding:6px 0;font-size:16px}
 .seg button{flex:1;min-height:44px;border-radius:999px;background:none;color:var(--ink);
   font-size:15px;border:0;padding:0 8px}
 .seg button.on{background:var(--brand);color:var(--brand-ink)}
+/* Till: type chips, then product, then size */
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin:12px 0}
+.chips button{min-height:42px;padding:0 14px;border-radius:999px;font-size:15px;
+  background:var(--surface);color:var(--ink);border:1px solid var(--rule)}
+.chips button.on{background:var(--ink);color:var(--surface);border-color:var(--ink)}
+.sizehead{display:flex;align-items:center;gap:10px;margin:4px 0 10px;flex-wrap:wrap}
+.sizehead b{font-size:19px}

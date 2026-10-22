@@ -398,8 +398,26 @@ SF.action('placeOrder', null, 'write', function (p, ctx) {
    6. ACTIONS — till and queue
    ========================================================================= */
 
-SF.action('till', 'sell', 'read', function () {
-  var market = SF.activeMarket();
+/**
+ * Where a till sale belongs. Several markets can run on the same day, so each
+ * phone says which one it is at; anything unknown falls back to the live one.
+ */
+SF.sellMarket = function (id) {
+  id = String(id || '');
+  if (id === 'home') return SF.HOME;
+  return id && SF.markets().some(function (m) { return m.id === id; }) ? id : SF.activeMarket();
+};
+
+/** Markets a salesperson might be standing at: today onwards, plus between markets. */
+SF.sellableMarkets = function () {
+  var today = SF.today(), live = SF.activeMarket();
+  return SF.markets().filter(function (m) {
+    return m.id === SF.HOME || m.id === live || !m.date || m.date >= today;
+  }).map(function (m) { return { id: m.id, name: m.name, date: m.date }; });
+};
+
+SF.action('till', 'sell', 'read', function (p) {
+  var market = SF.sellMarket(p && p.marketId);
   var orders = SF.orders().filter(function (o) {
     return o.marketId === market && o.status !== 'cancelled';
   });
@@ -422,7 +440,8 @@ SF.action('till', 'sell', 'read', function () {
     unpaid: orders.filter(function (o) { return o.status === 'reserved'; })
                   .sort(function (a, b) { return a.when - b.when; }),
     totals: t,
-    marketId: market
+    marketId: market,
+    markets: SF.sellableMarkets()
   };
 });
 
@@ -431,9 +450,9 @@ SF.action('sell', 'sell', 'write', function (p, ctx) {
   if (!built.ok) return built;
 
   var no = SF.nextOrderNo(), now = new Date();
-  var home = p.where === 'home';
+  var mid = SF.sellMarket(p.marketId || p.where), home = mid === SF.HOME;
   SF.append('orders', {
-    OrderNo: no, When: now, MarketId: home ? SF.HOME : SF.activeMarket(), Channel: 'till',
+    OrderNo: no, When: now, MarketId: mid, Channel: 'till',
     Customer: String(p.customer || (home ? 'Between markets' : 'Walk-up')).slice(0, 60), Phone: '',
     Lines: JSON.stringify(built.lines), Units: built.units, Total: built.total,
     Cost: built.cost, Status: 'collected', PaidAt: now, CollectedAt: now,

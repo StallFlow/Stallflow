@@ -415,6 +415,21 @@ test('a sale between markets is kept apart from the live market', () => {
   assert.strictEqual(total(home), '140');
 });
 
+test('two markets on the same day keep their own sales', () => {
+  const { SF } = shop(day(3));
+  SF.append('markets', { MarketId: 'M02', Name: 'RNW', Date: day(3), Status: 'planned' });
+  SF.setPin('owner', '4321');
+  const tok = SF.dispatch('signIn', { pin: '4321', device: 'd' }).data.token;
+  SF.dispatch('sell', { token: tok, opId: 'a', marketId: 'M01', lines: [{ id: 'P01', qty: 1 }] });
+  SF.dispatch('sell', { token: tok, opId: 'b', marketId: 'M02', lines: [{ id: 'P01', qty: 2 }] });
+  SF.dispatch('sell', { token: tok, opId: 'c', marketId: 'nonsense', lines: [{ id: 'P01', qty: 1 }] });
+  const t1 = SF.dispatch('till', { token: tok, marketId: 'M01' }).data;
+  const t2 = SF.dispatch('till', { token: tok, marketId: 'M02' }).data;
+  assert.strictEqual(t1.totals.tillTotal, 140, 'an unknown market falls back to the live one');
+  assert.strictEqual(t2.totals.tillTotal, 140);
+  assert.ok(t1.markets.some((m) => m.id === 'M02') && t1.markets.some((m) => m.id === 'HOME'));
+});
+
 test('uncooked stock is a list she can add to and update', () => {
   const { SF } = shop(day(3));
   SF.setPin('owner', '4321');
