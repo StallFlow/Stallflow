@@ -11,7 +11,8 @@
  */
 
 var COSTING = {
-  note: 'Costing estimate (Costing.gs)',
+  note: 'Starting cost (estimate)',
+  oldNotes: ['Costing estimate (Costing.gs)'],
 
   // Rand per kg, from the General tab of her Markets spreadsheet.
   sugar:      65 / 2.5,      // white, R65 for 2.5 kg
@@ -217,7 +218,8 @@ function sfCostProduct(productId, row) {
   var total = r2(lines.reduce(function (s, l) { return s + l.amount; }, 0));
   var mine = SF.rows('batches').filter(function (b) {
     return String(b.ProductId) === productId &&
-      (String(b.Note) === COSTING.note || /^Bottle only/.test(String(b.Note)));
+      (String(b.Note) === COSTING.note || COSTING.oldNotes.indexOf(String(b.Note)) !== -1 ||
+       /^Bottle only/.test(String(b.Note)));
   })[0];
   var rec = { Made: 1, CostLines: JSON.stringify(lines), TotalCost: total,
               CostPerUnit: total, Note: COSTING.note };
