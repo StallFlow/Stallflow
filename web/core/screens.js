@@ -13,6 +13,23 @@
     return -1;
   }
 
+  /* ---- Every main screen: a snapshot that stays put, then tabs -------
+     tabs: [[key, label], …]; the open one is remembered per screen. */
+  SF.snap = function (figures) { return '<div class="snap">' + figures.join('') + '</div>'; };
+  SF.tabs = function (screen, tabs, fallback) {
+    var on = SF.ls.get('sf.tab.' + screen, fallback || tabs[0][0]);
+    if (!tabs.some(function (t) { return t[0] === on; })) on = tabs[0][0];
+    var html = '<div class="stabs" role="tablist">' + tabs.map(function (t) {
+      return '<button role="tab" aria-selected="' + (t[0] === on) + '" class="' +
+        (t[0] === on ? 'on' : '') + '" onclick="SF.pickTab(\'' + screen + '\',\'' + t[0] + '\')">' +
+        esc(t[1]) + '</button>';
+    }).join('') + '</div>';
+    return { on: on, html: html };
+  };
+  SF.pickTab = function (screen, t) {
+    SF.ls.set('sf.tab.' + screen, t); SF.render(); window.scrollTo(0, 0);
+  };
+
   function figure(k, v, n, lead) {
     return '<div class="figure' + (lead ? ' lead' : '') + '">' +
       '<div class="k">' + esc(k) + '</div><div class="v">' + v + '</div>' +
@@ -75,22 +92,26 @@
 
       // Takings and the day's count deliberately live on Numbers, not here —
       // this screen faces the customer and is for ringing up, not reporting.
+      var owed = d.unpaid.reduce(function (a, o) { return a + o.total; }, 0);
+      var tb = SF.tabs('till', [['sell', 'Sell'],
+                                ['topay', 'Still to pay' + (d.unpaid.length ? ' (' + d.unpaid.length + ')' : '')]]);
       return '<div class="wrap wide">' +
-        '<div class="grid g2" style="margin-bottom:14px">' +
-          figure('Pre-orders', moneyShort(t.preTotal), t.preCount + ' collected') +
-          figure('Walk-ups', moneyShort(t.tillTotal), t.tillCount + ' at the table') +
-          SF.slot('till.figures', ctx) +
-        '</div>' +
-        SF.slot('till.top', ctx) +
-        '<div class="card"><div style="display:flex;gap:10px;align-items:center">' +
-          '<h2 style="flex:1">Ring up a sale</h2>' +
-          '<button class="ghost sm" onclick="SFT.scan()">Scan</button>' +
-          SF.slot('till.actions', ctx) +
-        '</div>' + whereSwitch() +
-        '<div class="sub">Tap what they are buying.</div>' + tiles + '</div>' +
-        '<div class="card"><h2>Pre-orders still to pay</h2>' +
-          '<div class="sub">Already put aside. Tap <b>Paid</b> when the money is in.</div>' +
-          unpaid + '</div>' +
+        SF.snap([
+          figure('Pre-orders', moneyShort(t.preTotal), t.preCount + ' collected'),
+          figure('Walk-ups', moneyShort(t.tillTotal), t.tillCount + ' sold'),
+          figure('Still to pay', moneyShort(owed), d.unpaid.length + (d.unpaid.length === 1 ? ' order' : ' orders'))
+        ]) +
+        SF.slot('till.figures', ctx) + SF.slot('till.top', ctx) + tb.html +
+        (tb.on === 'sell'
+          ? '<div class="card"><div style="display:flex;gap:10px;align-items:center">' +
+              '<h2 style="flex:1">Ring up a sale</h2>' +
+              '<button class="ghost sm" onclick="SFT.scan()">Scan</button>' +
+              SF.slot('till.actions', ctx) +
+            '</div>' + whereSwitch() +
+            '<div class="sub">Tap what they are buying.</div>' + tiles + '</div>'
+          : '<div class="card"><h2>Pre-orders still to pay</h2>' +
+              '<div class="sub">Already put aside. Tap <b>Paid</b> when the money is in.</div>' +
+              unpaid + '</div>') +
         SF.slot('till.after', ctx) +
         '<div class="foot">StallFlow · till</div></div>' + cartBar();
     }
@@ -103,11 +124,10 @@
   function whereSwitch() {
     var home = where() === 'home';
     var btn = function (v, label, on) {
-      return '<button class="' + (on ? '' : 'ghost ') + 'sm" onclick="SFT.where(\'' + v + '\')">' +
+      return '<button class="' + (on ? 'on' : '') + '" onclick="SFT.where(\'' + v + '\')">' +
         label + '</button>';
     };
-    return '<div style="display:flex;gap:8px;align-items:center;margin:8px 0;flex-wrap:wrap">' +
-      '<span class="muted small">Selling</span>' +
+    return '<div class="seg">' +
       btn('market', 'At the market', !home) + btn('home', 'Between markets', home) + '</div>' +
       (home ? '<div class="notice" style="border-radius:10px;margin-bottom:8px"><span>' +
         'These sales are kept under <b>Sales between markets</b> on Numbers, not the live market. ' +
@@ -545,25 +565,34 @@
             : 'The queue is empty. Everything ordered ahead has been handed over.') +
           '</div></div>';
 
-      return '<div class="wrap">' + head +
-        '<div class="card"><h2>Next in line</h2>' +
+      var tb = SF.tabs('collect', [['queue', 'Queue'], ['topay', 'Still to pay'],
+                                   ['done', 'Handed over']]);
+      var sections = {
+        queue: head + '<div class="card"><h2>Next in line</h2>' +
           '<div class="sub">Oldest first — whoever ordered first gets served first.</div>' +
           (rest.length ? rest.map(function (o, i) {
             return row(i + 2, 'var(--ink)', o,
               '<button class="ghost sm" onclick="SFT.collect(\'' + o.no + '\')">Done</button>',
               true);
-          }).join('') : '<div class="empty">No one else in the line.</div>') + '</div>' +
-        '<div class="card"><h2>Still to pay</h2>' +
+          }).join('') : '<div class="empty">No one else in the line.</div>') + '</div>',
+        topay: '<div class="card"><h2>Still to pay</h2>' +
           '<div class="sub">They join the queue once the money is in.</div>' +
           (q.unpaid.length ? q.unpaid.map(function (o) {
             return row('!', 'var(--warn)', o,
               '<button class="ok sm" onclick="SFT.pay(\'' + o.no + '\')">Paid</button>', true);
-          }).join('') : '<div class="empty">Everyone who ordered ahead has paid.</div>') + '</div>' +
-        SF.slot('collect.after', ctx) +
-        '<div class="card"><h2>Handed over</h2>' +
+          }).join('') : '<div class="empty">Everyone who ordered ahead has paid.</div>') + '</div>',
+        done: '<div class="card"><h2>Handed over</h2>' +
           (q.done.length ? '<div class="done">' + q.done.map(function (o) {
             return row('✓', 'var(--ok)', o, '');
-          }).join('') + '</div>' : '<div class="empty">Nothing handed over yet.</div>') + '</div>' +
+          }).join('') + '</div>' : '<div class="empty">Nothing handed over yet.</div>') + '</div>'
+      };
+      return '<div class="wrap">' +
+        SF.snap([
+          figure('Waiting', String(q.waiting.length), 'paid, to collect'),
+          figure('Still to pay', String(q.unpaid.length), 'orders'),
+          figure('Handed over', String(q.done.length), 'so far')
+        ]) + tb.html + sections[tb.on] +
+        SF.slot('collect.after', ctx) +
         '<div class="foot">StallFlow · collection</div></div>';
     }
   });
@@ -603,12 +632,11 @@
         : '';
       return '<div class="wrap wide">' + st +
         // The snapshot stays put whichever tab is open.
-        '<div class="snap">' +
-          figure('On the shelf', qty(onShelf, 'each'), counted.length + ' products') +
-          figure('What it cost', moneyShort(s.stockValue), 'in stock') +
-          figure('If it all sells', moneyShort(ifSold),
-                 moneyShort(ifSold - s.stockValue) + ' profit') +
-        '</div>' +
+        SF.snap([
+          figure('On the shelf', qty(onShelf, 'each'), counted.length + ' products'),
+          figure('What it cost', moneyShort(s.stockValue), 'in stock'),
+          figure('If it all sells', moneyShort(ifSold), moneyShort(ifSold - s.stockValue) + ' profit')
+        ]) +
         stockTabs(s, v) +
         SF.slot('stock.after', ctx) +
         '<div class="foot">StallFlow · stock &amp; costing</div></div>';
@@ -731,18 +759,14 @@
       ['history', 'History']
     ];
     if (pots) tabs.splice(3, 0, ['other', 'Other']);
-    var on = SF.ls.get('sf.stocktab', 'cook');
-    if (!tabs.some(function (t) { return t[0] === on; })) on = 'cook';
+    var tb = SF.tabs('stock', tabs), on = tb.on;
     var body = on === 'cook' ? (pots ? '<div class="card" id="cookbox"></div>' : runCard(s, v))
       : on === 'other' ? '<div class="sub" style="margin:4px 2px 10px">Biscuits, crochet, anything ' +
           'that is not a pot of jam.</div>' + runCard(s, v)
       : on === 'shelf' ? priceTable(s)
       : on === 'cupboard' ? pantryCard(s)
       : runHistory(s, v);
-    return '<div class="stabs" role="tablist">' + tabs.map(function (t) {
-      return '<button role="tab" aria-selected="' + (t[0] === on) + '" class="' +
-        (t[0] === on ? 'on' : '') + '" onclick="SFS.tab(\'' + t[0] + '\')">' + esc(t[1]) + '</button>';
-    }).join('') + '</div>' + body;
+    return tb.html + body;
   }
 
   function pantryCard(s) {
@@ -843,8 +867,6 @@
         '<div class="r big"><span>Cost per ' + esc(v.unit) + '</span><b>' +
           (made > 0 && total > 0 ? money(per) : '—') + '</b></div>' + verdict + '</div>';
     },
-
-    tab: function (t) { SF.ls.set('sf.stocktab', t); SF.render(); window.scrollTo(0, 0); },
 
     loadStocktake: function () {
       var b = SF.el('stgo');

@@ -26,7 +26,15 @@
           esc(m.name) + (m.date ? ' · ' + esc(m.date) : '') + '</option>';
       }).join('') || '<option>No markets yet</option>';
 
+      var tb = SF.tabs('numbers', [['today', 'This market'], ['costs', 'Costs'],
+                                   ['all', 'All markets'], ['new', 'New market']]);
       return '<div class="wrap wide">' +
+        SF.snap([
+          figure('Taken', moneyShort(s.revenue), s.orders + ' sales', true),
+          figure('Costs', moneyShort(s.expenses), 'stall, petrol'),
+          figure('Profit', moneyShort(s.profit), 'after everything', false,
+                 s.profit >= 0 ? 'var(--ok)' : 'var(--bad)')
+        ]) +
         '<div class="card flat" style="padding:12px"><div class="row" style="align-items:flex-end">' +
           '<div class="field" style="margin:0;flex:2"><label for="mk">Market</label>' +
             '<select id="mk" onchange="SFA.pickMarket(this.value)">' + opts + '</select></div>' +
@@ -47,17 +55,15 @@
           'onclick="SFA.askRelease()">Release unpaid reservations (' +
           moneyShort(d.summary.outstanding) + ')</button>' : '') +
 
-        '<div class="grid g4" style="margin-bottom:14px">' +
-          figure('Taken', moneyShort(s.revenue),
-                 s.orders + ' sales · ' + qty(s.units, 'each') + ' ' + v.units, true) +
-          figure('Cost of what sold', moneyShort(s.cogs), 'what it cost to make') +
-          figure('Cost of being there', moneyShort(s.expenses), 'stall, petrol, the rest') +
-          figure('Left in your pocket', moneyShort(s.profit), 'after everything', false,
-                 s.profit >= 0 ? 'var(--ok)' : 'var(--bad)') +
-        '</div>' +
-        breakEven(s, v) +
-        '<div class="grid g2">' + expenses(d) + best(d) + '</div>' +
-        history(d, v) + newMarket() +
+        tb.html +
+        (tb.on === 'today'
+          ? '<div class="snap two">' +
+              figure('Cost of what sold', moneyShort(s.cogs), 'to make it') +
+              figure('Sold', qty(s.units, 'each') + ' ' + v.units, s.orders + ' sales') +
+            '</div>' + breakEven(s, v) + best(d)
+          : tb.on === 'costs' ? expenses(d)
+          : tb.on === 'all' ? history(d, v)
+          : newMarket()) +
         SF.slot('numbers.after', ctx) +
         '<div class="foot">StallFlow · market view</div></div>';
     }
