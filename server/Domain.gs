@@ -512,7 +512,85 @@ SF.action('stock', 'stock', 'read', function () {
   ps.forEach(function (p) { if (p.type !== 'made') value += p.onHand * p.cost; });
 
   return { products: ps, batches: batches, stockValue: value, units: SF.UNITS,
-           pantry: SF.pantry() };
+           pantry: SF.pantry(), pots: SF.pots() };
+});
+
+/**
+ * Recipes for "I cooked a pot". A stall's own file can define sfPots() to
+ * return [{name, expect, lines: [{label, item, qty, unit, price}],
+ * sizes: [{productId, variant, share, bottle, bottleItem}]}]; without one,
+ * the Stock screen just shows the plain "I made a batch" card.
+ */
+SF.pots = function () { return typeof sfPots === 'function' ? sfPots() : []; };
+
+/** Take an amount out of the cupboard, if the cupboard lists it. Never below 0. */
+SF.usePantry = function (item, qty, unit, ctx) {
+  if (!item || !(qty > 0)) return null;
+  var found = null;
+  SF.pantry().forEach(function (r) { if (r.item.toLowerCase() === String(item).toLowerCase()) found = r; });
+  if (!found) return null;
+  var take = qty;
+  if (unit === 'kg' && found.unit === 'g') take = qty * 1000;
+  else if (unit === 'g' && found.unit === 'kg') take = qty / 1000;
+  else if (unit !== found.unit) return null;
+  var left = Math.max(0, Math.round((found.qty - take) * 1000) / 1000);
+  SF.setCell('pantry', found.row, 'Qty', left);
+  SF.setCell('pantry', found.row, 'UpdatedAt', new Date());
+  SF.setCell('pantry', found.row, 'UpdatedBy', ctx.user || ctx.role);
+  return { item: found.item, left: left, unit: found.unit };
+};
+
+/**
+ * One pot, poured into jars of one or more sizes. The pot's cost is shared
+ * across the jars by how much each holds, each jar adds its own bottle, the
+ * jars go on the shelf, and what went in comes out of the cupboard.
+ */
+SF.action('cookPot', 'stock', 'write', function (p, ctx) {
+  var pot = null;
+  SF.pots().forEach(function (x) { if (x.name === p.name) pot = x; });
+  if (!pot) return { ok: false, message: 'I do not know that jam.' };
+
+  var lines = (p.lines || []).map(function (l) {
+    return { label: String(l.label || '').slice(0, 40), item: String(l.item || ''),
+             qty: Math.max(0, SF.num(l.qty)), unit: String(l.unit || ''),
+             price: Math.max(0, SF.num(l.price)) };
+  }).filter(function (l) { return l.label && l.qty > 0; });
+  var potCost = lines.reduce(function (s, l) { return s + l.qty * l.price; }, 0);
+
+  var jars = p.jars || {}, filled = [], volume = 0, count = 0;
+  pot.sizes.forEach(function (s) {
+    var n = Math.max(0, Math.floor(SF.num(jars[s.productId])));
+    if (n) { filled.push({ size: s, n: n }); volume += n * s.share; count += n; }
+  });
+  if (!count) return { ok: false, message: 'How many jars did you fill?' };
+
+  var made = [];
+  filled.forEach(function (f) {
+    var share = Math.round(potCost * f.n * f.size.share / volume * 100) / 100;
+    var bottles = Math.round(f.n * f.size.bottle * 100) / 100;
+    var total = Math.round((share + bottles) * 100) / 100;
+    var id = 'B-' + ('000' + (SF.rows('batches').length + 1)).slice(-3);
+    SF.append('batches', {
+      BatchId: id, When: new Date(), ProductId: f.size.productId, Made: f.n,
+      CostLines: JSON.stringify([{ label: 'Share of the pot', amount: share },
+                                 { label: 'Bottles', amount: bottles }]),
+      TotalCost: total, CostPerUnit: Math.round(total / f.n * 10000) / 10000,
+      Note: 'Cooked ' + pot.name
+    });
+    SF.move(f.size.productId, f.n, 'batch', id);
+    made.push({ productId: f.size.productId, variant: f.size.variant, jars: f.n,
+                each: Math.round(total / f.n * 100) / 100 });
+  });
+
+  var used = [];
+  lines.forEach(function (l) { var u = SF.usePantry(l.item, l.qty, l.unit, ctx); if (u) used.push(u); });
+  filled.forEach(function (f) {
+    var u = SF.usePantry(f.size.bottleItem, f.n, 'each', ctx);
+    if (u) used.push(u);
+  });
+
+  SF.audit(ctx, 'cookPot', pot.name, count + ' jars, R' + Math.round(potCost), 'ok');
+  return { ok: true, jars: count, made: made, used: used };
 });
 
 /* Uncooked stock: fruit, sugar, empty bottles. A plain count she updates

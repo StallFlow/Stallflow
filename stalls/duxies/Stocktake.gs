@@ -183,10 +183,32 @@ function sfApplyStocktake() {
     }
   });
 
+  sfSeedPantry();
   sfWriteRecipes();
   SF.audit({ role: 'owner', device: 'sheet' }, 'stocktake', STOCKTAKE.ref,
            r.added + ' added, ' + r.updated + ' updated, ' + r.moved + ' adjusted', 'ok');
   return r;
+}
+
+/**
+ * List everything the pots use in Uncooked stock at 0, so the names match
+ * the recipes and cooking can take them out. Items already listed are left
+ * as they are.
+ */
+function sfSeedPantry() {
+  var have = {};
+  SF.pantry().forEach(function (r) { have[r.item.toLowerCase()] = true; });
+  var items = [];
+  sfPots().forEach(function (pot) {
+    pot.lines.forEach(function (l) { if (l.item) items.push([l.item, l.unit]); });
+    pot.sizes.forEach(function (s) { items.push([s.bottleItem, 'each']); });
+  });
+  items.forEach(function (it) {
+    if (have[it[0].toLowerCase()]) return;
+    have[it[0].toLowerCase()] = true;
+    SF.append('pantry', { Item: it[0], Qty: 0, Unit: it[1], Note: '',
+                          UpdatedAt: new Date(), UpdatedBy: 'stocktake' });
+  });
 }
 
 /** A plain reference tab. It is not one of SF.SHEETS, so the app never reads it. */

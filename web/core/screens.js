@@ -594,6 +594,7 @@
       var ifSold = counted.reduce(function (a, p) { return a + p.onHand * p.price; }, 0);
 
       setTimeout(drawRunLines, 0);
+      setTimeout(drawCook, 0);
 
       return '<div class="wrap wide">' +
         '<div class="grid g3" style="margin-bottom:14px">' +
@@ -602,11 +603,99 @@
           figure('What it cost', moneyShort(s.stockValue), 'money sitting in stock') +
           figure('If it all sells', moneyShort(ifSold), 'at today’s prices') +
         '</div>' +
-        runCard(s, v) + priceTable(s) + pantryCard(s) + runHistory(s, v) +
+        ((s.pots || []).length
+          ? '<div class="card" id="cookbox"></div>' +
+            '<details class="card"><summary><b>Something else</b> — biscuits, crochet, ' +
+            'anything that is not a pot of jam</summary>' + runCard(s, v) + '</details>'
+          : runCard(s, v)) +
+        pantryCard(s) + priceTable(s) + runHistory(s, v) +
         SF.slot('stock.after', ctx) +
         '<div class="foot">StallFlow · stock &amp; costing</div></div>';
     }
   });
+
+  /* ---- I cooked a pot ------------------------------------------------
+     Built for someone who should not have to think about costing: pick the
+     jam, the recipe fills itself in, check the prices, count the jars. */
+  var cook = null;
+
+  function cookStart(name) {
+    var s = SF.state.data.stock;
+    var pot = SF.find((s.pots || []).map(function (p) { return Object.assign({ id: p.name }, p); }), name) ||
+              (s.pots || [])[0];
+    if (!pot) { cook = null; return; }
+    var jars = {};
+    pot.sizes.forEach(function (z, i) { jars[z.productId] = i === 0 ? pot.expect : 0; });
+    cook = { pot: pot, lines: pot.lines.map(function (l) { return Object.assign({}, l); }), jars: jars };
+  }
+
+  function cookSums() {
+    var potCost = cook.lines.reduce(function (a, l) {
+      return a + (Number(l.qty) || 0) * (Number(l.price) || 0); }, 0);
+    var volume = 0, count = 0;
+    cook.pot.sizes.forEach(function (z) {
+      var n = cook.jars[z.productId] || 0; volume += n * z.share; count += n; });
+    var each = cook.pot.sizes.map(function (z) {
+      var n = cook.jars[z.productId] || 0;
+      return { z: z, n: n, cost: n && volume ? potCost * z.share / volume + z.bottle : 0 };
+    });
+    return { potCost: potCost, count: count, each: each };
+  }
+
+  function drawCook() {
+    var box = SF.el('cookbox');
+    if (!box) return;
+    var s = SF.state.data.stock;
+    if (!cook) cookStart();
+    if (!cook) { box.style.display = 'none'; return; }
+    var opts = s.pots.map(function (p) {
+      return '<option' + (p.name === cook.pot.name ? ' selected' : '') + '>' + esc(p.name) + '</option>';
+    }).join('');
+    var lines = cook.lines.map(function (l, i) {
+      var fixed = l.unit === 'pot';
+      return '<div class="cookline">' +
+        '<span class="lbl">' + esc(l.label) + '</span>' +
+        (fixed ? '<span class="muted">this pot</span>'
+          : '<input class="q num" type="number" inputmode="decimal" min="0" step="0.1" value="' +
+            esc(l.qty) + '" oninput="SFS.cookSet(' + i + ',\'qty\',this.value)" aria-label="How much">' +
+            '<span class="muted">' + esc(l.unit) + ' at R</span>') +
+        '<input class="p num" type="number" inputmode="decimal" min="0" step="0.5" value="' +
+          esc(l.price) + '" oninput="SFS.cookSet(' + i + ',\'price\',this.value)" aria-label="Price">' +
+        (fixed ? '' : '<span class="muted">a ' + esc(l.unit) + '</span>') + '</div>';
+    }).join('');
+    var sizes = cook.pot.sizes.map(function (z) {
+      var n = cook.jars[z.productId] || 0;
+      return '<div class="jarrow"><span class="lbl">' + esc(z.variant) + '</span>' +
+        '<button class="ghost big" onclick="SFS.cookJar(\'' + z.productId + '\',-1)" aria-label="One less">−</button>' +
+        '<b class="n">' + n + '</b>' +
+        '<button class="ghost big" onclick="SFS.cookJar(\'' + z.productId + '\',1)" aria-label="One more">+</button></div>';
+    }).join('');
+    box.innerHTML = '<h2>I cooked a pot</h2>' +
+      '<div class="sub">Choose the jam. What usually goes in is filled in for you.</div>' +
+      '<select id="cookName" class="bigsel" onchange="SFS.cookPick(this.value)">' + opts + '</select>' +
+      '<h3 class="step">1. What went in</h3>' +
+      '<div class="sub">Check the prices. Change any that were different this time.</div>' + lines +
+      '<h3 class="step">2. How many jars did you fill?</h3>' + sizes +
+      '<div id="cookanswer"></div>' +
+      '<button class="block bigbtn" id="cookgo" onclick="SFS.cookSave()"></button>';
+    cookAnswer();
+  }
+
+  function cookAnswer() {
+    var box = SF.el('cookanswer');
+    if (!box) return;
+    var t = cookSums();
+    box.innerHTML = '<div class="answer" style="margin-top:12px">' +
+      '<div class="r"><span>The pot cost</span><b>' + money(t.potCost) + '</b></div>' +
+      t.each.filter(function (e) { return e.n; }).map(function (e) {
+        return '<div class="r big"><span>Each ' + esc(e.z.variant) + ' jar costs</span><b>' +
+          money(e.cost) + '</b></div>';
+      }).join('') + '</div>';
+    var go = SF.el('cookgo');
+    go.textContent = t.count ? 'Put ' + t.count + ' jar' + (t.count === 1 ? '' : 's') + ' on the shelf'
+                             : 'Fill in how many jars';
+    go.disabled = !t.count;
+  }
 
   function pantryCard(s) {
     var items = s.pantry || [];
@@ -705,6 +794,46 @@
         '<div class="r"><span>How many it made</span><b>' + (made || '—') + '</b></div>' +
         '<div class="r big"><span>Cost per ' + esc(v.unit) + '</span><b>' +
           (made > 0 && total > 0 ? money(per) : '—') + '</b></div>' + verdict + '</div>';
+    },
+
+    cookPick: function (name) { cookStart(name); drawCook(); },
+    cookSet: function (i, k, v) { cook.lines[i][k] = v; cookAnswer(); },
+    cookJar: function (id, d) {
+      cook.jars[id] = Math.max(0, (cook.jars[id] || 0) + d); drawCook();
+    },
+    cookSave: function () {
+      var t = cookSums();
+      if (!t.count) return;
+      var name = cook.pot.name, jars = Object.assign({}, cook.jars);
+      var lines = cook.lines.map(function (l) {
+        return { label: l.label, item: l.item, qty: Number(l.qty) || 0, unit: l.unit,
+                 price: Number(l.price) || 0 };
+      });
+      SF.write('cookPot', { name: name, lines: lines, jars: jars }, function () {
+        var s = SF.state.data.stock, till = SF.state.data.till;
+        Object.keys(jars).forEach(function (id) {
+          [s, till].forEach(function (d) {
+            var p = d && SF.find(d.products, id);
+            if (p && jars[id]) { p.onHand = (p.onHand || 0) + jars[id];
+                                 if (p.available !== null && p.available !== undefined) p.available += jars[id]; }
+          });
+        });
+        if (s && s.pantry) {
+          var take = {};
+          lines.forEach(function (l) { if (l.item) take[l.item.toLowerCase()] = [l.qty, l.unit]; });
+          cook.pot.sizes.forEach(function (z) {
+            if (jars[z.productId]) take[z.bottleItem.toLowerCase()] = [jars[z.productId], 'each']; });
+          s.pantry.forEach(function (r) {
+            var t2 = take[r.item.toLowerCase()];
+            if (!t2) return;
+            var q = t2[1] === 'kg' && r.unit === 'g' ? t2[0] * 1000
+                  : t2[1] === 'g' && r.unit === 'kg' ? t2[0] / 1000 : t2[0];
+            if (t2[1] === r.unit || q !== t2[0]) r.qty = Math.max(0, Math.round((r.qty - q) * 1000) / 1000);
+          });
+        }
+      });
+      cook = null;
+      SF.toast(t.count + ' jars of ' + name + ' are on the shelf');
     },
 
     editPantry: function (item, qty, unit) {

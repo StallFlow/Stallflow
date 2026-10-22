@@ -343,6 +343,7 @@ test('the Duxies stocktake loads prices and counts, and running it twice changes
   // Stocktake.gs only needs SF, so run it in a small context that shares it.
   ['Costing.gs', 'Stocktake.gs'].forEach((f) => vm.runInContext(
     fs.readFileSync(path.join(__dirname, '..', 'stalls', 'duxies', f), 'utf8'), ctx));
+  SF.pots = () => ctx.sfPots();   // in Apps Script every file shares one global scope
   const first = ctx.sfApplyStocktake();
   assert.strictEqual(first.off, 1, 'the old placeholder jam is switched off');
   const ps = SF.products();
@@ -363,6 +364,27 @@ test('the Duxies stocktake loads prices and counts, and running it twice changes
   assert.deepStrictEqual([again.added, again.moved], [0, 0]);
   assert.strictEqual(find('Strawberry', '352 ml').cost, SF.products().find((p) => p.name === 'Strawberry' && p.variant === '352 ml').cost);
   assert.strictEqual(SF.rows('batches').length, again.costed, 'running it again updates, never duplicates');
+
+  // Cooking a pot: pre-filled recipe, jars on the shelf, cupboard goes down.
+  SF.setPin('owner', '4321');
+  const tok = SF.dispatch('signIn', { pin: '4321', device: 'd' }).data.token;
+  SF.dispatch('savePantry', { token: tok, opId: 'c1', item: 'Strawberries', qty: 5, unit: 'kg' });
+  SF.dispatch('savePantry', { token: tok, opId: 'c2', item: 'Sugar', qty: 2000, unit: 'g' });
+  SF.dispatch('savePantry', { token: tok, opId: 'c3', item: '352 ml bottles', qty: 10, unit: 'each' });
+  const st = SF.dispatch('stock', { token: tok }).data;
+  const pot = st.pots.find((x) => x.name === 'Strawberry');
+  assert.strictEqual(st.pantry.some((r) => r.item === 'Odd bottles'), true, 'the cupboard lists what pots use');
+  const bigId = pot.sizes.find((x) => x.variant === '352 ml').productId;
+  const smallId = pot.sizes.find((x) => x.variant === '125 ml').productId;
+  const before = SF.onHand()[bigId];
+  const res = SF.dispatch('cookPot', { token: tok, opId: 'c4', name: 'Strawberry', lines: pot.lines,
+                                       jars: { [bigId]: 5, [smallId]: 3 } });
+  assert.strictEqual(res.ok, true, res.message);
+  assert.strictEqual(SF.onHand()[bigId], before + 5);
+  const left = Object.fromEntries(SF.pantry().map((r) => [r.item, r.qty]));
+  assert.deepStrictEqual([left.Strawberries, left.Sugar, left['352 ml bottles']], [2, 0, 5]);
+  assert.strictEqual(SF.dispatch('cookPot', { token: tok, opId: 'c5', name: 'Strawberry',
+                                              lines: pot.lines, jars: {} }).ok, false);
 });
 
 test('a sale between markets is kept apart from the live market', () => {

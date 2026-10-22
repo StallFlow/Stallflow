@@ -25,16 +25,34 @@ var COSTING = {
   peanutButter: 80 / 0.8,    // R80 for 800 g at Makro
   egg:        2.5,           // each
 
-  // Fruit, Rand per kg. Marian's prices where she wrote one; the rest are
-  // estimates until she tells us.
+  // Fruit, Rand per kg, by what she buys. Marian's prices where she wrote
+  // one; the rest are estimates until she tells us.
   fruitDefault: 30,          // estimate
-  fruit: {
-    'Strawberry': 25, 'Strawberry Chilli': 25, 'Strawberry Gin': 25,
-    'Gooseberry / Strawberry': 25,
-    'Pineapple / Granadilla': 25, 'Pineapple / Mango': 25,
-    'Granadilla': 0,           // free
-    'Tomato Chilli': 18, 'Tomato Ginger': 18
+  fruitPrice: {
+    'Strawberries': 25, 'Pineapples': 25, 'Granadillas': 0, 'Jam tomatoes': 18
   },
+  // Which fruit goes into each jam, and how much of the 3 kg each makes up.
+  jamFruit: {
+    '3 Fruit Marmalade': [['Oranges', 1 / 3], ['Lemons', 1 / 3], ['Grapefruit', 1 / 3]],
+    'Apricot': [['Apricots', 1]], 'Fig': [['Figs', 1]], 'Fig Chunky': [['Figs', 1]],
+    'Gooseberry': [['Gooseberries', 1]],
+    'Gooseberry / Strawberry': [['Gooseberries', 0.5], ['Strawberries', 0.5]],
+    'Granadilla': [['Granadillas', 1]],
+    'Guavadilla': [['Guavas', 0.5], ['Granadillas', 0.5]],
+    'Lemon / Pink Grapefruit Marmalade': [['Lemons', 0.5], ['Grapefruit', 0.5]],
+    'Makataan': [['Makataan', 1]], 'Mulberry': [['Mulberries', 1]],
+    'Naartjie Marmalade': [['Naartjies', 1]], 'Nectarine': [['Nectarines', 1]],
+    'Orange Marmalade': [['Oranges', 1]], 'Orange Marmalade Whiskey': [['Oranges', 1]],
+    'Peach': [['Peaches', 1]], 'Peachdilla': [['Peaches', 0.5], ['Granadillas', 0.5]],
+    'Pineapple / Granadilla': [['Pineapples', 0.5], ['Granadillas', 0.5]],
+    'Pineapple / Mango': [['Pineapples', 0.5], ['Mangoes', 0.5]],
+    'Red Grapefruit Marmalade': [['Grapefruit', 1]],
+    'Strawberry': [['Strawberries', 1]], 'Strawberry Chilli': [['Strawberries', 1]],
+    'Strawberry Gin': [['Strawberries', 1]],
+    'Tomato Chilli': [['Jam tomatoes', 1]], 'Tomato Ginger': [['Jam tomatoes', 1]]
+  },
+  // What each size is called in the cupboard (Uncooked stock).
+  bottleItem: { L: '352 ml bottles', M: 'Odd bottles', S: '125 ml bottles' },
   // Extras on top of fruit and sugar, per large jar. Estimates.
   extras: {
     'Strawberry Gin': ['Gin', 6],
@@ -120,19 +138,55 @@ function sfCostLines(row) {
 
   var size = C.sizes[row[6]];
   if (!size) return null;
-  var pot = /marmalade/i.test(name) ? C.marmalade : C.jam;
+  var pot = sfPotLines(name);
   var perJar = size.share / pot.jars;
-  var fruitKg = name in C.fruit ? C.fruit[name] : C.fruitDefault;
-  var out = [
-    { label: 'Fruit' + (name in C.fruit ? '' : ' (estimate)'), amount: pot.fruit * fruitKg * perJar },
-    { label: 'Sugar', amount: pot.sugar * C.sugar * perJar },
-    { label: 'Bottle ' + row[1] + (row[6] === 'M' ? ' (estimate)' : ''), amount: size.bottle },
-    { label: 'Gas', amount: C.gasPerPot * perJar },
-    { label: 'Fuel to fetch ingredients', amount: C.fuelPerRun * perJar }
-  ];
-  var extra = C.extras[name];
-  if (extra) out.push({ label: extra[0], amount: extra[1] * size.share });
+  var out = pot.lines.map(function (l) {
+    return { label: l.label, amount: l.qty * l.price * perJar };
+  });
+  out.push({ label: 'Bottle ' + row[1] + (row[6] === 'M' ? ' (estimate)' : ''), amount: size.bottle });
   return sfMergeLines(out);
+}
+
+/**
+ * Everything that goes into one pot of a jam, as the "I cooked a pot" screen
+ * pre-fills it: [{label, item, qty, unit, price}]. `item` is its name in the
+ * cupboard (Uncooked stock), so cooking takes it out of there.
+ */
+function sfPotLines(name) {
+  var C = COSTING, pot = /marmalade/i.test(name) ? C.marmalade : C.jam;
+  var lines = (C.jamFruit[name] || [[name, 1]]).map(function (f) {
+    var known = f[0] in C.fruitPrice;
+    return { label: f[0] + (known ? '' : ' (estimate)'), item: f[0], qty: r2(pot.fruit * f[1]),
+             unit: 'kg', price: known ? C.fruitPrice[f[0]] : C.fruitDefault };
+  });
+  lines.push({ label: 'Sugar', item: 'Sugar', qty: pot.sugar, unit: 'kg', price: r2(C.sugar) });
+  var extra = C.extras[name];
+  if (extra) lines.push({ label: extra[0], item: '', qty: 1, unit: 'pot', price: r2(extra[1] * pot.jars) });
+  lines.push({ label: 'Gas', item: '', qty: 1, unit: 'pot', price: r2(C.gasPerPot) });
+  lines.push({ label: 'Fuel to fetch ingredients', item: '', qty: 1, unit: 'pot', price: r2(C.fuelPerRun) });
+  return { jars: pot.jars, lines: lines };
+}
+
+/** Every jam she cooks, with its sizes on the shelf, for the Stock screen. */
+function sfPots() {
+  var products = SF.rows('products').filter(function (p) {
+    return String(p.Active).toLowerCase() !== 'no';
+  });
+  return STOCKTAKE.jams.map(function (j) {
+    var pot = sfPotLines(j[0]);
+    var sizes = [];
+    ['L', 'M', 'S'].forEach(function (k) {
+      var variant = STOCKTAKE.sizes[k];
+      products.forEach(function (p) {
+        if (String(p.Name) === j[0] && String(p.Variant) === variant) {
+          sizes.push({ productId: String(p.ProductId), variant: variant,
+                       share: COSTING.sizes[k].share, bottle: COSTING.sizes[k].bottle,
+                       bottleItem: COSTING.bottleItem[k] });
+        }
+      });
+    });
+    return { name: j[0], expect: pot.jars, lines: pot.lines, sizes: sizes };
+  }).filter(function (p) { return p.sizes.length; });
 }
 
 function sfMergeLines(lines) {
