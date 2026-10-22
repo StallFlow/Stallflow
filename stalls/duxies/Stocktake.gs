@@ -131,6 +131,7 @@ function sfLoadStocktake() {
   if (ui.alert('Load ' + rows.length + ' products with prices, and set the jam stock to the ' +
       '22 October count? Products not on the list are switched off, not deleted.',
       ui.ButtonSet.YES_NO) !== ui.Button.YES) return;
+  SF.migrate();
   var r = sfApplyStocktake();
   ui.alert('Stocktake loaded.\n\n' + r.added + ' new products · ' + r.updated + ' updated · ' +
     r.off + ' switched off\n' + r.moved + ' stock adjustments · ' + r.jars + ' jars on the shelf\n' +

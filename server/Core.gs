@@ -513,7 +513,15 @@ SF.MIGRATIONS = [
     } },
   { to: 5, what: 'Add the Users tab for Google sign-in', run: function () { SF.sheet('users'); } },
   { to: 6, what: 'Add the Pantry tab for uncooked stock', run: function () { SF.sheet('pantry'); } },
-  { to: 7, what: 'Add the Recipes tab for recipes changed in the app', run: function () { SF.sheet('recipes'); } }
+  { to: 7, what: 'Add the Recipes tab for recipes changed in the app', run: function () {
+      // An older stocktake wrote baking notes to a tab with this name.
+      var old = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Recipes');
+      if (old && old.getLastRow() > 0 && old.getRange(1, 1).getValue() === 'Recipe') {
+        var ss = SpreadsheetApp.getActiveSpreadsheet();
+        if (ss.getSheetByName('Recipe notes')) ss.deleteSheet(old); else old.setName('Recipe notes');
+      }
+      SF.sheet('recipes');
+    } }
 ];
 
 SF.migrate = function () {

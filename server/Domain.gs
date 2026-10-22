@@ -918,6 +918,9 @@ SF.action('releaseUnpaid', 'reports', 'write', function (p, ctx) {
 });
 
 SF.action('boot', 'sell', 'read', function (p, ctx) {
+  // New code with new tabs: upgrade the sheet on first open instead of
+  // waiting for someone to find StallFlow > Set up / upgrade.
+  if ((Number(SF.get('schemaVersion', 0)) || 0) < SF.SCHEMA) SF.migrate();
   // Once a day, the first person to open the app clears finished markets' customers.
   if (String(SF.get('lastPurge', '')) !== SF.today()) SF.purgeCustomers();
   var pr = SF.profile();
