@@ -216,7 +216,12 @@
 
   /* Till behaviour, exposed for the inline handlers above. */
   window.SFT = {
-    sellAt: function (v) { SF.ls.set('sf.sellAt', v); SF.load('till'); },
+    sellAt: function (v) {
+      SF.ls.set('sf.sellAt', v);
+      // Till and Collect share it: refresh whichever is open, and the other quietly.
+      SF.load(SF.state.view === 'collect' ? 'collect' : 'till');
+      SF.load(SF.state.view === 'collect' ? 'till' : 'collect');
+    },
     cat: function (c) { SF.ls.set('sf.tillcat', c); pickName = null; SF.render(); },
     name: function (n) { pickName = n; SF.render(); },
     back: function () { pickName = null; SF.render(); },
@@ -639,7 +644,8 @@
             return row('✓', 'var(--ok)', o, '');
           }).join('') + '</div>' : '<div class="empty">Nothing handed over yet.</div>') + '</div>'
       };
-      return '<div class="wrap">' +
+      // Same "Selling at" as the till: the queue is the orders for the market this phone is at.
+      return '<div class="wrap">' + (q.markets ? marketPicker(q) : '') +
         SF.snap([
           figure('Waiting', String(q.waiting.length), 'paid, to collect'),
           figure('Still to pay', String(q.unpaid.length), 'orders'),

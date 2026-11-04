@@ -43,6 +43,20 @@ the same server and sheet. Leave it alone; give people the new links.
 If the deploying account changes, the OAuth client and the `CLASPRC_JSON`
 key should move to that account too.
 
+## Order pages: one per market, plus between markets
+
+- Each market: `https://stallflow.github.io/Stallflow/<slug>/?m=<MarketId>`.
+  Made automatically when the market is added. Find it on **Numbers** (pick
+  the market): Share, Copy link, Poster.
+- Between markets: `…/<slug>/?m=home`. Open all the time unless switched off
+  on Numbers (pick "Sales between markets"). Customers collect by arrangement.
+- The usual link `…/<slug>/` (old posters) shows the live market, or a
+  "Which market are you coming to?" list when the live market has passed.
+- **More › QR labels › Order posters**: one poster per open market, and one
+  for between markets.
+- **Collect** has the same "Selling at" picker as the till, so each phone sees
+  the orders for the market it is at.
+
 ## Place suggestions in the app (on)
 
 The **Where** box on New market suggests places from Google as you type,
@@ -95,6 +109,7 @@ asks staff not to type customer names.
 
 - **Stock import** for Duxie's (products, prices, batch costs) before their
   next market. Nothing is built yet.
-- Add Duxie's next market and make it live (Numbers). Pre-orders stay closed
-  until then, because the 5 Sep market has passed.
+- Add Duxie's next markets (Numbers › New market). Each one gets its own
+  order page and poster at once; the usual link already offers whichever
+  markets are open, plus ordering between markets.
 - Optional: bump GitHub Actions to Node 24 versions (deprecation warnings).

@@ -39,6 +39,14 @@
   .basket .line{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
   .basket .amt{font-size:22px;font-weight:800;font-family:var(--mono)}
 
+  .mkt{display:block;text-decoration:none;color:var(--ink);background:var(--surface);
+    border:1.5px solid var(--rule);border-radius:12px;padding:14px 16px;margin-top:10px}
+  .mkt b{display:block;font-size:17px}
+  .mkt span{display:block;color:var(--muted);font-size:14px;margin-top:2px}
+  .mkt:hover,.mkt:focus-visible{border-color:var(--brand)}
+  .when .where{font-weight:500;opacity:.9}
+  .change{background:rgba(255,255,255,.22);color:inherit;border:0;border-radius:99px;
+    padding:2px 10px;font:inherit;font-size:12px;font-weight:700;margin-left:6px;min-height:0;cursor:pointer}
   .consent{display:flex;gap:12px;align-items:flex-start;background:var(--surface-2);
     border-radius:12px;padding:13px}
   .consent input{width:24px;height:24px;min-height:0;flex:none;accent-color:var(--brand);
@@ -61,7 +69,12 @@
 
 <script src="config.js"></script>
 <script>
-var CFG = window.STALLFLOW, DATA = null, CART = {};
+var CFG = window.STALLFLOW, DATA = null, CART = {}, CHOOSING = false;
+/* Which market this page is for: ?m=M04 for one market, ?m=home for between
+   markets. Without it, the stall's live market, as printed QR codes expect. */
+var WANT = (function(){
+  try { return new URLSearchParams(location.search).get('m') || ''; } catch (e) { return ''; }
+})();
 
 function el(id){ return document.getElementById(id); }
 function esc(s){
@@ -86,9 +99,27 @@ function toast(msg, bad){
   clearTimeout(t._t);
   t._t = setTimeout(function(){ t.className=''; }, bad ? 4500 : 2600);
 }
-function apiGet(action){
-  return fetch(CFG.api + '?action=' + encodeURIComponent(action)).then(function(r){ return r.json(); });
+function apiGet(action, params){
+  var q = Object.keys(params || {}).filter(function(k){ return params[k]; }).map(function(k){
+    return '&' + encodeURIComponent(k) + '=' + encodeURIComponent(params[k]); }).join('');
+  return fetch(CFG.api + '?action=' + encodeURIComponent(action) + q).then(function(r){ return r.json(); });
 }
+function loadCatalogue(){ return apiGet('catalogue', { market: WANT }); }
+/** 2026-11-06 → Fri 6 Nov */
+function prettyDate(iso){
+  var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso||''));
+  if (!m) return String(iso||'');
+  var d = new Date(+m[1], +m[2]-1, +m[3]);
+  return ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][d.getDay()] + ' ' + d.getDate() + ' ' +
+    ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][d.getMonth()];
+}
+function marketLine(m){
+  if (!m) return '';
+  if (m.home) return 'Order any time · we arrange the collection with you';
+  return esc(m.name) + (m.date ? ' · ' + esc(prettyDate(m.date)) : '') +
+    (m.location ? '<br><span class="where">' + esc(m.location) + '</span>' : '');
+}
+function linkFor(m){ return '?m=' + encodeURIComponent(m.id); }
 function apiPost(body){
   // text/plain keeps this a "simple" request so the browser skips the CORS
   // preflight that Apps Script cannot answer.
@@ -104,7 +135,7 @@ window.addEventListener('load', function(){
       '</div></div></div>';
     return;
   }
-  apiGet('catalogue').then(function(res){
+  loadCatalogue().then(function(res){
     if (!res || res.ok === false) throw new Error('no');
     DATA = res.data;
     var r = document.documentElement.style;
@@ -139,22 +170,50 @@ function totals(){
   return { value: value, count: count };
 }
 
-function draw(){
-  var pr = DATA.profile, t = totals();
-  var head = '<div class="hero"><h1>' + esc(pr.name) + '</h1>' +
+function hero(withMarket){
+  var pr = DATA.profile, m = DATA.market;
+  var others = (DATA.markets || []).filter(function(x){ return !m || x.id !== m.id; });
+  return '<div class="hero"><h1>' + esc(pr.name) + '</h1>' +
     (pr.tagline ? '<div class="tag">' + esc(pr.tagline) + '</div>' : '') +
-    (DATA.market && DATA.market.name
-      ? '<div class="when">' + esc(DATA.market.name) +
-        (DATA.market.date ? ' · ' + esc(DATA.market.date) : '') + '</div>' : '') +
+    (withMarket && m ? '<div class="when">' + marketLine(m) +
+      (others.length ? ' <button class="change" onclick="choose()">Change</button>' : '') + '</div>' : '') +
     '<div class="steps"><span><b>1</b>Reserve</span><span><b>2</b>Collect</span>' +
-      '<span><b>3</b>Pay at the stall</span></div></div>';
+      '<span><b>3</b>' + (m && m.home ? 'Pay when you collect' : 'Pay at the stall') + '</span></div></div>';
+}
 
-  if (!DATA.open){
-    el('app').innerHTML = head + '<div class="wrap"><div class="card"><div class="say">' +
+function choose(){ CHOOSING = true; draw(); window.scrollTo(0,0); }
+
+/** "Which market are you coming to?" — for a closed market, or by choice. */
+function chooser(){
+  var m = DATA.market, list = DATA.markets || [];
+  var why = CHOOSING ? ''
+    : m ? '<div class="say" style="margin-bottom:14px"><b>Pre-orders for ' +
+        (m.home ? 'orders between markets' : esc(m.name)) + ' are closed.</b>' +
+        (m.home || !m.date ? '' : '<br>That market was on ' + esc(prettyDate(m.date)) + '.') + '</div>'
+    : DATA.asked ? '<div class="say" style="margin-bottom:14px"><b>That market link is not ' +
+        'working any more.</b></div>' : '';
+  if (!list.length){
+    return hero(false) + '<div class="wrap"><div class="card"><div class="say">' +
       '<b>Pre-orders are closed.</b><br>Come by on the day — we always keep some back for ' +
       'the people who walk up.</div></div></div>';
-    return;
   }
+  return hero(false) + '<div class="wrap"><div class="card">' + why +
+    '<h2>Which market are you coming to?</h2>' +
+    '<div class="sub">Choose one, then pick what you would like us to put aside.</div>' +
+    list.map(function(x){
+      return '<a class="mkt" href="' + linkFor(x) + '"><b>' +
+        (x.home ? 'Between markets' : esc(x.name)) + '</b><span>' +
+        (x.home ? 'Order any time — we arrange the collection with you'
+                : (x.date ? esc(prettyDate(x.date)) : '') + (x.location ? (x.date ? ' · ' : '') + esc(x.location) : '')) +
+        '</span></a>';
+    }).join('') +
+    '</div><div class="foot">Powered by StallFlow</div></div>';
+}
+
+function draw(){
+  var pr = DATA.profile, t = totals();
+  if (!DATA.open || CHOOSING){ el('app').innerHTML = chooser(); return; }
+  var head = hero(true);
   var anything = DATA.products.some(function(p){ return p.available === null || p.available > 0; });
   if (!anything){
     el('app').innerHTML = head + '<div class="wrap"><div class="card"><div class="say">' +
@@ -253,12 +312,13 @@ function submit(){
 
   apiPost({ action:'placeOrder', opId:'c-' + Date.now().toString(36) + '-' +
               Math.random().toString(36).slice(2,8),
+            market: DATA.market ? DATA.market.id : WANT,
             name:name, phone:phone, note:el('nt').value||'', consent:true, lines:lines })
     .then(function(res){
       if (!res.ok){
         toast(res.message, true);
         btn.disabled = false; btn.textContent = 'Reserve — pay at the stall';
-        return apiGet('catalogue').then(function(r2){ if (r2.ok){ DATA = r2.data; draw(); } });
+        return loadCatalogue().then(function(r2){ if (r2.ok){ DATA = r2.data; draw(); } });
       }
       confirmed(res);
     })
@@ -279,8 +339,12 @@ function confirmed(res){
       '<p class="muted small">Put aside for you.</p>' +
       '<p style="font-size:26px;font-weight:800;margin:14px 0" class="num">' +
         money(res.total) + '</p>' +
-      '<div class="say"><b>Give your name at the stall.</b><br>You pay there — cash or card, ' +
-        'whatever you like. Nothing has been charged.</div>' +
+      (res.market && res.market.home
+        ? '<div class="say"><b>We will be in touch to arrange the collection.</b><br>You pay when ' +
+          'you collect. Nothing has been charged.</div>'
+        : '<div class="say"><b>Give your name at the stall' +
+          (res.market && res.market.date ? ' on ' + esc(prettyDate(res.market.date)) : '') +
+          '.</b><br>You pay there — cash or card, whatever you like. Nothing has been charged.</div>') +
       (pr.whatsapp ? '<p class="muted small">Need to change it? WhatsApp ' +
         esc(pr.whatsapp) + '.</p>' : '') +
     '</div><div class="foot">Powered by StallFlow</div></div>';

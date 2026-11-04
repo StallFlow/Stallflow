@@ -145,10 +145,15 @@ tr.here{background:var(--surface-2)}
   padding:10mm;text-align:center;max-width:150mm;margin:0 auto;color:#000}
 .poster h1{font-size:30pt;color:var(--brand);letter-spacing:-.02em}
 .poster .tag2{color:#555;margin:2mm 0 6mm;font-size:11pt}
+.poster .mkt{font-size:16pt;font-weight:800;margin:0 0 5mm;line-height:1.25}
+.poster .mkt span{font-size:11pt;font-weight:600;color:#555}
 .poster .qr{width:70mm;margin:0 auto}
 .poster .cta{font-size:14pt;font-weight:800;margin-top:6mm}
 .poster .sub2{font-size:10pt;color:#555;margin-top:2mm}
 .poster .url{font-size:7pt;color:#999;margin-top:6mm;word-break:break-all}
+
+.linkbox{font-family:var(--mono);font-size:13px;background:var(--surface-2);border:1px solid var(--rule);
+  border-radius:var(--radius-sm);padding:10px 12px;word-break:break-all;user-select:all;-webkit-user-select:all}
 
 /* ---- place suggestions (places.js) ------------------------------------ */
 .field.place{position:relative}

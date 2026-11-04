@@ -72,11 +72,19 @@ go through `SF.once` so a retried request never runs twice.
 - **Write to the sheet only through `SF.append` / `SF.setCell`.** They pass
   values through `SF.safe`, which stops text starting with `= + - @` being run
   as a formula. Writing with `getRange().setValue()` directly skips that.
+- **Every market has its own order page**: `/<slug>/?m=<MarketId>`, and
+  `?m=home` for orders between markets (`SF.HOME`). The plain `/<slug>/`
+  is the live market, so QR codes printed before this still work; when that
+  market is closed the page lists the markets that are open instead.
+  `SF.takesOrders(m)` decides: pre-orders switched on, and the market not
+  past (between markets: the `homeOrders` setting). Orders, made-to-order
+  capacity, stock moves and the Collect queue all follow the market the order
+  is for, never just the live one.
 - **Public order protections:** at most `SF.MAX_OPEN_PER_PHONE` unpaid orders
-  per phone per market; pre-orders close by themselves once the live market's
-  date has passed (`SF.marketPassed`); customer details of finished markets are
-  wiped by `SF.purgeCustomers` (daily on first `boot`, and when a new market is
-  made live).
+  per phone per market; customer details of finished markets are wiped by
+  `SF.purgeCustomers` (daily on first `boot`, and when a new market is made
+  live). Between-markets orders have no market day, so their details are kept
+  until the order is handed over or cancelled, and wiped then.
 - **Sales between markets** go under the market id `SF.HOME` ('HOME'), a
   virtual market `SF.markets()` adds; it is not a row in Markets.
 - **Uncooked stock** (the `Pantry` tab) is a plain count list, not a ledger:
