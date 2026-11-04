@@ -1044,6 +1044,41 @@ SF.scrubReport = function (text, max) {
     .slice(0, max);
 };
 
+/** True once problem reports go on to GitHub (and from there to Claude). */
+SF.reportsConnected = function () {
+  return !!PropertiesService.getScriptProperties().getProperty('GITHUB_TOKEN');
+};
+
+/**
+ * Check a GitHub token can see the repository before keeping it, so a typo
+ * shows up now and not as reports that silently never arrive.
+ */
+SF.connectGithub = function (token) {
+  token = String(token || '').trim();
+  if (!/^(github_pat_|ghp_)[A-Za-z0-9_]{20,}$/.test(token)) {
+    return { ok: false, message: 'That does not look like a GitHub token. A new one starts with github_pat_' };
+  }
+  var props = PropertiesService.getScriptProperties();
+  var repo = props.getProperty('GITHUB_REPO') || 'StallFlow/Stallflow';
+  var code;
+  try {
+    code = UrlFetchApp.fetch('https://api.github.com/repos/' + repo, {
+      method: 'get', muteHttpExceptions: true,
+      headers: { Authorization: 'Bearer ' + token, Accept: 'application/vnd.github+json',
+                 'X-GitHub-Api-Version': '2022-11-28' }
+    }).getResponseCode();
+  } catch (e) {
+    return { ok: false, message: 'Could not reach GitHub. Try again in a minute.' };
+  }
+  if (code === 401) return { ok: false, message: 'GitHub did not accept that token. It may have expired or been copied short.' };
+  if (code === 403 || code === 404) {
+    return { ok: false, message: 'That token cannot see ' + repo + '. When making it, choose that repository under "Repository access".' };
+  }
+  if (code !== 200) return { ok: false, message: 'GitHub answered ' + code + '. Try again in a minute.' };
+  props.setProperty('GITHUB_TOKEN', token);
+  return { ok: true, message: 'Connected. Problems reported from the app now go to ' + repo + ', where Claude picks them up.' };
+};
+
 SF.openGithubIssue = function (title, body) {
   var props = PropertiesService.getScriptProperties();
   var token = props.getProperty('GITHUB_TOKEN');

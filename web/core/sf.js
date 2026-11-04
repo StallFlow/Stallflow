@@ -298,11 +298,11 @@ window.SF = (function () {
 
   function load(view) {
     var action = SOURCE[view];
-    if (!action) { render(); return Promise.resolve(); }
+    if (!action) { render(true); return Promise.resolve(); }
 
     var cached = Cache.get(view);
     if (cached) { S.data[view] = cached.data; S.at[view] = cached.at; }
-    render();
+    render(true);
 
     var params = view === 'numbers' && S.marketId ? { marketId: S.marketId }
       : view === 'till' && LS.get('sf.sellAt', '') ? { marketId: LS.get('sf.sellAt', '') } : {};
@@ -314,8 +314,8 @@ window.SF = (function () {
       Cache.put(view, res.data);
       if (view === 'numbers') S.marketId = res.data.marketId;
       S.online = true;
-      render();
-    }).catch(function () { S.online = false; render(); });
+      render(true);
+    }).catch(function () { S.online = false; render(true); });
   }
 
   function fetchInto(view) {
@@ -341,7 +341,7 @@ window.SF = (function () {
     return Promise.all(Object.keys(SOURCE)
       .filter(function (v) { return can(screens[v] ? screens[v].cap : 'sell'); })
       .map(function (v) { return fetchInto(v).catch(function () {}); })
-    ).then(function () { S.online = true; render(); })
+    ).then(function () { S.online = true; render(true); })
       .catch(function () { /* the caches we have will do */ });
   }
 
@@ -376,7 +376,7 @@ window.SF = (function () {
     if (!queue.length) return Promise.resolve();
 
     S.syncing = true;
-    render();
+    render(true);
 
     return queue.reduce(function (chain, op) {
       return chain.then(function () {
@@ -411,7 +411,7 @@ window.SF = (function () {
         syncAgain = false;
         if (err && err.message === 'auth') { signOut(true); return; }
         S.online = false;               // out of signal: the rest stays queued, in order
-        render();
+        render(true);
       });
   }
 
@@ -558,9 +558,10 @@ window.SF = (function () {
    */
   function updateArrived() {
     updateReady = true;
-    var busy = (window.SFT && SFT.busy && SFT.busy()) || document.querySelector('.sheet');
+    var busy = (window.SFT && SFT.busy && SFT.busy()) || document.querySelector('.sheet') ||
+               snapshot().fields.length;
     if (!busy) { applyUpdate(); return; }
-    render();
+    render(true);
   }
 
   function applyUpdate() {
@@ -577,7 +578,7 @@ window.SF = (function () {
   window.addEventListener('beforeinstallprompt', function (e) {
     e.preventDefault();
     installEvent = e;
-    if (S.ready) render();
+    if (S.ready) render(true);
   });
 
   window.addEventListener('appinstalled', function () {
@@ -597,7 +598,7 @@ window.SF = (function () {
   function install() {
     if (!installEvent) return;
     installEvent.prompt();
-    installEvent.userChoice.then(function () { installEvent = null; render(); });
+    installEvent.userChoice.then(function () { installEvent = null; render(true); });
   }
 
   function dismissInstall() {
@@ -652,12 +653,65 @@ window.SF = (function () {
     }).join('');
   }
 
-  function render() {
+  /* What the person has typed into the current screen, so a background redraw
+     (coming back from Maps, the signal returning, a refresh finishing) does not
+     wipe a half-filled form or throw them to the top of the page. Only fields
+     they actually changed are kept; untouched ones take the fresh values. */
+  var drawnView = null;
+
+  function snapshot() {
+    var snap = { fields: [], focus: null, y: window.pageYOffset || 0 };
+    var view = el('view');
+    if (!view) return snap;
+    Array.prototype.forEach.call(view.querySelectorAll('input[id],textarea[id]'), function (f) {
+      var t = (f.type || 'text').toLowerCase();
+      if (t === 'checkbox' || t === 'radio') {
+        if (f.checked !== f.defaultChecked) snap.fields.push({ id: f.id, checked: f.checked });
+      } else if (['button', 'submit', 'file', 'hidden', 'password'].indexOf(t) === -1 &&
+                 f.value !== f.defaultValue) {
+        snap.fields.push({ id: f.id, value: f.value });
+      }
+    });
+    var a = document.activeElement;
+    if (a && a.id && view.contains(a) && /^(INPUT|TEXTAREA)$/.test(a.tagName)) {
+      snap.focus = { id: a.id, start: a.selectionStart, end: a.selectionEnd };
+    }
+    return snap;
+  }
+
+  function restore(snap) {
+    snap.fields.forEach(function (f) {
+      var n = el(f.id);
+      if (!n) return;
+      if ('checked' in f) n.checked = f.checked;
+      else {
+        n.value = f.value;
+        // Anything that reacts to typing (like the Open in Maps link) catches up.
+        try { n.dispatchEvent(new Event('input', { bubbles: true })); } catch (e) {}
+      }
+    });
+    if (snap.focus && el(snap.focus.id)) {
+      var n = el(snap.focus.id);
+      try { n.focus({ preventScroll: true }); n.setSelectionRange(snap.focus.start, snap.focus.end); }
+      catch (e) { /* number and date boxes have no caret */ }
+    }
+    window.scrollTo(0, snap.y);
+  }
+
+  /** `keep` is true for redraws nobody asked for; a button the person pressed redraws fresh. */
+  function render(keep) {
     if (!S.ready) return;
     paintRail();
     paintNotices();
     paintTabs();
 
+    var snap = keep === true && drawnView === S.view ? snapshot() : null;
+    drawScreen();
+    drawnView = S.view;
+    if (snap) restore(snap);
+  }
+
+  function drawScreen() {
     var def = screens[S.view] || registry.screens.filter(function (sc) {
       return sc.id === S.view && pluginOn(sc.plugin);
     })[0];
@@ -698,6 +752,9 @@ window.SF = (function () {
     var v = (location.hash || '#till').slice(1);
     if (v === 'more') { openMore(); location.replace('#' + S.view); return; }
     S.view = v;
+    // Not signed in yet: remember where they were heading, but ask the server
+    // for nothing. A request without a token is refused and signs them out.
+    if (!S.ready) return;
     render();
     load(v);
     window.scrollTo(0, 0);
@@ -900,7 +957,7 @@ window.SF = (function () {
       LS.set('sf.boot', res.data);
       if (cached) refreshBoot(); else begin();
     }).catch(function () {
-      if (cached) { S.online = false; render(); return; }
+      if (cached) { S.online = false; render(true); return; }
       paintSignIn('No signal, and this phone has not loaded the shop yet.');
     });
   }
@@ -909,7 +966,7 @@ window.SF = (function () {
     S.vocab = S.boot.profile.vocab || S.vocab;
     S.marketId = S.boot.marketId || S.marketId;
     paintTheme(S.boot.profile);
-    render();
+    render(true);
   }
 
   function begin() {
@@ -943,9 +1000,9 @@ window.SF = (function () {
 
     window.addEventListener('hashchange', route);
     window.addEventListener('online', function () {
-      S.online = true; render(); sync().then(warm);
+      S.online = true; render(true); sync().then(warm);
     });
-    window.addEventListener('offline', function () { S.online = false; render(); });
+    window.addEventListener('offline', function () { S.online = false; render(true); });
     document.addEventListener('visibilitychange', function () {
       if (!document.hidden && S.ready) { sync(); load(S.view); }
     });

@@ -45,27 +45,30 @@ key should move to that account too.
 
 ## Reporting problems to Claude (built, needs two switches)
 
-More › Report a problem saves what staff type to the sheet's Issues tab and,
-when connected, opens a GitHub issue labelled `app-report`. The
-`claude-fix.yml` workflow then asks Claude to look into it and open a pull
-request. Claude never merges; a person does.
+Staff tap **More › Report a problem**. The report is saved in the sheet's
+Issues tab and, once connected, opened as a GitHub issue labelled
+`app-report`. The `claude-fix.yml` workflow comments "Claude is looking into
+this", then Claude opens a pull request with a fix or explains on the issue
+what it found. **Claude never merges**; a person does.
 
-To switch it on, once:
+To switch it on, once per stall:
 
-1. **GitHub token for the sheet.** Create a fine-grained token at
-   github.com › Settings › Developer settings, limited to this repository, with
-   **Issues: read and write** and nothing else. In each stall's Apps Script:
-   Project Settings › Script properties › add `GITHUB_TOKEN`. Until then,
-   reports are only kept in the Issues tab (Status says "saved (not connected
-   to GitHub yet)").
-2. **Anthropic key for the workflow.** Repo › Settings › Secrets › Actions ›
-   `ANTHROPIC_API_KEY`. Until then the workflow reports that it has no key and
-   stops.
-3. Confirm the Claude GitHub app is installed on this repository.
+1. **Sheet → GitHub.** In the stall's spreadsheet: **StallFlow › Connect
+   problem reports to Claude…** and follow the box. It needs a fine-grained
+   GitHub token limited to this repository with **Issues: read and write**
+   only. The token is checked before it is kept. Paste it only into that box,
+   never into a chat.
+2. **GitHub → Claude.** Repo › Settings › Secrets and variables › Actions,
+   add **one** of:
+   - `CLAUDE_CODE_OAUTH_TOKEN`: uses a Claude Pro/Max subscription. Get it by
+     running `claude setup-token` on a computer with Claude Code.
+   - `ANTHROPIC_API_KEY`: uses an API account at console.anthropic.com.
+3. The Claude GitHub app must be installed on this repository (it is).
 
-Reports are public (this repo is public). Phone numbers and e-mail addresses
-are blanked out before anything is stored or sent, and the screen tells staff
-not to type customer names. Make the repo private if that is not enough.
+**More › Health check** shows "Problem reports: To Claude" once step 1 is
+done. Reports are public (this repo is public). Phone numbers and e-mail
+addresses are blanked out before anything is stored or sent, and the screen
+asks staff not to type customer names.
 
 ## Next up
 

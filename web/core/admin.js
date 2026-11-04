@@ -314,10 +314,13 @@
           '<div class="sub">This stall still uses PINs. People appears once Google ' +
           'sign-in is switched on.</div></div></div>';
       }
-      setTimeout(SFA.loadPeople, 0);
+      // Show the last list straight away and refresh it quietly, so the page
+      // does not blank to "Fetching…" and lose its place on every redraw.
+      if (!SFA.people || Date.now() - (SFA.peopleAt || 0) > 20000) setTimeout(SFA.loadPeople, 0);
       return '<div class="wrap"><div id="peoplebox">' +
-        '<div class="card"><div class="loading">Fetching the list…</div></div></div>' +
-        '<div class="foot">StallFlow · people</div></div>';
+        (SFA.people ? peopleHtml(SFA.people)
+                    : '<div class="card"><div class="loading">Fetching the list…</div></div>') +
+        '</div><div class="foot">StallFlow · people</div></div>';
     }
   });
 
@@ -328,7 +331,7 @@
     }).join('') + '</select>';
   }
 
-  function drawPeople(d) {
+  function peopleHtml(d) {
     var me = SF.state.user;
     var rows = d.people.map(function (p, i) {
       var self = p.email === me;
@@ -352,8 +355,7 @@
         '</div>';
     }).join('');
 
-    SF.el('peoplebox').innerHTML =
-      '<div class="card"><h2>Add someone</h2>' +
+    return '<div class="card"><h2>Add someone</h2>' +
         '<div class="sub">They sign in with Google using exactly this address. It does not ' +
           'have to be Gmail: any email they have made a Google account with works.</div>' +
         '<div class="field"><label for="pe">Their Google account email</label>' +
@@ -374,7 +376,14 @@
         }).join('') +
         (rows || '<div class="empty" style="margin-top:10px">Nobody else yet.</div>') +
       '</div>';
+  }
+
+  function drawPeople(d, force) {
     SFA.people = d;
+    SFA.peopleAt = Date.now();
+    var box = SF.el('peoplebox'), typing = SF.el('pe');
+    // A quiet refresh must not wipe an address that is half typed.
+    if (box && (force || !(typing && typing.value))) box.innerHTML = peopleHtml(d);
   }
 
   /* ==================================================================
@@ -477,7 +486,7 @@
       }).catch(function () { SF.toast('No signal. Try again when you have some.', true); });
     },
     people: null,
-    loadPeople: function () {
+    loadPeople: function (force) {
       SF.get('people').then(function (res) {
         if (!SF.el('peoplebox')) return;
         if (!res || res.ok === false) {
@@ -486,7 +495,7 @@
             '</div></div>';
           return;
         }
-        drawPeople(res.data);
+        drawPeople(res.data, force === true);
       }).catch(function () {
         if (SF.el('peoplebox')) SF.el('peoplebox').innerHTML = '<div class="card"><div class="empty">' +
           'Could not fetch the list. This needs signal.</div></div>';
@@ -515,7 +524,7 @@
           SF.toast((res && res.message) || 'That did not save.', true); return;
         }
         SF.toast(done);
-        SFA.loadPeople();
+        SFA.loadPeople(true);
       }).catch(function () { SF.toast('No signal. Try again when you have some.', true); });
     },
     pickMarket: function (id) { SF.state.marketId = id; SF.load('numbers'); },
@@ -552,7 +561,9 @@
         ua: (navigator.userAgent || '').slice(0, 120), online: SF.state.online !== false
       });
       box.value = '';
-      SF.toast('Report sent. Thank you.');
+      SF.toast(SF.state.online === false
+        ? 'Saved on this phone. It goes by itself when there is signal.'
+        : 'Report sent. Thank you.');
       SF.go(SF.state.from && SF.state.from !== 'report' ? SF.state.from : 'till');
     },
     addMarket: function () {
@@ -704,6 +715,8 @@
               figure('Version', esc(h.version), 'schema ' + h.schema.at + ' of ' + h.schema.expected) +
               figure('Market type', esc(h.preset), (h.plugins.filter(function (p) {
                 return p.on; }).length) + ' plugins on') +
+              figure('Problem reports', h.reports ? 'To Claude' : 'Sheet only',
+                     h.reports ? 'via GitHub' : 'StallFlow › Connect problem reports') +
             '</div>' +
             (h.schema.at !== h.schema.expected
               ? '<div class="notice warn" style="border-radius:10px;margin-bottom:12px">' +

@@ -7,9 +7,12 @@ name: Claude looks into app reports
 # Claude never merges. A person reads the pull request and merges it, because
 # this code runs real stalls' money and stock.
 #
-# Needs one repository secret, ANTHROPIC_API_KEY, and the Claude GitHub app
-# installed on this repository. Until the secret is set the workflow says so and
-# stops; nothing else is affected.
+# Needs the Claude GitHub app installed on this repository and ONE of these
+# repository secrets:
+#   CLAUDE_CODE_OAUTH_TOKEN  uses a Claude Pro or Max subscription
+#                            (run `claude setup-token` on a computer to get it)
+#   ANTHROPIC_API_KEY        uses an Anthropic API account (console.anthropic.com)
+# Until one is set the workflow says so and stops; nothing else is affected.
 
 on:
   issues:
@@ -35,13 +38,22 @@ jobs:
         id: creds
         env:
           KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OAUTH: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
         run: |
-          if [ -z "$KEY" ]; then
-            echo "ANTHROPIC_API_KEY is not set, so Claude will not look at this report." >> "$GITHUB_STEP_SUMMARY"
+          if [ -z "$KEY" ] && [ -z "$OAUTH" ]; then
+            echo "Neither CLAUDE_CODE_OAUTH_TOKEN nor ANTHROPIC_API_KEY is set, so Claude will not look at this report." >> "$GITHUB_STEP_SUMMARY"
             echo "ok=false" >> "$GITHUB_OUTPUT"
           else
             echo "ok=true" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Let the reporter know it is being looked at
+        if: steps.creds.outputs.ok == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh issue comment ${{ github.event.issue.number }} --repo ${{ github.repository }} \
+            --body "Claude is looking into this report. If there is a fix, a pull request will appear here for a person to check and merge."
 
       - uses: actions/checkout@v4
         if: steps.creds.outputs.ok == 'true'
@@ -52,6 +64,7 @@ jobs:
         if: steps.creds.outputs.ok == 'true'
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           prompt: |
             Issue #${{ github.event.issue.number }} in this repository was sent from the
             StallFlow staff app by a signed-in stall worker. Read CLAUDE.md first and follow it.

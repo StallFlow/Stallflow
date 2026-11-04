@@ -81,6 +81,10 @@ function load(googleTokens) {
     LockService: { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) },
     UrlFetchApp: {
       fetch: (url, opts) => {
+        if (url.indexOf('api.github.com') !== -1 && opts && opts.method === 'get') {
+          const good = /good/.test(opts.headers.Authorization);
+          return { getResponseCode: () => (good ? 200 : 401), getContentText: () => '{}' };
+        }
         if (url.indexOf('api.github.com') !== -1) {
           ctx.__gh.push({ url, opts });
           return { getResponseCode: () => 201,
@@ -504,6 +508,21 @@ test('an empty report is refused and at most 5 an hour are accepted', () => {
     assert.strictEqual(SF.dispatch('reportIssue', { token: tok, opId: 'n' + i, message: 'Problem number ' + i }).ok, true);
   }
   assert.strictEqual(SF.dispatch('reportIssue', { token: tok, opId: 'n6', message: 'One more problem' }).ok, false);
+});
+
+test('connecting reports checks the token with GitHub before keeping it', () => {
+  const { SF, props } = shop(day(3));
+  assert.strictEqual(SF.reportsConnected(), false);
+  assert.strictEqual(SF.connectGithub('not a token').ok, false);
+  assert.strictEqual(SF.connectGithub('github_pat_' + 'x'.repeat(30)).ok, false, 'GitHub refused it');
+  assert.strictEqual(props.GITHUB_TOKEN, undefined, 'a refused token is not kept');
+  const r = SF.connectGithub('  github_pat_good' + 'x'.repeat(30) + '  ');
+  assert.strictEqual(r.ok, true, r.message);
+  assert.strictEqual(props.GITHUB_TOKEN, 'github_pat_good' + 'x'.repeat(30));
+  assert.strictEqual(SF.reportsConnected(), true);
+  SF.setPin('owner', '4321');
+  const tok = SF.dispatch('signIn', { pin: '4321', device: 'd' }).data.token;
+  assert.strictEqual(SF.dispatch('health', { token: tok }).data.reports, true);
 });
 
 test('reporting needs a sign-in', () => {

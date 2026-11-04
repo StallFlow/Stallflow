@@ -581,6 +581,7 @@ SF.action('health', 'reports', 'read', function () {
     counts: counts,
     locked: SF.googleOn() || Object.keys(SF.json(SF.get('pins', '{}'), {})).length > 0,
     google: SF.googleOn(),
+    reports: SF.reportsConnected(),
     problems: problems,
     checkedAt: Date.now()
   };
