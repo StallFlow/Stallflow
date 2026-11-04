@@ -269,6 +269,16 @@ SF.preordersOn = function () {
   return String(SF.get('preordersOpen', 'yes')).toLowerCase() !== 'no';
 };
 
+/**
+ * A separate hand-over step (the Collect screen). Off by default: at most
+ * stalls the customer pays and takes the order in the same moment, so Paid
+ * also means handed over. Switch on where people pay at one table and fetch
+ * their order from another.
+ */
+SF.collectOn = function () {
+  return String(SF.get('collectStep', 'no')).toLowerCase() === 'yes';
+};
+
 /** Orders between markets switched on (default yes). */
 SF.homeOrdersOn = function () {
   return String(SF.get('homeOrders', 'yes')).toLowerCase() !== 'no';
@@ -504,6 +514,11 @@ SF.action('till', 'sell', 'read', function (p) {
     }),
     unpaid: orders.filter(function (o) { return o.status === 'reserved'; })
                   .sort(function (a, b) { return a.when - b.when; }),
+    // Paid but not handed over: only happens with the Collect step on, or from
+    // before it was switched off. The till offers to finish these.
+    waiting: orders.filter(function (o) { return o.status === 'paid' && o.channel === 'preorder'; })
+                   .sort(function (a, b) { return a.when - b.when; }),
+    collect: SF.collectOn(),
     totals: t,
     marketId: market,
     markets: SF.sellableMarkets()
@@ -534,10 +549,17 @@ SF.action('markPaid', 'sell', 'write', function (p, ctx) {
   var o = SF.findOrder(p.orderNo);
   if (!o) return { ok: false, message: 'Order not found.' };
   if (o.status === 'cancelled') return { ok: false, message: 'That order was cancelled.' };
-  SF.setCell('orders', o.row, 'Status', o.status === 'collected' ? 'collected' : 'paid');
-  SF.setCell('orders', o.row, 'PaidAt', new Date());
+  var now = new Date(), handOver = !SF.collectOn() && o.status !== 'collected';
+  SF.setCell('orders', o.row, 'Status', o.status === 'collected' || handOver ? 'collected' : 'paid');
+  SF.setCell('orders', o.row, 'PaidAt', now);
   SF.emit('order.paid', { orderNo: o.no, total: o.total }, ctx);
-  return { ok: true };
+  if (handOver) {
+    // No separate hand-over at this stall: paying at the table is collecting.
+    SF.setCell('orders', o.row, 'CollectedAt', now);
+    SF.emit('order.completed', { orderNo: o.no, total: o.total, lines: o.lines,
+                                 channel: 'preorder' }, ctx);
+  }
+  return { ok: true, handedOver: handOver || o.status === 'collected' };
 });
 
 SF.action('markCollected', 'sell', 'write', function (p, ctx) {
@@ -983,6 +1005,11 @@ SF.action('setPreordersOpen', 'reports', 'write', function (p) {
   return { ok: true, open: !!p.open };
 });
 
+SF.action('setCollectStep', 'reports', 'write', function (p) {
+  SF.set('collectStep', p.on ? 'yes' : 'no');
+  return { ok: true, on: !!p.on };
+});
+
 SF.action('setHomeOrders', 'reports', 'write', function (p) {
   SF.set('homeOrders', p.open ? 'yes' : 'no');
   return { ok: true, open: !!p.open };
@@ -1048,7 +1075,8 @@ SF.action('boot', 'sell', 'read', function (p, ctx) {
     plugins: SF.registry.plugins.filter(function (x) { return SF.enabled(x.id); })
       .map(function (x) { return { id: x.id, name: x.name, version: x.version,
                                    settings: x.settings }; }),
-    settings: SF.json(SF.get('pluginSettings', '{}'), {})
+    settings: SF.json(SF.get('pluginSettings', '{}'), {}),
+    collect: SF.collectOn()
   };
 });
 

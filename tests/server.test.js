@@ -553,6 +553,31 @@ test('stock taken by an order is recorded against the market it is for', () => {
   assert.strictEqual(mv[5], 'M02');
 });
 
+/* ---------- paying is handing over, unless the stall has a Collect step ---------- */
+
+test('without a Collect step, Paid at the till also hands the order over', () => {
+  const { SF, sheets, tok } = markets3();
+  assert.strictEqual(SF.dispatch('boot', { token: tok }).data.collect, false, 'off by default');
+  const r = order(SF, { market: 'M01' });
+  const res = SF.dispatch('markPaid', { token: tok, opId: 'pay1', orderNo: r.orderNo });
+  assert.strictEqual(res.handedOver, true);
+  const row = sheets.Orders.rows.find((x) => x[0] === r.orderNo);
+  assert.strictEqual(row[10], 'collected');
+  assert.ok(row[11] && row[11].getTime && row[12] && row[12].getTime, 'paid and collected times are set');
+  assert.strictEqual(SF.dispatch('till', { token: tok, marketId: 'M01' }).data.unpaid.length, 0);
+});
+
+test('with the Collect step switched on, Paid waits for the hand-over', () => {
+  const { SF, sheets, tok } = markets3();
+  SF.dispatch('setCollectStep', { token: tok, opId: 'cs', on: true });
+  assert.strictEqual(SF.dispatch('boot', { token: tok }).data.collect, true);
+  const r = order(SF, { market: 'M01' });
+  SF.dispatch('markPaid', { token: tok, opId: 'pay2', orderNo: r.orderNo });
+  assert.strictEqual(sheets.Orders.rows.find((x) => x[0] === r.orderNo)[10], 'paid');
+  const till = SF.dispatch('till', { token: tok, marketId: 'M01' }).data;
+  assert.ok(till.waiting.some((o) => o.no === r.orderNo), 'the till can see it is waiting');
+});
+
 /* ---------- reporting a problem ---------- */
 
 function reporter(role) {

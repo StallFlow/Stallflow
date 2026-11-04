@@ -163,6 +163,28 @@ tr.here{background:var(--surface-2)}
 .linkbox{font-family:var(--mono);font-size:13px;background:var(--surface-2);border:1px solid var(--rule);
   border-radius:var(--radius-sm);padding:10px 12px;word-break:break-all;user-select:all;-webkit-user-select:all}
 
+/* ---- a pre-order at the till: who, what, how much ------------------- */
+.porder{border-bottom:1px solid var(--rule);padding:12px 0}
+.porder:last-child{border-bottom:none}
+.porder .hd{display:flex;align-items:center;gap:12px}
+.porder .who{flex:1;min-width:0}
+.porder .who b{display:block;font-size:16px}
+.porder .who span{font-size:12.5px;color:var(--muted)}
+.porder .amt{font-weight:800;font-family:var(--mono);white-space:nowrap}
+.porder .items{list-style:none;margin:8px 0 0;padding:8px 12px;background:var(--surface-2);border-radius:var(--radius-sm)}
+.porder .items li{display:flex;gap:6px;padding:3px 0;font-size:15px}
+.porder .items li .num{margin-left:auto;color:var(--muted);font-family:var(--mono);font-size:13px}
+.porder .note{margin-top:6px;font-size:14px;color:var(--muted);font-style:italic}
+h2 .for{font-weight:600;color:var(--muted);font-size:.8em}
+
+/* ---- labels as files (labelimg.js) ------------------------------------ */
+.labelfiles{margin-top:14px;border:1px solid var(--rule)}
+.labelfiles h3{margin:0 0 4px;font-size:17px}
+.lprev{display:flex;flex-direction:column;align-items:center;gap:6px;margin-top:6px}
+.lprev img{width:100%;max-width:340px;background:#fff;border:1px dashed var(--rule);border-radius:6px}
+.pick .dl{flex:none;min-height:36px;padding:0 10px;font-size:12px}
+@media print{.labelfiles,.pick .dl{display:none!important}}
+
 /* ---- filter bars (filters.js) ------------------------------------------ */
 .fbar{display:grid;gap:8px;margin:12px 0 10px}
 .fbar .fq{width:100%;padding-left:38px;background-repeat:no-repeat;background-position:12px 50%;
@@ -172,6 +194,11 @@ tr.here{background:var(--surface-2)}
   font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
 .fsel select{width:100%;text-transform:none;letter-spacing:0;font-weight:600}
 .fcount{font-size:13px;color:var(--muted);min-height:0}
+.sorthead{background:none;border:0;padding:0;min-height:0;font:inherit;color:inherit;letter-spacing:inherit;
+  text-transform:inherit;cursor:pointer;box-shadow:none;white-space:nowrap}
+.sorthead:hover,th[aria-sort="ascending"] .sorthead,th[aria-sort="descending"] .sorthead{color:var(--ink)}
+.sorthead .arrow{font-size:.85em}
+th.r .sorthead{margin-left:auto}
 .fcount:empty{display:none}
 @media print{.fbar{display:none!important}}
 

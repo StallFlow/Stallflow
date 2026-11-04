@@ -39,6 +39,14 @@
   .basket .line{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
   .basket .amt{font-size:22px;font-weight:800;font-family:var(--mono)}
 
+  .finder{margin:12px 0 4px}
+  .finder input{width:100%}
+  .chips{display:flex;gap:8px;overflow-x:auto;padding:10px 0 2px;-webkit-overflow-scrolling:touch}
+  .chip{flex:none;min-height:38px;padding:0 14px;border-radius:99px;border:1.5px solid var(--rule);
+    background:var(--surface);color:var(--ink);font:inherit;font-size:14px;font-weight:700;cursor:pointer}
+  .chip.on{background:var(--brand);border-color:var(--brand);color:#fff}
+  .linky{background:none;border:0;padding:0;min-height:0;color:inherit;font:inherit;font-weight:700;
+    text-decoration:underline;cursor:pointer}
   .mkt{display:block;text-decoration:none;color:var(--ink);background:var(--surface);
     border:1.5px solid var(--rule);border-radius:12px;padding:14px 16px;margin-top:10px}
   .mkt b{display:block;font-size:17px}
@@ -70,6 +78,7 @@
 <script src="config.js"></script>
 <script>
 var CFG = window.STALLFLOW, DATA = null, CART = {}, CHOOSING = false;
+var FIND = '', CAT = 'all';   // the product search and category chip on this page
 /* Which market this page is for: ?m=M04 for one market, ?m=home for between
    markets. Without it, the stall's live market, as printed QR codes expect. */
 var WANT = (function(){
@@ -224,15 +233,29 @@ function draw(){
 
   var groups = {};
   DATA.products.forEach(function(p){ (groups[p.category||''] = groups[p.category||'']||[]).push(p); });
-  var list = Object.keys(groups).sort().map(function(cat){
-    return (cat ? '<div class="cat">' + esc(cat) + '</div>' : '') +
-      groups[cat].map(itemRow).join('');
-  }).join('');
+  var cats = Object.keys(groups).sort();
+  var list = cats.map(function(cat){
+    return '<div class="catgroup" data-cat="' + esc(cat) + '">' +
+      (cat ? '<div class="cat">' + esc(cat) + '</div>' : '') +
+      groups[cat].map(itemRow).join('') + '</div>';
+  }).join('') + '<div class="say" id="nofind" style="display:none;margin-top:12px">Nothing by that name. ' +
+    '<button class="linky" onclick="findReset()">Show everything</button></div>';
+  // Search and category chips, once there is enough to look through.
+  var named = cats.filter(function(c){ return c; });
+  if (CAT !== 'all' && named.indexOf(CAT) === -1) CAT = 'all';
+  var finder = DATA.products.length >= 8
+    ? '<div class="finder"><input type="search" id="find" autocomplete="off" enterkeyhint="search" ' +
+        'placeholder="Search" aria-label="Search" value="' + esc(FIND) + '" oninput="FIND=this.value;applyFind()">' +
+      (named.length > 1 ? '<div class="chips">' + ['all'].concat(named).map(function(c){
+        return '<button type="button" class="chip' + (c === CAT ? ' on' : '') + '" data-c="' + esc(c) + '" ' +
+          'onclick="pickCat(this.getAttribute(\'data-c\'))">' + (c === 'all' ? 'All' : esc(c)) + '</button>';
+      }).join('') + '</div>' : '') + '</div>'
+    : '';
 
   el('app').innerHTML = head +
     '<div class="wrap"><div class="card"><h2>Choose what you want</h2>' +
       '<div class="sub">Nothing is paid now. You pay at the table when you fetch it.</div>' +
-      list + '</div>' +
+      finder + list + '</div>' +
       '<div class="card"' + (t.count ? '' : ' style="display:none"') + '>' +
         '<h2>Who is it for?</h2>' +
         '<div class="sub">So we can call your name when it is ready.</div>' +
@@ -252,7 +275,34 @@ function draw(){
         '<span class="amt">' + money(t.value) + '</span></div>' +
         '<button class="block" id="go" onclick="submit()">Reserve — pay at the stall</button></div>'
       : '');
+  applyFind();
 }
+
+/** Show only what matches the search and the chosen category; hide empty headings. */
+function applyFind(){
+  var words = String(FIND||'').toLowerCase().split(/\s+/).filter(Boolean), any = false;
+  Array.prototype.forEach.call(document.querySelectorAll('.catgroup'), function(g){
+    var inCat = CAT === 'all' || g.getAttribute('data-cat') === CAT, shown = 0;
+    Array.prototype.forEach.call(g.querySelectorAll('.item'), function(it){
+      var text = it.getAttribute('data-text') || '';
+      var ok = inCat && words.every(function(w){ return text.indexOf(w) !== -1; });
+      it.style.display = ok ? '' : 'none';
+      if (ok) shown++;
+    });
+    g.style.display = shown ? '' : 'none';
+    if (shown) any = true;
+  });
+  var none = el('nofind');
+  if (none) none.style.display = any ? 'none' : '';
+}
+function pickCat(c){
+  CAT = c;
+  Array.prototype.forEach.call(document.querySelectorAll('.chip'), function(b){
+    b.className = 'chip' + (b.getAttribute('data-c') === c ? ' on' : '');
+  });
+  applyFind();
+}
+function findReset(){ FIND = ''; var f = el('find'); if (f) f.value = ''; pickCat('all'); }
 
 function itemRow(p){
   var have = CART[p.id] || 0;
@@ -266,7 +316,8 @@ function itemRow(p){
   var price = money(p.price) + (p.weighed ? ' per ' + esc(p.unit) : '');
   var shown = p.weighed ? qty(have, p.unit) : String(have);
 
-  return '<div class="item' + (out ? ' out' : '') + '">' +
+  return '<div class="item' + (out ? ' out' : '') + '" data-text="' +
+    esc([p.name, p.variant, p.category].join(' ').toLowerCase()) + '">' +
     '<div class="info"><div class="nm">' + esc(p.name) +
       (p.variant ? ' <span class="muted small">' + esc(p.variant) + '</span>' : '') + '</div>' +
       '<div class="meta">' + price + ' &nbsp; ' + left +

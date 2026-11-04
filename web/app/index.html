@@ -28,6 +28,7 @@
 <script src="../core/filters.js"></script>
 <script src="../core/screens.js"></script>
 <script src="../core/admin.js"></script>
+<script src="../core/labelimg.js"></script>
 <script src="../core/places.js"></script>
 <script src="../core/scan.js"></script>
 
@@ -41,7 +42,14 @@
   SF.init();
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', function () {
-      navigator.serviceWorker.register('sw.js').catch(function (err) {
+      navigator.serviceWorker.register('sw.js').then(function (reg) {
+        // A phone keeps the app open for days. Without these checks it only
+        // looks for a new version when the page is fully reloaded.
+        var check = function () { reg.update().catch(function () {}); };
+        document.addEventListener('visibilitychange', function () { if (!document.hidden) check(); });
+        window.addEventListener('online', check);
+        setInterval(check, 30 * 60 * 1000);
+      }).catch(function (err) {
         console.warn('Service worker did not register:', err);
       });
     });

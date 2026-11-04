@@ -15,7 +15,9 @@ web/                 the front end, one copy for every stall
   core/ plugins/     shared scripts and styles (core/places.js: Google place
                      suggestions for Where boxes; off without a mapsKey.
                      core/filters.js: search/filter/sort bars for long lists,
-                     SF.filters.bar + SF.filters.row; filters rows in place)
+                     SF.filters.bar + .row + .th (sortable headings); filters
+                     rows in place. core/labelimg.js: labels as 300 dpi PNGs
+                     and a .zip, for separate label printers)
   landing.html       stallflow.github.io/Stallflow/
 server/              Apps Script, identical in every stall's sheet
   Core.gs            sheets, settings, identity, audit, plugin host, router, migrations
@@ -87,6 +89,10 @@ go through `SF.once` so a retried request never runs twice.
   `SF.purgeCustomers` (daily on first `boot`, and when a new market is made
   live). Between-markets orders have no market day, so their details are kept
   until the order is handed over or cancelled, and wiped then.
+- **Collect is off unless a stall switches it on** (`collectStep`, Settings).
+  Off, `markPaid` also hands the order over (status `collected`) and the
+  Collect tab is hidden; the till's Still to pay shows the items and takes the
+  money through the same notes-and-change sheet as a walk-up sale.
 - **Sales between markets** go under the market id `SF.HOME` ('HOME'), a
   virtual market `SF.markets()` adds; it is not a row in Markets.
 - **Uncooked stock** (the `Pantry` tab) is a plain count list, not a ledger:

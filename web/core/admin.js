@@ -155,12 +155,21 @@
   }
 
   function expenses(d) {
-    var rows = d.expenses.length ? d.expenses.map(function (x) {
-      return '<div class="rowitem"><div class="who"><b>' + esc(x.description) + '</b>' +
+    var types = [];
+    d.expenses.forEach(function (x) { if (x.category && types.indexOf(x.category) === -1) types.push(x.category); });
+    var rows = d.expenses.length ? SF.filters.bar('costs', { search: 'Search costs', count: d.expenses.length,
+        noun: 'costs', facets: [{ key: 'type', label: 'Type', options: [['all', 'All']].concat(
+          types.sort().map(function (t) { return [t, t]; })) }],
+        sorts: [['', 'As added'], ['-amount', 'Biggest first'], ['name', 'A–Z']] }) +
+      d.expenses.map(function (x) {
+      return '<div class="rowitem"' + SF.filters.row('costs', { text: x.description + ' ' + x.category,
+          type: x.category }, { amount: x.amount, name: String(x.description).toLowerCase() }) +
+        '><div class="who"><b>' + esc(x.description) + '</b>' +
         '<span>' + esc(x.category) + '</span></div>' +
         '<span class="amt">' + money(x.amount) + '</span>' +
         '<button class="quiet" onclick="SFA.dropExpense(\'' + x.id + '\')">remove</button></div>';
-    }).join('') : '<div class="empty">Nothing yet. Stall fee, petrol, a gazebo — whatever it ' +
+    }).join('') + '<div class="empty" data-fempty="costs" style="display:none">No cost matches.</div>'
+      : '<div class="empty">Nothing yet. Stall fee, petrol, a gazebo — whatever it ' +
       'costs to be there.</div>';
 
     return '<div class="card"><h2>What it costs to be there</h2>' +
@@ -200,7 +209,7 @@
       return '<tr' + (h.id === d.marketId ? ' class="here"' : '') +
         SF.filters.row('markets', { text: [h.name, h.location, h.date].join(' '), when: when },
                        { name: String(h.name).toLowerCase(), date: h.date || '0000', profit: h.profit,
-                         taken: h.revenue }) + '>' +
+                         taken: h.revenue, units: h.units, costs: h.expenses }) + '>' +
         '<td><b>' + esc(h.name) + '</b>' +
         (h.location ? '<div class="muted small">' + esc(h.location) + '</div>' : '') + '</td>' +
         '<td>' + esc(h.date || '—') + '</td><td class="r">' + qty(h.units, 'each') + '</td>' +
@@ -215,10 +224,12 @@
         facets: [{ key: 'when', label: 'Show', options: [['all', 'All'], ['upcoming', 'Coming up'],
           ['past', 'Been and gone'], ['home', 'Between markets']] }],
         sorts: [['', 'Newest first'], ['date', 'Oldest first'], ['-profit', 'Most profit'],
-                ['-taken', 'Most taken'], ['name', 'A–Z']] }) +
-      '<div class="scroll"><table><tr><th>Market</th><th>Date</th><th class="r">' +
-      esc(v.units.charAt(0).toUpperCase() + v.units.slice(1)) + '</th><th class="r">Taken</th>' +
-      '<th class="r">Costs</th><th class="r">Profit</th></tr>' + rows +
+                ['-taken', 'Most taken'], ['-units', 'Most sold'], ['-costs', 'Most spent'], ['name', 'A–Z']] }) +
+      '<div class="scroll"><table><tr>' + SF.filters.th('markets', 'name', 'Market') +
+      SF.filters.th('markets', 'date', 'Date') +
+      SF.filters.th('markets', 'units', v.units.charAt(0).toUpperCase() + v.units.slice(1), 'r') +
+      SF.filters.th('markets', 'taken', 'Taken', 'r') + SF.filters.th('markets', 'costs', 'Costs', 'r') +
+      SF.filters.th('markets', 'profit', 'Profit', 'r') + '</tr>' + rows +
       '<tr data-fempty="markets" style="display:none"><td colspan="6" class="empty">No market matches.</td></tr>' +
       '</table></div>' +
       '<div class="muted small" style="margin-top:10px">' + qty(d.stock.units, 'each') +
@@ -247,6 +258,35 @@
      ================================================================== */
 
   var labelMode = 'labels';
+
+  /* ------------------------------------------------------------------
+     Labels as files, for a separate label printer: one PNG per product at
+     the printer's label size and 300 dpi. Copies are set in the printer's app.
+     ------------------------------------------------------------------ */
+  function labelSize() { return SF.ls.get('sf.labelSize', '50x30'); }
+
+  function labelFiles() {
+    if (!window.SFL) return '';
+    var key = labelSize();
+    return '<div class="card flat labelfiles"><h3>For a label printer</h3>' +
+      '<div class="sub">Download each label as a picture at your label size, then print it from ' +
+        'the printer\'s own app (Brother, Dymo, Niimbot…). Set how many copies there.</div>' +
+      '<div class="field"><label for="lsize">Label size</label><select id="lsize" ' +
+        'onchange="SF.ls.set(\'sf.labelSize\', this.value);SFA.labelPreview()">' +
+        SFL.sizes.map(function (z) {
+          return '<option value="' + z[0] + '"' + (z[0] === key ? ' selected' : '') + '>' + esc(z[1]) + '</option>';
+        }).join('') + '</select></div>' +
+      '<div class="lprev"><img id="lprev" alt="How a downloaded label looks"><span id="lprevcap" class="muted small"></span></div>' +
+      '<div class="row" style="margin-top:10px">' +
+        '<button class="ghost" onclick="SFA.downloadTicked()">Download ticked (.zip)</button>' +
+        (SFL.canShare() ? '<button class="ghost" onclick="SFA.shareTicked()">Send to printer app</button>' : '') +
+      '</div><div class="muted small" style="margin-top:6px">Or tap <b>PNG</b> next to a product for just that one.</div></div>';
+  }
+
+  function tickedProducts() {
+    var d = SF.state.data.labels;
+    return d ? d.products.filter(function (p) { var c = SF.el('c-' + p.id); return c && c.checked; }) : [];
+  }
 
   function labelCats(d) {
     var seen = {}, out = [];
@@ -316,6 +356,8 @@
               (p.active ? ' checked' : '') + ' onchange="SFA.drawLabels()">' +
               '<div class="info"><b>' + esc(p.name) + '</b><span>' + esc(p.id) +
               (p.variant ? ' · ' + esc(p.variant) : '') + ' · ' + money(p.price) + '</span></div>' +
+              '<button class="ghost sm dl" onclick="SFA.downloadLabel(\'' + p.id + '\')" ' +
+                'aria-label="Download the label for ' + esc(p.name + (p.variant ? ' ' + p.variant : '')) + '">PNG</button>' +
               '<input type="number" min="1" max="60" id="n-' + p.id + '" value="' +
               Math.max(1, Math.min(24, Math.round(p.onHand) || 1)) +
               '" onchange="SFA.drawLabels()"></div>';
@@ -324,10 +366,10 @@
             '<button class="ghost sm" onclick="SFA.tickAll(true)">Tick all</button>' +
             '<button class="ghost sm" onclick="SFA.tickAll(false)">Tick none</button>' +
             '<button class="ghost sm" onclick="SFA.each(1)">1 each</button>' +
-          '</div></div><div class="hr"></div>' +
-          '<button class="block" onclick="window.print()">Print / save as PDF</button>' +
-          '<p class="muted small" style="margin-top:9px;text-align:center">Choose ' +
-            '<b>Save as PDF</b> as the printer. On a phone it is under the share button.</p>' +
+          '</div>' + labelFiles() + '</div><div class="hr"></div>' +
+          '<button class="block" onclick="window.print()">Print a sheet / save as PDF</button>' +
+          '<p class="muted small" style="margin-top:9px;text-align:center">For an A4 sheet of ' +
+            'labels. Choose <b>Save as PDF</b> as the printer to keep it.</p>' +
         '</div></div><div id="out"></div>' +
         '<div class="foot">StallFlow · labels</div></div>';
     }
@@ -374,6 +416,15 @@
           '<div class="field"><label for="sc">Colour</label>' +
             '<input id="sc" type="color" value="' + esc(p.colour) + '" style="height:52px"></div>' +
           '<button class="block" onclick="SFA.saveProfile()">Save</button></div>' +
+
+        '<div class="card"><h2>Handing orders over</h2>' +
+          '<div class="toggle" style="margin:0"><div><div class="t">Separate Collect queue ' +
+            (b.collect ? 'on' : 'off') + '</div><div class="s">' +
+            (b.collect ? 'People pay at the till, then fetch their order from the Collect screen.'
+                       : 'Tapping Paid at the till also hands the order over. No Collect screen.') +
+            '</div></div><button class="' + (b.collect ? 'bad' : 'ok') + ' sm" ' +
+            'onclick="SFA.setCollect(' + (b.collect ? 'false' : 'true') + ')">' +
+            (b.collect ? 'Switch off' : 'Switch on') + '</button></div></div>' +
 
         (b.auth && b.auth.google
           ? '<div class="card"><h2>Who can do what</h2>' +
@@ -448,7 +499,10 @@
     var me = SF.state.user;
     var rows = d.people.map(function (p, i) {
       var self = p.email === me;
-      return '<div class="card flat" style="border:1px solid var(--rule);margin-bottom:10px">' +
+      return '<div class="card flat" style="border:1px solid var(--rule);margin-bottom:10px"' +
+        SF.filters.row('people', { text: [p.email, p.name, p.role].join(' '), role: p.role,
+                                   show: p.active ? 'on' : 'off' },
+                       { name: String(p.email).toLowerCase(), seen: p.lastSeen || '' }) + '>' +
         '<div style="display:flex;gap:10px;align-items:baseline;flex-wrap:wrap">' +
           '<b style="flex:1;min-width:0;word-break:break-all">' + esc(p.email) + '</b>' +
           '<span class="tag' + (p.active ? ' ok' : '') + '">' + (p.active ? 'can sign in' : 'off') +
@@ -487,7 +541,13 @@
             '<span>StallFlow admin · owner on every stall</span></div>' +
             '<span class="tag ok">always</span></div>';
         }).join('') +
+        SF.filters.bar('people', { search: 'Search people', count: d.people.length, noun: 'people',
+          facets: [{ key: 'role', label: 'Role', options: [['all', 'All'], ['owner', 'Owner'],
+                     ['manager', 'Manager'], ['cashier', 'Cashier'], ['viewer', 'Viewer']] },
+                   { key: 'show', label: 'Show', options: [['all', 'All'], ['on', 'Can sign in'], ['off', 'Switched off']] }],
+          sorts: [['', 'As added'], ['name', 'A–Z']] }) +
         (rows || '<div class="empty" style="margin-top:10px">Nobody else yet.</div>') +
+        '<div class="empty" data-fempty="people" style="display:none">Nobody matches.</div>' +
       '</div>';
   }
 
@@ -524,7 +584,7 @@
     setActive: 'Hiding or showing a product', addMarket: 'A new market', reportIssue: 'A problem report',
     savePerson: 'A change to who has access',
     setActiveMarket: 'Changing the live market', setPreordersOpen: 'Opening or closing pre-orders',
-    setHomeOrders: 'Orders between markets',
+    setHomeOrders: 'Orders between markets', setCollectStep: 'The Collect screen',
     'cashup.record': 'A cash-up'
   };
 
@@ -646,6 +706,11 @@
       SF.write('setActiveMarket', { marketId: SF.state.marketId });
       SF.toast('This is the live market now.');
     },
+    setCollect: function (on) {
+      SF.write('setCollectStep', { on: on }, function () { SF.state.boot.collect = on; });
+      SF.ls.set('sf.boot', SF.state.boot);
+      SF.toast(on ? 'Collect screen is on' : 'Collect screen is off: Paid hands the order over');
+    },
     togglePre: function (open) {
       SF.write('setPreordersOpen', { open: open }, function () {
         var d = SF.state.data.numbers;
@@ -733,6 +798,52 @@
       SF.toast('Market added. Its order page and poster are ready.');
     },
 
+    labelPreview: function () {
+      var img = SF.el('lprev'), d = SF.state.data.labels;
+      if (!img || !d || !window.SFL) return;
+      var p = tickedProducts()[0] || d.products[0];
+      if (!p) return;
+      var key = labelSize(), z = SFL.size(key);
+      img.src = SFL.canvas(p, key, d.profile.name).toDataURL('image/png');
+      img.style.aspectRatio = z[2] + ' / ' + z[3];
+      SF.el('lprevcap').textContent = 'How each label downloads · ' + z[2] + ' × ' + z[3] + ' mm · 300 dpi';
+    },
+    downloadLabel: function (id) {
+      var d = SF.state.data.labels, p = d && SF.find(d.products, id), key = labelSize();
+      if (!p) return;
+      SFL.png(p, key, d.profile.name).then(function (b) {
+        SFL.save(b, SFL.fileName(p, key));
+        SF.toast('Saved ' + p.name + ' label');
+      }, function () { SF.toast('Could not make that label.', true); });
+    },
+    downloadTicked: function () {
+      var d = SF.state.data.labels, list = tickedProducts(), key = labelSize();
+      if (!list.length) { SF.toast('Tick at least one product.', true); return; }
+      SF.toast('Making ' + list.length + ' label' + (list.length === 1 ? '' : 's') + '…');
+      Promise.all(list.map(function (p) {
+        return SFL.pngBytes(p, key, d.profile.name).then(function (bytes) {
+          return { name: SFL.fileName(p, key), bytes: bytes };
+        });
+      })).then(function (files) {
+        var shop = String(d.profile.name || 'labels').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+        SFL.save(SFL.zip(files), shop + '-labels-' + key + '.zip');
+        SF.toast('Saved ' + files.length + ' label' + (files.length === 1 ? '' : 's') + ' in one .zip');
+      }, function () { SF.toast('Could not make the labels.', true); });
+    },
+    shareTicked: function () {
+      var d = SF.state.data.labels, list = tickedProducts(), key = labelSize();
+      if (!list.length) { SF.toast('Tick at least one product.', true); return; }
+      Promise.all(list.map(function (p) {
+        return SFL.png(p, key, d.profile.name).then(function (b) {
+          return new File([b], SFL.fileName(p, key), { type: 'image/png' });
+        });
+      })).then(function (files) {
+        return navigator.share({ files: files, title: d.profile.name + ' labels' });
+      }).catch(function (e) {
+        if (e && e.name === 'AbortError') return;            // they closed the share sheet
+        SF.toast('Sharing did not work here. Use Download instead.', true);
+      });
+    },
     labelMode: function (m) {
       labelMode = m;
       SF.el('tabL').className = m === 'labels' ? '' : 'ghost';
@@ -756,6 +867,7 @@
     drawLabels: function () {
       var d = SF.state.data.labels, out = SF.el('out');
       if (!d || !out) return;
+      SFA.labelPreview();
       if (labelMode === 'poster') {
         var pick = posterChoice(d);
         if (!pick) {

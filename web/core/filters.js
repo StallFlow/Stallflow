@@ -81,6 +81,29 @@
       '<div class="fcount" id="fc-' + id + '" aria-live="polite"></div></div>';
   }
 
+  /**
+   * A table heading that sorts by its column: tap for low → high (A → Z),
+   * again for high → low, a third time to go back to the list's own order.
+   * Plain text when the list is too short to have a filter bar.
+   */
+  function th(id, field, label, cls) {
+    var c = cls ? ' class="' + cls + '"' : '';
+    if (!live[id]) return '<th' + c + '>' + esc(label) + '</th>';
+    return '<th' + c + ' data-fsort="' + esc(id) + '" data-field="' + esc(field) + '">' +
+      '<button type="button" class="sorthead" onclick="SF.filters.sortBy(\'' + id + '\',\'' + field + '\')">' +
+      esc(label) + '<span class="arrow" aria-hidden="true"></span></button></th>';
+  }
+
+  function paintHeads(id, by) {
+    Array.prototype.forEach.call(document.querySelectorAll('[data-fsort="' + id + '"]'), function (h) {
+      var f = h.getAttribute('data-field');
+      var dir = by === f ? 'ascending' : by === '-' + f ? 'descending' : 'none';
+      h.setAttribute('aria-sort', dir);
+      var a = h.querySelector('.arrow');
+      if (a) a.textContent = dir === 'ascending' ? ' ▲' : dir === 'descending' ? ' ▼' : '';
+    });
+  }
+
   function apply(id) {
     var opts = live[id];
     if (!opts) return;
@@ -122,6 +145,17 @@
       }).forEach(function (r) { parent.insertBefore(r, anchor); });
     });
 
+    paintHeads(id, by);
+    var sel = document.getElementById('ff-' + id + '-sort');
+    if (sel && sel.value !== by) {
+      // A heading picked a sort the dropdown has no line for: add it, so the two agree.
+      if (!Array.prototype.some.call(sel.options, function (o) { return o.value === by; })) {
+        var o = document.createElement('option');
+        o.value = by; o.textContent = (desc ? 'High → low: ' : 'Low → high: ') + field;
+        sel.appendChild(o);
+      }
+      sel.value = by;
+    }
     var narrowed = shown !== rows.length;
     Array.prototype.forEach.call(document.querySelectorAll('[data-fempty="' + id + '"]'), function (e) {
       e.style.display = rows.length && !shown ? '' : 'none';
@@ -138,6 +172,13 @@
   window.SF.filters = {
     row: row,
     bar: bar,
+    th: th,
+    sortBy: function (id, field) {
+      var st = saved(id), now = st.sort || '';
+      st.sort = now === field ? '-' + field : now === '-' + field ? '' : field;
+      SF.ls.set(key(id), st);
+      apply(id);
+    },
     apply: apply,
     typed: function (id, input) { typedText[id] = input.value; apply(id); },
     pick: function (id, k, v) {

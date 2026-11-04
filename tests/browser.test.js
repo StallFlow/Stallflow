@@ -565,7 +565,7 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
   });
 
   await test('Collect shows the orders for the market this phone is at', async () => {
-    const env = await phone({ hash: '#collect' });
+    const env = await phone({ hash: '#collect', seed: (SF) => SF.set('collectStep', 'yes') });
     addFuture(env.SF, 'M02', 'Monument Primary Market', 2);
     const placed = env.SF.dispatch('placeOrder', { opId: 'x1', market: 'M02', name: 'Marie du Plessis',
       phone: '082 111 2222', consent: true, lines: [{ id: 'P01', qty: 1 }] });
@@ -676,6 +676,28 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
     await env.ctx.close();
   });
 
+  await test('Stock: tapping a column heading sorts by it, then reverses, then goes back', async () => {
+    const env = await phone({ hash: '#stock', seed: shop10 });
+    const page = env.page;
+    await openShelf(page);
+    await page.selectOption('#ff-shelf-cat', 'Resin');
+    await page.click('th[data-field="price"] button');
+    assert.deepStrictEqual(await shownNames(page, 'shelf'), ['Resin coaster', 'Resin bookmark', 'Resin keyring']);
+    assert.strictEqual(await page.getAttribute('th[data-field="price"]', 'aria-sort'), 'ascending');
+    assert.strictEqual(await page.inputValue('#ff-shelf-sort'), 'price', 'the Sort dropdown agrees');
+    await page.click('th[data-field="price"] button');
+    assert.deepStrictEqual(await shownNames(page, 'shelf'), ['Resin keyring', 'Resin bookmark', 'Resin coaster']);
+    assert.strictEqual(await page.getAttribute('th[data-field="price"]', 'aria-sort'), 'descending');
+    assert.ok(/▼/.test(await page.textContent('th[data-field="price"]')));
+    await page.click('th[data-field="price"] button');
+    assert.strictEqual(await page.inputValue('#ff-shelf-sort'), '', 'back to shelf order');
+    await page.click('th[data-field="left"] button');
+    assert.deepStrictEqual(await shownNames(page, 'shelf'), ['Resin bookmark', 'Resin keyring', 'Resin coaster']);
+    await page.goto('about:blank'); await page.goto(base + '#stock'); await openShelf(page);
+    assert.strictEqual(await page.getAttribute('th[data-field="left"]', 'aria-sort'), 'ascending', 'remembered');
+    await env.ctx.close();
+  });
+
   await test('a short list has no filter bar', async () => {
     const env = await phone({ hash: '#stock' });
     await openShelf(env.page).catch(() => {});
@@ -699,6 +721,7 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
   await test('Collect: find a customer by name or order number', async () => {
     const placed = {};
     const env = await phone({ hash: '#collect', seed: (SF) => {
+      SF.set('collectStep', 'yes');
       ['Anna Bester', 'Marie du Plessis', 'Thabo Nkosi', 'Pieter Smit', 'Lerato Dube', 'Johan Venter', 'Zanele Mokoena']
         .forEach((n, i) => {
           const r = SF.dispatch('placeOrder', { opId: 'q' + i, name: n, phone: '082 000 00' + (10 + i),
@@ -798,6 +821,194 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
     const sale = env.sheets.Orders.rows.slice(1).find((r) => r[3] === 'till');
     assert.strictEqual(sale[7], 4, 'three jam and one marmalade: ' + sale[6]);
     assert.strictEqual(sale[8], 280);
+    await env.ctx.close();
+  });
+
+  /* ---------- pre-orders at the till, Collect off, more filters, label files ---------- */
+  const withPreorder = (SF) => {
+    SF.append('markets', { MarketId: 'M02', Name: 'Monument Primary Market', Date: day(2), Status: 'planned' });
+    SF.set('activeMarket', 'M02');
+    const r = SF.dispatch('placeOrder', { opId: 'v1', market: 'M02', name: 'Viv Pieters', phone: '082 444 5555',
+      consent: true, note: 'Collecting after 11', lines: [{ id: 'P01', qty: 1 }, { id: 'P02', qty: 1 }] });
+    if (!r.ok) throw new Error(r.message);
+  };
+  const openToPay = async (page) => {
+    await page.waitForFunction(() => SF.state.data.till);
+    await page.evaluate(() => { SF.ls.set('sf.tab.till', 'topay'); SF.render(); });
+    await page.waitForSelector('.porder');
+  };
+
+  await test('Still to pay shows the market, what was ordered and the note', async () => {
+    const env = await phone({ hash: '#till', seed: withPreorder });
+    const page = env.page;
+    await openToPay(page);
+    assert.ok(/for Monument Primary Market/.test(await page.textContent('h2:has-text("still to pay")')));
+    const items = await page.locator('.porder .items li').allTextContents();
+    assert.strictEqual(items.length, 2);
+    assert.ok(/1 ×\s*Apricot Jam/.test(items[0]) && /1 ×\s*Marmalade/.test(items[1]), items.join(' | '));
+    assert.ok(/Collecting after 11/.test(await page.textContent('.porder .note')));
+    assert.strictEqual(await page.isVisible('#sellat'), true, 'the market can be changed here too');
+    await env.ctx.close();
+  });
+
+  await test('paying a pre-order with R200 shows R60 change and hands it over', async () => {
+    const env = await phone({ hash: '#till', seed: withPreorder });
+    const page = env.page;
+    await openToPay(page);
+    await page.click('.porder button:has-text("Take payment")');
+    await page.waitForSelector('#got');
+    assert.ok(/Viv Pieters/.test(await page.textContent('.sheet h2')));
+    assert.strictEqual(await page.isDisabled('#doSale'), true, 'nothing received yet');
+    await page.click('.sheet button:has-text("R200")');
+    assert.ok(/Change to give/.test(await page.textContent('#changeBox')));
+    assert.ok(/R 60\.00/.test(await page.textContent('#changeAmt')));
+    await page.fill('#got', '150'); await page.dispatchEvent('#got', 'input');
+    assert.ok(/R 10\.00/.test(await page.textContent('#changeAmt')), 'a typed amount works too');
+    await page.fill('#got', '200'); await page.dispatchEvent('#got', 'input');
+    await page.click('#doSale');
+    await page.waitForSelector('.give');
+    assert.ok(/R 60\.00/.test(await page.textContent('.give')));
+    await page.waitForFunction(() => !SF.outbox.pending().length);
+    const row = env.sheets.Orders.rows.find((r) => r[4] === 'Viv Pieters');
+    assert.strictEqual(row[10], 'collected', 'paid at the table is handed over');
+    await env.ctx.close();
+  });
+
+  await test('Collect is hidden unless the stall switches it on in Settings', async () => {
+    const env = await phone({ hash: '#till' });
+    const page = env.page;
+    assert.strictEqual(await page.locator('#tabs a[href="#collect"]').count(), 0);
+    await page.goto(base + '#collect'); await settle(page, 500);
+    assert.ok(page.url().endsWith('#till'), 'an old Collect link goes to the till: ' + page.url());
+    await page.goto(base + '#settings');
+    await page.click('button:has-text("Switch on")');
+    await page.waitForFunction(() => !SF.outbox.pending().length);
+    await page.waitForSelector('#tabs a[href="#collect"]');
+    assert.strictEqual(env.SF.get('collectStep'), 'yes');
+    await env.ctx.close();
+  });
+
+  await test('More shows the app version and can check for an update', async () => {
+    const env = await phone({ hash: '#till' });
+    const page = env.page;
+    await page.evaluate(() => SF.openMore());
+    assert.ok(/App version test/.test(await page.textContent('.sheet')), await page.textContent('.sheet .foot'));
+    assert.strictEqual(await page.locator('.sheet button:has-text("Check for update")').count(), 1);
+    assert.strictEqual(await page.locator('.sheet button:has-text("Fix a stuck update")').count(), 1);
+    await env.ctx.close();
+  });
+
+  await test('Till: searching products skips straight to the ones you want', async () => {
+    const env = await phone({ hash: '#till', seed: shop10 });
+    const page = env.page;
+    await page.waitForSelector('#tq');
+    await page.click('#tq'); await page.keyboard.type('resin', { delay: 20 });
+    const names = await page.$$eval('#tilesbox .tile .nm', (t) => t.map((x) => x.textContent.trim()));
+    assert.strictEqual(names.length, 3, names.join(' | '));
+    assert.strictEqual(await page.evaluate(() => document.activeElement.id), 'tq', 'the keyboard stays up');
+    await page.click('#tilesbox .tile:has-text("Resin coaster")');
+    assert.deepStrictEqual(await cartQty(page), [1]);
+    assert.strictEqual(await page.inputValue('#tq'), 'resin', 'the search stays for the next one');
+    await page.fill('#tq', 'zzz'); await page.dispatchEvent('#tq', 'input');
+    assert.ok(/Nothing called/.test(await page.textContent('#tilesbox')));
+    await env.ctx.close();
+  });
+
+  await test('Still to pay and Costs can be searched once they are long', async () => {
+    const env = await phone({ hash: '#till', seed: (SF) => {
+      withPreorder(SF);
+      ['Anna', 'Ben', 'Cara', 'Dirk', 'Elsa', 'Fanie'].forEach((n, i) => SF.dispatch('placeOrder', { opId: 'w' + i,
+        market: 'M02', name: n + ' Test', phone: '083 111 22' + (10 + i), consent: true, lines: [{ id: 'P02', qty: 1 }] }));
+      [['Stall fee', 250, 'Stall'], ['Petrol', 180, 'Travel'], ['Gazebo pegs', 60, 'Setup'], ['Bags', 90, 'Packaging'],
+       ['Flyers', 120, 'Marketing'], ['Toll', 45, 'Travel']].forEach(([d, a, c], i) =>
+        SF.append('expenses', { ExpenseId: 'X' + i, MarketId: 'M02', Description: d, Amount: a, Category: c, When: new Date() }));
+    } });
+    const page = env.page;
+    await openToPay(page);
+    await page.fill('#fq-topay', 'viv'); await page.dispatchEvent('#fq-topay', 'input');
+    assert.deepStrictEqual(await shownNames(page, 'topay'), ['Viv Pieters']);
+    await page.goto(base + '#numbers');
+    await page.waitForFunction(() => SF.state.data.numbers);
+    await page.evaluate(() => { SF.ls.set('sf.tab.numbers', 'costs'); SF.render(); });
+    await page.waitForSelector('#ff-costs-type');
+    await page.selectOption('#ff-costs-type', 'Travel');
+    assert.deepStrictEqual((await shownNames(page, 'costs')).sort(), ['Petrol', 'Toll']);
+    await page.selectOption('#ff-costs-type', 'all'); await page.selectOption('#ff-costs-sort', '-amount');
+    assert.strictEqual((await shownNames(page, 'costs'))[0], 'Stall fee');
+    await env.ctx.close();
+  });
+
+  await test('the order page has a search and category chips once there is a lot to choose from', async () => {
+    const env = await phone({ hash: '#till', seed: (SF) => {
+      shop10(SF);
+      SF.append('markets', { MarketId: 'M02', Name: 'Spring Fair', Date: day(3), Status: 'planned' });
+      SF.set('activeMarket', 'M02');
+    } });
+    const page = await customer(env, '?m=M02');
+    await page.waitForSelector('#find');
+    const visible = () => page.$$eval('.item', (it) => it.filter((x) => x.offsetParent).map((x) => x.querySelector('.nm').textContent.trim()));
+    await page.click('.chip:has-text("Dolls")');
+    assert.deepStrictEqual((await visible()).sort(), ['Sock monkey', 'Topsy-turvy doll'], 'hidden products never show');
+    await page.click('.chip:has-text("All")');
+    await page.fill('#find', 'jam'); await page.dispatchEvent('#find', 'input');
+    // "jam" finds the jams by name and Apricot Preserve by its category, Jams.
+    const jams = ['Apricot Jam', 'Apricot Preserve', 'Fig Jam', 'Guava Jam', 'Strawberry Jam'];
+    assert.deepStrictEqual((await visible()).sort(), jams);
+    await page.click('.item:has-text("Guava Jam") button[aria-label^="More"]');
+    assert.strictEqual(await page.inputValue('#find'), 'jam', 'adding something keeps the search');
+    assert.deepStrictEqual((await visible()).sort(), jams);
+    await page.fill('#find', 'zzz'); await page.dispatchEvent('#find', 'input');
+    assert.strictEqual(await page.isVisible('#nofind'), true);
+    await env.ctx.close();
+  });
+
+  const pngInfo = (buf) => {
+    const w = buf.readUInt32BE(16), h = buf.readUInt32BE(20);
+    const at = buf.indexOf(Buffer.from('pHYs'));
+    return { w, h, ppm: at > 0 ? buf.readUInt32BE(at + 4) : 0, sig: buf.slice(1, 4).toString() };
+  };
+
+  await test('a label downloads as a 300 dpi picture at the chosen size', async () => {
+    const env = await phone({ hash: '#labels', seed: shop10 });
+    const page = env.page;
+    await page.waitForSelector('#lsize');
+    assert.ok(/50 × 30 mm/.test(await page.textContent('#lprevcap')));
+    const [dl] = await Promise.all([page.waitForEvent('download'),
+      page.click('button[aria-label="Download the label for Apricot Jam"]')]);
+    assert.strictEqual(dl.suggestedFilename(), 'P01-apricot-jam-50x30.png');
+    const info = pngInfo(fs.readFileSync(await dl.path()));
+    assert.deepStrictEqual(info, { w: 591, h: 354, ppm: 11811, sig: 'PNG' });
+    await page.selectOption('#lsize', '62x29');
+    const [dl2] = await Promise.all([page.waitForEvent('download'),
+      page.click('button[aria-label="Download the label for Apricot Jam"]')]);
+    const info2 = pngInfo(fs.readFileSync(await dl2.path()));
+    assert.strictEqual(info2.w + 'x' + info2.h, '732x343', 'Brother 62 × 29 mm at 300 dpi');
+    if (process.env.SF_SHOT) fs.copyFileSync(await dl.path(), path.join(process.env.SF_SHOT, 'label-50x30.png'));
+    await env.ctx.close();
+  });
+
+  await test('the ticked labels download together as one .zip', async () => {
+    const env = await phone({ hash: '#labels', seed: shop10 });
+    const page = env.page;
+    await page.waitForSelector('#lsize');
+    await page.selectOption('#ff-labels-cat', 'Resin');
+    await page.click('text=Tick none'); await page.selectOption('#ff-labels-cat', 'all');
+    await page.click('text=Tick none');
+    for (const id of ['P03', 'P05', 'P07']) await page.check('#c-' + id);
+    const [dl] = await Promise.all([page.waitForEvent('download'), page.click('text=Download ticked (.zip)')]);
+    assert.ok(/-labels-50x30\.zip$/.test(dl.suggestedFilename()), dl.suggestedFilename());
+    const zip = fs.readFileSync(await dl.path());
+    const end = zip.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06]));
+    assert.strictEqual(zip.readUInt16LE(end + 10), 3, 'three labels in the zip');
+    const names = [];
+    for (let at = zip.indexOf(Buffer.from([0x50, 0x4b, 0x01, 0x02])); at > 0 && at < end;
+         at = zip.indexOf(Buffer.from([0x50, 0x4b, 0x01, 0x02]), at + 4)) {
+      const n = zip.readUInt16LE(at + 28); names.push(zip.slice(at + 46, at + 46 + n).toString());
+    }
+    assert.deepStrictEqual(names.sort(), ['P03-strawberry-jam-50x30.png', 'P05-guava-jam-50x30.png',
+                                          'P07-topsy-turvy-doll-50x30.png']);
+    const first = zip.readUInt16LE(26), data = zip.slice(30 + first, 30 + first + zip.readUInt32LE(18));
+    assert.strictEqual(pngInfo(data).w, 591, 'the files inside are the labels');
     await env.ctx.close();
   });
 
