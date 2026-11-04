@@ -750,7 +750,16 @@ window.SF = (function () {
     drawScreen();
     drawnView = S.view;
     if (snap) restore(snap);
+    fitDock();
   }
+
+  /** Room at the bottom of the page for the docked basket, at any text size or zoom. */
+  function fitDock() {
+    var c = document.querySelector('#view .cart');
+    var h = c ? Math.ceil(c.getBoundingClientRect().height) : 0;
+    document.documentElement.style.setProperty('--dock', h + 'px');
+  }
+  window.addEventListener('resize', function () { fitDock(); });
 
   function drawScreen() {
     var def = screens[S.view] || registry.screens.filter(function (sc) {

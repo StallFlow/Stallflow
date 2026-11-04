@@ -85,7 +85,7 @@ a{color:var(--accent)}
 /* ---- layout ------------------------------------------------------------ */
 .wrap{max-width:820px;margin:0 auto;padding:var(--pad)}
 .wrap.wide{max-width:1200px}
-main{padding-bottom:calc(var(--tabbar) + env(safe-area-inset-bottom) + 14px)}
+main{padding-bottom:calc(var(--tabbar) + var(--dock, 0px) + env(safe-area-inset-bottom) + 14px)}
 .stack{display:flex;flex-direction:column;gap:var(--pad)}
 .grid{display:grid;gap:12px}
 @media(min-width:700px){

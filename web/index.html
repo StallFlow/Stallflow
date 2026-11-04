@@ -339,7 +339,13 @@ function bump(id, dir){
   var s = step(p);
   var cap = p.available === null ? Infinity : p.available;
   if (!p.weighed) cap = Math.min(cap, DATA.maxPerLine);
-  var next = Math.max(0, Math.min(cap, (CART[id] || 0) + dir * s));
+  var want = (CART[id] || 0) + dir * s;
+  if (dir > 0 && want > cap + 1e-9){
+    toast(p.available !== null && cap === p.available
+      ? 'Only ' + qty(p.available, p.unit) + ' of ' + p.name + ' left.'
+      : 'You can reserve up to ' + DATA.maxPerLine + ' of any one thing.', true);
+  }
+  var next = Math.max(0, Math.min(cap, want));
   next = Math.round(next * 1000) / 1000;
   if (next) CART[id] = next; else delete CART[id];
   draw();

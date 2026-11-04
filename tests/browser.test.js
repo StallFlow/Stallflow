@@ -600,6 +600,8 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
     await page.evaluate(() => { SF.ls.set('sf.tab.stock', 'shelf'); SF.render(); });
     await page.waitForSelector('#fq-shelf');
   };
+  const cartQty = (page) => page.$$eval('.sheet .qn', (b) => b.map((x) => Number(x.textContent)));
+  const openBasket = async (page) => { await page.click('.basketbtn'); await page.waitForSelector('#basketbody'); };
   const shownNames = (page, id) => page.$$eval('[data-frow="' + id + '"]', (rows) =>
     rows.filter((r) => r.style.display !== 'none').map((r) => r.querySelector('b').textContent));
 
@@ -698,6 +700,74 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
     await env.ctx.close();
   });
 
+  await test('Till: a sale of ten different things — all added, all visible, all changeable', async () => {
+    const env = await phone({ hash: '#till', seed: shop10 });
+    const page = env.page;
+    await page.waitForFunction(() => SF.state.data.till);
+    const ids = ['P01', 'P02', 'P03', 'P05', 'P06', 'P07', 'P09', 'P10', 'P11', 'P12'];
+    for (const id of ids) await page.evaluate((x) => SFT.tap(x), id);
+    assert.strictEqual((await page.textContent('.basketbtn .cnt')).trim(), '10');
+    if (process.env.SF_SHOT) {
+      await page.setViewportSize({ width: 412, height: 860 });
+      await page.waitForTimeout(2800);                  // let the "Added" message fade
+      await page.screenshot({ path: path.join(process.env.SF_SHOT, 'till-10-bar.png') });
+    }
+    await openBasket(page);
+    if (process.env.SF_SHOT) await page.screenshot({ path: path.join(process.env.SF_SHOT, 'till-10-basket.png') });
+    assert.strictEqual(await page.locator('#basketbody .l').count(), 10, 'every line is in the basket');
+    // The last line can be reached and changed, however long the list.
+    const last = page.locator('#basketbody .l').last();
+    await last.scrollIntoViewIfNeeded();
+    await last.locator('button[aria-label^="One more"]').click();
+    assert.strictEqual((await cartQty(page))[9], 2);
+    assert.strictEqual((await page.textContent('.basketbtn .cnt')).trim(), '11');
+    await page.click('#basketbody button:has-text("Take payment")');
+    await page.click('.sheet button:has-text("Exact")');
+    await page.click('#doSale');
+    await page.waitForFunction(() => !SF.outbox.pending().length);
+    const sale = env.sheets.Orders.rows.slice(1).find((r) => r[3] === 'till');
+    assert.strictEqual(JSON.parse(sale[6]).length, 10, 'ten lines recorded');
+    assert.strictEqual(sale[7], 11);
+    await env.ctx.close();
+  });
+
+  await test('Till, zoomed in on a small phone: the basket never hides the products', async () => {
+    const env = await phone({ hash: '#till', seed: shop10 });
+    const page = env.page;
+    await page.setViewportSize({ width: 360, height: 640 });
+    await page.addStyleTag({ content: 'html{zoom:1.6}' });       // like a phone set to large text
+    await page.waitForFunction(() => SF.state.data.till);
+    for (const id of ['P01', 'P02', 'P03', 'P05', 'P06', 'P07']) await page.evaluate((x) => SFT.tap(x), id);
+    await page.evaluate(() => { SF.ls.set('sf.tillcat', 'Resin'); SF.render(); });
+    const bar = await page.$eval('.cart', (c) => c.getBoundingClientRect().height);
+    assert.ok(bar < 640 * 0.25, 'the bar is slim: ' + Math.round(bar) + 'px of 640');
+    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+    const gap = await page.evaluate(() => {
+      const tiles = document.querySelectorAll('#tilesbox .tile');
+      const lastTile = tiles[tiles.length - 1].getBoundingClientRect();
+      return document.querySelector('.cart').getBoundingClientRect().top - lastTile.bottom;
+    });
+    assert.ok(gap >= 0, 'the last product sits above the basket, not under it (' + Math.round(gap) + 'px)');
+    if (process.env.SF_SHOT) await page.screenshot({ path: path.join(process.env.SF_SHOT, 'till-zoomed.png') });
+    await openBasket(page);
+    if (process.env.SF_SHOT) await page.screenshot({ path: path.join(process.env.SF_SHOT, 'till-basket-open.png') });
+    await env.ctx.close();
+  });
+
+  await test('the order page says why + stops at the stock limit', async () => {
+    const env = await phone({ hash: '#till', seed: (SF) => {
+      shop10(SF);
+      SF.append('markets', { MarketId: 'M02', Name: 'Spring Fair', Date: day(3), Status: 'planned' });
+      SF.set('activeMarket', 'M02');
+    } });
+    const page = await customer(env, '?m=M02');
+    const plus = page.locator('.item:has-text("Strawberry Jam") button[aria-label^="More"]');
+    for (let i = 0; i < 4; i++) await plus.click();
+    assert.strictEqual((await page.textContent('.item:has-text("Strawberry Jam") .q')).trim(), '3');
+    assert.ok(/Only 3 of Strawberry Jam left/.test(await page.textContent('#toast')));
+    await env.ctx.close();
+  });
+
   await test('a short list has no filter bar', async () => {
     const env = await phone({ hash: '#stock' });
     await openShelf(env.page).catch(() => {});
@@ -763,29 +833,27 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
   });
 
   /* ---------- the till: how many of each ---------- */
-  const cartQty = (page) => page.$$eval('.cart .qn', (b) => b.map((x) => Number(x.textContent)));
+
 
   await test('Till: − and + change how many, and − at one takes it off', async () => {
     const env = await phone({ hash: '#till' });
     const page = env.page;
     await page.waitForFunction(() => SF.state.data.till);
     await page.evaluate(() => SFT.tap('P01'));
-    await page.waitForSelector('.cart .qn');
+    await page.waitForSelector('.basketbtn');
+    await openBasket(page);
     await page.click('button[aria-label="One more Apricot Jam"]');
     await page.click('button[aria-label="One more Apricot Jam"]');
     assert.deepStrictEqual(await cartQty(page), [3]);
-    assert.ok(/R 210\.00/.test(await page.textContent('.cart .tot')), await page.textContent('.cart .tot'));
-    if (process.env.SF_SHOT) {
-      await page.evaluate(() => SFT.tap('P02'));
-      await page.screenshot({ path: path.join(process.env.SF_SHOT, 'till-basket.png') });
-      await page.click('button[aria-label="Remove Marmalade"]');
-    }
+    assert.ok(/R 210\.00/.test(await page.textContent('.sheet .tot')), await page.textContent('.sheet .tot'));
+    assert.ok(/R 210\.00/.test(await page.textContent('.cart .takebtn')), 'the bar keeps up');
     await page.click('button[aria-label="One less Apricot Jam"]');
     assert.deepStrictEqual(await cartQty(page), [2]);
     await page.click('button[aria-label="One less Apricot Jam"]');
     assert.deepStrictEqual(await cartQty(page), [1]);
     await page.click('button[aria-label="Remove Apricot Jam"]');
     assert.strictEqual(await page.locator('.cart').count(), 0, 'the line is gone');
+    assert.strictEqual(await page.locator('.sheet').count(), 0, 'an empty basket closes');
     await env.ctx.close();
   });
 
@@ -794,10 +862,12 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
     const page = env.page;
     await page.waitForFunction(() => SF.state.data.till);
     await page.evaluate(() => SFT.tap('P01'));
+    await openBasket(page);
     await page.click('button[aria-label="How many Apricot Jam"]');
     await page.waitForSelector('#hq');
     await page.fill('#hq', '6'); await page.keyboard.press('Enter');
-    assert.deepStrictEqual(await cartQty(page), [6]);
+    await page.waitForSelector('#basketbody');
+    assert.deepStrictEqual(await cartQty(page), [6], 'back in the basket with the new amount');
     await page.click('button[aria-label="How many Apricot Jam"]');
     await page.click('.sheet button:has-text("12")');
     assert.deepStrictEqual(await cartQty(page), [10], 'only 10 in stock, so it stops at 10');
@@ -812,9 +882,10 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
     const page = env.page;
     await page.waitForFunction(() => SF.state.data.till);
     await page.evaluate(() => { SFT.tap('P01'); SFT.tap('P02'); });
+    await openBasket(page);
     await page.click('button[aria-label="How many Apricot Jam"]');
     await page.fill('#hq', '3'); await page.click('.sheet button:has-text("Done")');
-    await page.click('text=Take payment');
+    await page.click('#basketbody button:has-text("Take payment")');
     await page.click('.sheet button:has-text("Exact")');
     await page.click('#doSale');
     await page.waitForFunction(() => !SF.outbox.pending().length);
@@ -907,7 +978,8 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
     assert.strictEqual(names.length, 3, names.join(' | '));
     assert.strictEqual(await page.evaluate(() => document.activeElement.id), 'tq', 'the keyboard stays up');
     await page.click('#tilesbox .tile:has-text("Resin coaster")');
-    assert.deepStrictEqual(await cartQty(page), [1]);
+    assert.strictEqual((await page.textContent('.basketbtn .cnt')).trim(), '1');
+    assert.ok(/1 in basket/.test(await page.textContent('#tilesbox .tile:has-text("Resin coaster")')));
     assert.strictEqual(await page.inputValue('#tq'), 'resin', 'the search stays for the next one');
     await page.fill('#tq', 'zzz'); await page.dispatchEvent('#tq', 'input');
     assert.ok(/Nothing called/.test(await page.textContent('#tilesbox')));

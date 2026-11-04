@@ -21,7 +21,42 @@
 .cart{position:fixed;left:0;right:0;bottom:calc(var(--tabbar) + env(safe-area-inset-bottom));
   z-index:54;background:var(--surface);border-top:1px solid var(--rule);
   padding:12px var(--pad);box-shadow:0 -6px 26px rgba(27,26,24,.14)}
-.cart .lines{max-height:136px;overflow-y:auto;margin-bottom:10px}
+.cart.compact{display:flex;gap:10px;align-items:stretch;flex-wrap:nowrap;padding:10px var(--pad)}
+.basketbtn{flex:0 1 auto;display:flex;align-items:center;gap:8px;min-height:var(--tap);text-align:left;
+  background:var(--surface-2);color:var(--ink);border:1.5px solid var(--rule);border-radius:12px;
+  padding:6px 12px;font:inherit;cursor:pointer;box-shadow:none}
+.basketbtn .cnt{flex:none;min-width:34px;height:34px;padding:0 6px;border-radius:99px;background:var(--brand);
+  color:var(--brand-ink);display:inline-flex;align-items:center;justify-content:center;font-weight:800}
+.basketbtn .lbl{font-weight:700;line-height:1.15;white-space:nowrap}
+.basketbtn .lbl i{display:block;font-style:normal;font-weight:600;font-size:12.5px;color:var(--muted)}
+.cart .takebtn{flex:1 1 auto;min-width:0;min-height:var(--tap);display:flex;flex-direction:column;
+  align-items:center;justify-content:center;line-height:1.15;padding:6px 10px}
+.cart .takebtn span{font-size:14px;font-weight:700}
+.cart .takebtn .amt{font-size:19px;font-weight:800;font-family:var(--mono);white-space:nowrap}
+.sheet .basketlist{position:static;box-shadow:none;border:0;padding:0;background:none}
+.sheet .basketlist .l{border-bottom:1px solid var(--rule);padding:10px 0;flex-wrap:wrap;row-gap:6px}
+/* In the open basket the name has its own line, so a long name or big text never squeezes it. */
+.sheet .basketlist .l .what{flex:1 1 100%;font-weight:700;font-size:16px}
+.sheet .basketlist .l > .num{margin-left:auto;font-size:15px}
+/* Phone width, big text or zoom: the basket button shrinks to the count and an arrow,
+   leaving the room for the total. Measured on the bar itself, so zoom counts too. */
+.cart.compact{container-type:inline-size}
+.basketbtn .up{display:none;font-size:14px;color:var(--muted);font-weight:800}
+@container (max-width: 440px){
+  .basketbtn .lbl{display:none}
+  .basketbtn .up{display:inline}
+  .basketbtn{padding:6px 10px;gap:6px}
+}
+.sheet .tot{display:flex;justify-content:space-between;align-items:center;margin:12px 0}
+.sheet .tot .amt{font-size:24px;font-weight:800;font-family:var(--mono)}
+.bhead{display:flex;align-items:baseline;justify-content:space-between;gap:10px}
+.tile{position:relative}
+.tile.has{border-color:var(--brand)}
+.tile .inb{align-self:flex-start;display:inline-block;margin-top:4px;background:var(--brand);
+  color:var(--brand-ink);font-size:11.5px;font-weight:800;border-radius:99px;padding:2px 9px}
+.sheet .bfoot{position:sticky;bottom:calc(-20px - env(safe-area-inset-bottom));background:var(--surface);
+  margin:0 calc(-1 * var(--pad));padding:4px var(--pad) calc(16px + env(safe-area-inset-bottom));
+  border-top:1px solid var(--rule);box-shadow:0 -8px 18px rgba(27,26,24,.06)}
 .cart .l{display:flex;justify-content:space-between;align-items:center;gap:10px;font-size:14.5px;padding:4px 0}
 .cart .l .what{flex:1;min-width:0}
 .cart .l > .num{white-space:nowrap;min-width:84px;text-align:right}
