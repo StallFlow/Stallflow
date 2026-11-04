@@ -277,9 +277,9 @@ window.SF = (function () {
 
   var CAPS = {
     owner: ['*'],
-    manager: ['sell', 'orders', 'stock', 'price', 'labels', 'reports', 'expenses'],
-    cashier: ['sell', 'orders', 'labels'],
-    viewer: ['reports']
+    manager: ['sell', 'orders', 'stock', 'price', 'labels', 'reports', 'expenses', 'report'],
+    cashier: ['sell', 'orders', 'labels', 'report'],
+    viewer: ['reports', 'report']
   };
 
   function can(cap) {
@@ -724,10 +724,11 @@ window.SF = (function () {
   }
 
   function openMore() {
+    S.from = S.view === 'report' ? S.from : S.view;   // the screen they were on when something went wrong
     var extra = registry.screens.filter(function (sc) {
       return pluginOn(sc.plugin) && can(sc.cap);
     });
-    var core = ['labels', 'people', 'settings', 'health'].filter(function (id) {
+    var core = ['labels', 'people', 'settings', 'health', 'report'].filter(function (id) {
       return screens[id] && can(screens[id].cap);
     }).map(function (id) { return screens[id]; });
 

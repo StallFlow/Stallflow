@@ -399,7 +399,7 @@
     sell: 'A sale', markPaid: 'Marking an order paid', markCollected: 'Handing an order over',
     addBatch: 'A costing run', setPrice: 'A price change', adjustStock: 'A stock adjustment',
     saveProduct: 'A product', addExpense: 'A cost', deleteExpense: 'Removing a cost',
-    setActive: 'Hiding or showing a product', addMarket: 'A new market',
+    setActive: 'Hiding or showing a product', addMarket: 'A new market', reportIssue: 'A problem report',
     savePerson: 'A change to who has access',
     setActiveMarket: 'Changing the live market', setPreordersOpen: 'Opening or closing pre-orders',
     'cashup.record': 'A cash-up'
@@ -428,6 +428,30 @@
         '<div class="hr"></div>' +
         '<button class="ghost block" onclick="SF.go(\'till\')">Back to the till</button>' +
         '</div></div>';
+    }
+  });
+
+  /* ==================================================================
+     REPORT A PROBLEM — goes to the Issues tab and to Claude
+     ================================================================== */
+
+  SF.screen({
+    id: 'report', title: 'Report a problem', cap: 'report',
+    render: function () {
+      var failed = SF.outbox.failed().length;
+      return '<div class="wrap"><div class="card"><h2>Report a problem</h2>' +
+        '<div class="sub">Something wrong, confusing or missing? Say what you were doing and ' +
+          'what happened. It is saved in the sheet and sent to Claude, who looks into it and ' +
+          'suggests a fix. Nothing changes in the live till until Jacques approves it.</div>' +
+        '<div class="field"><label for="rmsg">What went wrong?</label>' +
+          '<textarea id="rmsg" rows="6" maxlength="1000" ' +
+            'placeholder="I tapped Take payment and it stayed on the same screen…"></textarea></div>' +
+        '<div class="notice warn" style="border-radius:10px;margin:0 0 12px">Reports can be seen ' +
+          'publicly. Please do not type customer names or phone numbers.</div>' +
+        (failed ? '<div class="muted small" style="margin-bottom:10px">' + failed +
+          ' change' + (failed === 1 ? '' : 's') + ' that did not go through will be included.</div>' : '') +
+        '<button class="block" onclick="SFA.sendReport()">Send report</button>' +
+        '<div class="foot">StallFlow · report</div></div></div>';
     }
   });
 
@@ -515,6 +539,22 @@
       SF.toast('Added');
     },
     dropExpense: function (id) { SF.write('deleteExpense', { expenseId: id }); },
+    sendReport: function () {
+      var box = SF.el('rmsg'), msg = String(box.value || '').trim();
+      if (msg.length < 5) { SF.toast('Say what went wrong, in a sentence or two.', true); return; }
+      var failed = SF.outbox.failed().slice(0, 5).map(function (o) {
+        return { action: o.action, message: o.message || '' };
+      });
+      // Queued like any other change, so a report made with no signal is kept
+      // on the phone and goes up by itself later.
+      SF.write('reportIssue', {
+        message: msg, screen: SF.state.from || '', failed: failed,
+        ua: (navigator.userAgent || '').slice(0, 120), online: SF.state.online !== false
+      });
+      box.value = '';
+      SF.toast('Report sent. Thank you.');
+      SF.go(SF.state.from && SF.state.from !== 'report' ? SF.state.from : 'till');
+    },
     addMarket: function () {
       var n = SF.el('mn').value;
       if (String(n).trim().length < 2) { SF.toast('Give the market a name.', true); return; }

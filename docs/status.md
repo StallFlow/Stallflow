@@ -43,6 +43,30 @@ the same server and sheet. Leave it alone; give people the new links.
 If the deploying account changes, the OAuth client and the `CLASPRC_JSON`
 key should move to that account too.
 
+## Reporting problems to Claude (built, needs two switches)
+
+More › Report a problem saves what staff type to the sheet's Issues tab and,
+when connected, opens a GitHub issue labelled `app-report`. The
+`claude-fix.yml` workflow then asks Claude to look into it and open a pull
+request. Claude never merges; a person does.
+
+To switch it on, once:
+
+1. **GitHub token for the sheet.** Create a fine-grained token at
+   github.com › Settings › Developer settings, limited to this repository, with
+   **Issues: read and write** and nothing else. In each stall's Apps Script:
+   Project Settings › Script properties › add `GITHUB_TOKEN`. Until then,
+   reports are only kept in the Issues tab (Status says "saved (not connected
+   to GitHub yet)").
+2. **Anthropic key for the workflow.** Repo › Settings › Secrets › Actions ›
+   `ANTHROPIC_API_KEY`. Until then the workflow reports that it has no key and
+   stops.
+3. Confirm the Claude GitHub app is installed on this repository.
+
+Reports are public (this repo is public). Phone numbers and e-mail addresses
+are blanked out before anything is stored or sent, and the screen tells staff
+not to type customer names. Make the repo private if that is not enough.
+
 ## Next up
 
 - **Stock import** for Duxie's (products, prices, batch costs) before their
