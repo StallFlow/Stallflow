@@ -170,14 +170,18 @@
   function newMarket() {
     return '<div class="card"><h2>Add a market</h2>' +
       '<div class="sub">Each one keeps its own takings, costs and break-even.</div>' +
-      '<div class="row"><div class="field" style="flex:2"><label for="mn">Name</label>' +
+      // Name and date share a line on a wide screen and stack on a phone; the
+      // place gets a full line so Google's suggestions have room to be read.
+      '<div class="row"><div class="field" style="flex:2 1 220px"><label for="mn">Name</label>' +
         '<input id="mn" placeholder="Spring Craft Market"></div>' +
-        '<div class="field"><label for="md">Date</label><input id="md" type="date"></div>' +
-        '<div class="field"><label for="ml">Where</label>' +
-          '<input id="ml" placeholder="Church hall" oninput="SFA.mapsLink()">' +
-          '<a id="mlmap" href="#" target="_blank" rel="noopener" style="display:none;margin-top:6px;' +
-            'font-size:14px;font-weight:600">Open in Maps &#8599;</a></div>' +
-      '</div><button class="ghost" onclick="SFA.addMarket()">Add market</button></div>';
+        '<div class="field" style="flex:1 1 150px"><label for="md">Date</label><input id="md" type="date"></div>' +
+      '</div>' +
+      '<div class="field place"><label for="ml">Where</label>' +
+        '<input id="ml" placeholder="Start typing the place" autocomplete="off" maxlength="160" ' +
+          'role="combobox" aria-autocomplete="list" aria-controls="ml-sug" aria-expanded="false" ' +
+          'oninput="SFP.typed(this, event)" onkeydown="SFP.key(this, event)" onblur="SFP.blur(this)">' +
+        '<div class="sug" id="ml-sug" role="listbox" hidden></div></div>' +
+      '<button class="ghost" onclick="SFA.addMarket()">Add market</button></div>';
   }
 
   /* ==================================================================
@@ -314,10 +318,13 @@
           '<div class="sub">This stall still uses PINs. People appears once Google ' +
           'sign-in is switched on.</div></div></div>';
       }
-      setTimeout(SFA.loadPeople, 0);
+      // Show the last list straight away and refresh it quietly, so the page
+      // does not blank to "Fetching…" and lose its place on every redraw.
+      if (!SFA.people || Date.now() - (SFA.peopleAt || 0) > 20000) setTimeout(SFA.loadPeople, 0);
       return '<div class="wrap"><div id="peoplebox">' +
-        '<div class="card"><div class="loading">Fetching the list…</div></div></div>' +
-        '<div class="foot">StallFlow · people</div></div>';
+        (SFA.people ? peopleHtml(SFA.people)
+                    : '<div class="card"><div class="loading">Fetching the list…</div></div>') +
+        '</div><div class="foot">StallFlow · people</div></div>';
     }
   });
 
@@ -328,7 +335,7 @@
     }).join('') + '</select>';
   }
 
-  function drawPeople(d) {
+  function peopleHtml(d) {
     var me = SF.state.user;
     var rows = d.people.map(function (p, i) {
       var self = p.email === me;
@@ -352,8 +359,7 @@
         '</div>';
     }).join('');
 
-    SF.el('peoplebox').innerHTML =
-      '<div class="card"><h2>Add someone</h2>' +
+    return '<div class="card"><h2>Add someone</h2>' +
         '<div class="sub">They sign in with Google using exactly this address. It does not ' +
           'have to be Gmail: any email they have made a Google account with works.</div>' +
         '<div class="field"><label for="pe">Their Google account email</label>' +
@@ -374,7 +380,14 @@
         }).join('') +
         (rows || '<div class="empty" style="margin-top:10px">Nobody else yet.</div>') +
       '</div>';
+  }
+
+  function drawPeople(d, force) {
     SFA.people = d;
+    SFA.peopleAt = Date.now();
+    var box = SF.el('peoplebox'), typing = SF.el('pe');
+    // A quiet refresh must not wipe an address that is half typed.
+    if (box && (force || !(typing && typing.value))) box.innerHTML = peopleHtml(d);
   }
 
   /* ==================================================================
@@ -399,7 +412,7 @@
     sell: 'A sale', markPaid: 'Marking an order paid', markCollected: 'Handing an order over',
     addBatch: 'A costing run', setPrice: 'A price change', adjustStock: 'A stock adjustment',
     saveProduct: 'A product', addExpense: 'A cost', deleteExpense: 'Removing a cost',
-    setActive: 'Hiding or showing a product', addMarket: 'A new market',
+    setActive: 'Hiding or showing a product', addMarket: 'A new market', reportIssue: 'A problem report',
     savePerson: 'A change to who has access',
     setActiveMarket: 'Changing the live market', setPreordersOpen: 'Opening or closing pre-orders',
     'cashup.record': 'A cash-up'
@@ -432,6 +445,30 @@
   });
 
   /* ==================================================================
+     REPORT A PROBLEM — goes to the Issues tab and to Claude
+     ================================================================== */
+
+  SF.screen({
+    id: 'report', title: 'Report a problem', cap: 'report',
+    render: function () {
+      var failed = SF.outbox.failed().length;
+      return '<div class="wrap"><div class="card"><h2>Report a problem</h2>' +
+        '<div class="sub">Something wrong, confusing or missing? Say what you were doing and ' +
+          'what happened. It is saved in the sheet and sent to Claude, who looks into it and ' +
+          'suggests a fix. Nothing changes in the live till until Jacques approves it.</div>' +
+        '<div class="field"><label for="rmsg">What went wrong?</label>' +
+          '<textarea id="rmsg" rows="6" maxlength="1000" ' +
+            'placeholder="I tapped Take payment and it stayed on the same screen…"></textarea></div>' +
+        '<div class="notice warn" style="border-radius:10px;margin:0 0 12px">Reports can be seen ' +
+          'publicly. Please do not type customer names or phone numbers.</div>' +
+        (failed ? '<div class="muted small" style="margin-bottom:10px">' + failed +
+          ' change' + (failed === 1 ? '' : 's') + ' that did not go through will be included.</div>' : '') +
+        '<button class="block" onclick="SFA.sendReport()">Send report</button>' +
+        '<div class="foot">StallFlow · report</div></div></div>';
+    }
+  });
+
+  /* ==================================================================
      Behaviour
      ================================================================== */
 
@@ -453,7 +490,7 @@
       }).catch(function () { SF.toast('No signal. Try again when you have some.', true); });
     },
     people: null,
-    loadPeople: function () {
+    loadPeople: function (force) {
       SF.get('people').then(function (res) {
         if (!SF.el('peoplebox')) return;
         if (!res || res.ok === false) {
@@ -462,7 +499,7 @@
             '</div></div>';
           return;
         }
-        drawPeople(res.data);
+        drawPeople(res.data, force === true);
       }).catch(function () {
         if (SF.el('peoplebox')) SF.el('peoplebox').innerHTML = '<div class="card"><div class="empty">' +
           'Could not fetch the list. This needs signal.</div></div>';
@@ -491,7 +528,7 @@
           SF.toast((res && res.message) || 'That did not save.', true); return;
         }
         SF.toast(done);
-        SFA.loadPeople();
+        SFA.loadPeople(true);
       }).catch(function () { SF.toast('No signal. Try again when you have some.', true); });
     },
     pickMarket: function (id) { SF.state.marketId = id; SF.load('numbers'); },
@@ -515,6 +552,24 @@
       SF.toast('Added');
     },
     dropExpense: function (id) { SF.write('deleteExpense', { expenseId: id }); },
+    sendReport: function () {
+      var box = SF.el('rmsg'), msg = String(box.value || '').trim();
+      if (msg.length < 5) { SF.toast('Say what went wrong, in a sentence or two.', true); return; }
+      var failed = SF.outbox.failed().slice(0, 5).map(function (o) {
+        return { action: o.action, message: o.message || '' };
+      });
+      // Queued like any other change, so a report made with no signal is kept
+      // on the phone and goes up by itself later.
+      SF.write('reportIssue', {
+        message: msg, screen: SF.state.from || '', failed: failed,
+        ua: (navigator.userAgent || '').slice(0, 120), online: SF.state.online !== false
+      });
+      box.value = '';
+      SF.toast(SF.state.online === false
+        ? 'Saved on this phone. It goes by itself when there is signal.'
+        : 'Report sent. Thank you.');
+      SF.go(SF.state.from && SF.state.from !== 'report' ? SF.state.from : 'till');
+    },
     addMarket: function () {
       var n = SF.el('mn').value;
       if (String(n).trim().length < 2) { SF.toast('Give the market a name.', true); return; }
@@ -531,16 +586,7 @@
         });
       });
       SF.el('mn').value = ''; SF.el('md').value = ''; SF.el('ml').value = '';
-      SFA.mapsLink();
       SF.toast('Market added');
-    },
-    /* "Open in Maps" beside the Where box: a plain Google Maps search for
-       whatever is typed. No key, no account, works on a phone. */
-    mapsLink: function () {
-      var a = SF.el('mlmap'), q = String(SF.el('ml').value || '').trim();
-      if (!a) return;
-      a.style.display = q ? 'inline-block' : 'none';
-      a.href = q ? 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(q) : '#';
     },
 
     labelMode: function (m) {
@@ -664,6 +710,10 @@
               figure('Version', esc(h.version), 'schema ' + h.schema.at + ' of ' + h.schema.expected) +
               figure('Market type', esc(h.preset), (h.plugins.filter(function (p) {
                 return p.on; }).length) + ' plugins on') +
+              figure('Place search', window.SFP && SFP.on() ? 'Google' : 'Off',
+                     window.SFP && SFP.on() ? 'suggests as you type' : 'stalls/platform.json mapsKey') +
+              figure('Problem reports', h.reports ? 'To Claude' : 'Sheet only',
+                     h.reports ? 'via GitHub' : 'StallFlow › Connect problem reports') +
             '</div>' +
             (h.schema.at !== h.schema.expected
               ? '<div class="notice warn" style="border-radius:10px;margin-bottom:12px">' +

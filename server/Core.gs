@@ -18,7 +18,7 @@
 var SF = SF || {};
 
 SF.VERSION = '2.0.0';
-SF.SCHEMA = 7;                        // bump when SHEETS changes; see MIGRATIONS
+SF.SCHEMA = 8;                        // bump when SHEETS changes; see MIGRATIONS
 SF.TZ = 'Africa/Johannesburg';
 
 /* =========================================================================
@@ -39,7 +39,9 @@ SF.SHEETS = {
   ops:       ['OpId', 'When', 'Action', 'Result'],
   pantry:    ['Item', 'Qty', 'Unit', 'Note', 'UpdatedAt', 'UpdatedBy'],
   recipes:   ['Name', 'Makes', 'Lines', 'UpdatedAt', 'UpdatedBy'],
-  audit:     ['When', 'Actor', 'Role', 'Device', 'Action', 'Target', 'Detail', 'Outcome']
+  audit:     ['When', 'Actor', 'Role', 'Device', 'Action', 'Target', 'Detail', 'Outcome'],
+  issues:    ['IssueId', 'When', 'Reporter', 'Role', 'Screen', 'Message', 'Context',
+              'Status', 'Link']
 };
 
 SF.sheet = function (key) {
@@ -161,9 +163,9 @@ SF.profile = function () {
 
 SF.ROLES = {
   owner:   ['*'],
-  manager: ['sell', 'orders', 'stock', 'price', 'labels', 'reports', 'expenses'],
-  cashier: ['sell', 'orders', 'labels'],
-  viewer:  ['reports']
+  manager: ['sell', 'orders', 'stock', 'price', 'labels', 'reports', 'expenses', 'report'],
+  cashier: ['sell', 'orders', 'labels', 'report'],
+  viewer:  ['reports', 'report']
 };
 
 SF.secret = function () {
@@ -521,6 +523,9 @@ SF.MIGRATIONS = [
         if (ss.getSheetByName('Recipe notes')) ss.deleteSheet(old); else old.setName('Recipe notes');
       }
       SF.sheet('recipes');
+    } },
+  { to: 8, what: 'Add the Issues tab for problems reported from the app', run: function () {
+      SF.sheet('issues');
     } }
 ];
 
@@ -576,6 +581,7 @@ SF.action('health', 'reports', 'read', function () {
     counts: counts,
     locked: SF.googleOn() || Object.keys(SF.json(SF.get('pins', '{}'), {})).length > 0,
     google: SF.googleOn(),
+    reports: SF.reportsConnected(),
     problems: problems,
     checkedAt: Date.now()
   };

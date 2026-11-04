@@ -59,7 +59,7 @@ function load(googleTokens) {
   const sheets = {};
   const props = {};
   const ctx = {
-    console,
+    console, __gh: [],
     SpreadsheetApp: {
       getActiveSpreadsheet: () => ({
         getSheetByName: (n) => sheets[n] || null,
@@ -80,7 +80,16 @@ function load(googleTokens) {
     },
     LockService: { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) },
     UrlFetchApp: {
-      fetch: (url) => {
+      fetch: (url, opts) => {
+        if (url.indexOf('api.github.com') !== -1 && opts && opts.method === 'get') {
+          const good = /good/.test(opts.headers.Authorization);
+          return { getResponseCode: () => (good ? 200 : 401), getContentText: () => '{}' };
+        }
+        if (url.indexOf('api.github.com') !== -1) {
+          ctx.__gh.push({ url, opts });
+          return { getResponseCode: () => 201,
+                   getContentText: () => JSON.stringify({ html_url: 'https://github.com/o/r/issues/7' }) };
+        }
         const tok = decodeURIComponent(url.split('id_token=')[1]);
         const info = googleTokens[tok];
         return {
@@ -101,7 +110,7 @@ function load(googleTokens) {
   ctx.SF.PLATFORM.googleClientId = '';
   ctx.SF.PLATFORM.admins = [];
   ctx.SF.migrate();
-  return { SF: ctx.SF, sheets };
+  return { SF: ctx.SF, sheets, props, gh: ctx.__gh };
 }
 
 const CLIENT = 'client-123.apps.googleusercontent.com';
@@ -440,6 +449,85 @@ test('uncooked stock is a list she can add to and update', () => {
   const p = SF.dispatch('stock', { token: tok }).data.pantry;
   assert.strictEqual(JSON.stringify(p.map((r) => [r.item, r.qty])), '[["352 ml bottles",24],["Sugar",2.5]]');
   assert.strictEqual(SF.dispatch('savePantry', { token: tok, opId: 'p4', item: 'x', qty: 1 }).ok, false);
+});
+
+/* ---------- reporting a problem ---------- */
+
+function reporter(role) {
+  const env = shop(day(3));
+  env.SF.setPin('owner', '4321');
+  if (role !== 'owner') env.SF.setPin(role, '1111');
+  const pin = role === 'owner' ? '4321' : '1111';
+  env.tok = env.SF.dispatch('signIn', { pin, device: 'd' }).data.token;
+  return env;
+}
+
+test('a cashier can report a problem; it is kept in the Issues tab', () => {
+  const { SF, sheets, tok, gh } = reporter('cashier');
+  const r = SF.dispatch('reportIssue', { token: tok, opId: 'r1', message: 'Take payment does nothing', screen: 'till' });
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(r.sent, false, 'no GitHub token yet, so only the sheet has it');
+  assert.strictEqual(gh.length, 0);
+  const row = sheets.Issues.rows[1];
+  assert.strictEqual(row[5], 'Take payment does nothing');
+  assert.ok(String(row[7]).startsWith('saved'), row[7]);
+});
+
+test('with a GitHub token the report opens one labelled issue, with no phone number or e-mail', () => {
+  const { SF, sheets, props, tok, gh } = reporter('owner');
+  props.GITHUB_TOKEN = 'ghp_SECRETSECRET';
+  const r = SF.dispatch('reportIssue', { token: tok, opId: 'r2', screen: 'till',
+    message: 'Anna 082 123 4567 anna@example.com could not pay',
+    failed: [{ action: 'sell', message: 'Only 0 left of Guava Jam' }] });
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(r.sent, true);
+  assert.strictEqual(gh.length, 1);
+  const sent = JSON.parse(gh[0].opts.payload);
+  assert.ok(/082|anna@example/.test(JSON.stringify(sent)) === false, 'personal details leaked: ' + sent.body);
+  assert.ok(sent.body.indexOf('[number]') !== -1 && sent.body.indexOf('[email]') !== -1);
+  assert.deepStrictEqual(sent.labels, ['app-report']);
+  assert.ok(sent.body.indexOf('ghp_SECRET') === -1, 'the token must never be in the issue');
+  assert.strictEqual(sheets.Issues.rows[1][7], 'sent');
+  assert.strictEqual(sheets.Issues.rows[1][8], 'https://github.com/o/r/issues/7');
+  assert.ok(/Bearer ghp_/.test(gh[0].opts.headers.Authorization));
+});
+
+test('a retried report does not open a second GitHub issue', () => {
+  const { SF, props, tok, gh } = reporter('owner');
+  props.GITHUB_TOKEN = 'ghp_x';
+  SF.dispatch('reportIssue', { token: tok, opId: 'same', message: 'Labels will not print' });
+  const again = SF.dispatch('reportIssue', { token: tok, opId: 'same', message: 'Labels will not print' });
+  assert.strictEqual(again.replayed, true);
+  assert.strictEqual(gh.length, 1);
+});
+
+test('an empty report is refused and at most 5 an hour are accepted', () => {
+  const { SF, tok } = reporter('owner');
+  assert.strictEqual(SF.dispatch('reportIssue', { token: tok, opId: 'e', message: 'hi' }).ok, false);
+  for (let i = 0; i < 5; i++) {
+    assert.strictEqual(SF.dispatch('reportIssue', { token: tok, opId: 'n' + i, message: 'Problem number ' + i }).ok, true);
+  }
+  assert.strictEqual(SF.dispatch('reportIssue', { token: tok, opId: 'n6', message: 'One more problem' }).ok, false);
+});
+
+test('connecting reports checks the token with GitHub before keeping it', () => {
+  const { SF, props } = shop(day(3));
+  assert.strictEqual(SF.reportsConnected(), false);
+  assert.strictEqual(SF.connectGithub('not a token').ok, false);
+  assert.strictEqual(SF.connectGithub('github_pat_' + 'x'.repeat(30)).ok, false, 'GitHub refused it');
+  assert.strictEqual(props.GITHUB_TOKEN, undefined, 'a refused token is not kept');
+  const r = SF.connectGithub('  github_pat_good' + 'x'.repeat(30) + '  ');
+  assert.strictEqual(r.ok, true, r.message);
+  assert.strictEqual(props.GITHUB_TOKEN, 'github_pat_good' + 'x'.repeat(30));
+  assert.strictEqual(SF.reportsConnected(), true);
+  SF.setPin('owner', '4321');
+  const tok = SF.dispatch('signIn', { pin: '4321', device: 'd' }).data.token;
+  assert.strictEqual(SF.dispatch('health', { token: tok }).data.reports, true);
+});
+
+test('reporting needs a sign-in', () => {
+  const { SF } = shop(day(3));
+  assert.strictEqual(SF.dispatch('reportIssue', { opId: 'x', message: 'Anything at all' }).ok, false);
 });
 
 console.log(failures ? '\n' + failures + ' failed' : '\nall passed');

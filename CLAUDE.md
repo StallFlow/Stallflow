@@ -12,7 +12,8 @@ Sheet, owned by the StallFlow Google account and shared with the stall owner.
 web/                 the front end, one copy for every stall
   index.html         customer order page            → /<slug>/
   app/               staff app (PWA, works offline)  → /<slug>/app/
-  core/ plugins/     shared scripts and styles
+  core/ plugins/     shared scripts and styles (core/places.js: Google place
+                     suggestions for Where boxes; off without a mapsKey)
   landing.html       stallflow.github.io/Stallflow/
 server/              Apps Script, identical in every stall's sheet
   Core.gs            sheets, settings, identity, audit, plugin host, router, migrations
@@ -21,6 +22,8 @@ server/              Apps Script, identical in every stall's sheet
   Platform.gs        Google client ID and StallFlow admins, same for every stall
   Plugins.gs         presets, scale/kitchen/cash-up plugins, the sheet menu
   appsscript.json    manifest (web app: execute as owner, anyone can call)
+stalls/platform.json  settings shared by every stall: mapsKey (Google Maps
+                     browser key, public by design, referrer-restricted)
 stalls/<slug>/       one folder per stall
   stall.json         name, api (web app /exec URL), scriptId, deploymentId
   Tenant.gs          seed data for that stall (StallFlow › Load this stall)
@@ -99,6 +102,7 @@ action needs an owner or manager token.
 for f in web/core/*.js web/plugins/*.js web/app/sw.js; do node --check "$f"; done
 for f in server/*.gs stalls/*/*.gs; do cp "$f" /tmp/c.js && node --check /tmp/c.js; done
 node tests/server.test.js      # runs the real server code against a fake sheet
+node tests/browser.test.js     # the real app in a browser against that server (needs Playwright)
 scripts/build-site.sh
 ```
 

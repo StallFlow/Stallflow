@@ -289,6 +289,7 @@ function onOpen() {
     .addSeparator()
     .addItem('Health check', 'sfHealth')
     .addItem('Check Google sign-in', 'sfCheckGoogle')
+    .addItem('Connect problem reports to Claude…', 'sfConnectReports')
     .addItem('Delete past customers\' details', 'sfPurge')
     .addItem('Export orders', 'sfExport')
     .addItem('Clear trading data', 'sfClear')
@@ -346,10 +347,31 @@ function sfHealth() {
     'Schema ' + h.schema.at + ' of ' + h.schema.expected + '\n' +
     'Market type: ' + h.preset + '\n' +
     'Sign-in: ' + (h.google ? 'Google' : h.locked ? 'PINs' :
-                   'OFF — anyone with the link is an owner') + '\n\n' +
+                   'OFF — anyone with the link is an owner') + '\n' +
+    'Problem reports: ' + (h.reports ? 'go to Claude' :
+                           'kept in the Issues tab only (StallFlow › Connect problem reports)') + '\n\n' +
     'Plugins:\n• ' + h.plugins.map(function (p) {
       return p.name + ' ' + p.version + (p.on ? '' : ' (off)'); }).join('\n• ') + '\n\n' +
     (h.problems.length ? 'Problems:\n• ' + h.problems.join('\n• ') : 'No problems found.'));
+}
+
+/**
+ * Paste the GitHub token here, in the sheet, never in a chat or an e-mail.
+ * It is checked against GitHub before it is kept.
+ */
+function sfConnectReports() {
+  var ui = SpreadsheetApp.getUi();
+  var res = ui.prompt('Connect problem reports to Claude',
+    (SF.reportsConnected() ? 'Reports are already connected. Paste a new token to replace it.\n\n' : '') +
+    'On github.com: your picture › Settings › Developer settings › Fine-grained tokens › ' +
+    'Generate new token.\n' +
+    '• Repository access: only StallFlow/Stallflow\n' +
+    '• Permissions: Issues → Read and write (nothing else)\n\n' +
+    'Paste the token (it starts with github_pat_):', ui.ButtonSet.OK_CANCEL);
+  if (res.getSelectedButton() !== ui.Button.OK) return;
+  var out = SF.connectGithub(res.getResponseText());
+  ui.alert(out.ok ? 'Done' : 'Not connected', out.message +
+    (out.ok ? '\n\nTry it: in the app, More › Report a problem.' : ''), ui.ButtonSet.OK);
 }
 
 function sfExport() {

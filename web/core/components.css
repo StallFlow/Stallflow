@@ -150,6 +150,17 @@ tr.here{background:var(--surface-2)}
 .poster .sub2{font-size:10pt;color:#555;margin-top:2mm}
 .poster .url{font-size:7pt;color:#999;margin-top:6mm;word-break:break-all}
 
+/* ---- place suggestions (places.js) ------------------------------------ */
+.field.place{position:relative}
+.sug{position:absolute;left:0;right:0;top:100%;margin-top:4px;z-index:40;background:var(--surface);
+  border:1px solid var(--rule);border-radius:var(--radius-sm);box-shadow:var(--shadow-lift);overflow:hidden}
+.sug .opt{display:block;width:100%;text-align:left;background:none;border:0;border-bottom:1px solid var(--rule);
+  border-radius:0;padding:11px 14px;min-height:var(--tap);color:var(--ink);font:inherit;cursor:pointer;box-shadow:none}
+.sug .opt b{display:block;font-weight:700;font-size:15px}
+.sug .opt span{display:block;font-size:13px;color:var(--muted);margin-top:2px}
+.sug .opt:hover,.sug .opt.on{background:var(--surface-2)}
+.sug .by{font-size:11px;color:var(--faint);text-align:right;padding:6px 12px}
+
 @media print{
   #sheet,.poster{border:none;border-radius:0;padding:0;margin:0;max-width:none}
   .labels{gap:3mm}
