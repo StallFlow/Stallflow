@@ -22,8 +22,9 @@
     render: function (ctx) {
       var d = ctx.data, s = d.summary, v = SF.state.vocab;
       var opts = d.markets.map(function (m) {
-        return '<option value="' + m.id + '"' + (m.id === d.marketId ? ' selected' : '') + '>' +
-          esc(m.name) + (m.date ? ' · ' + esc(m.date) : '') + '</option>';
+        return '<option value="' + m.id + '"' + (m.id === d.marketId ? ' selected' : '') +
+          (m.pending ? ' disabled' : '') + '>' +
+          esc(m.name) + (m.date ? ' · ' + esc(m.date) : '') + (m.pending ? ' · saving…' : '') + '</option>';
       }).join('') || '<option>No markets yet</option>';
 
       var tb = SF.tabs('numbers', [['today', 'This market'], ['costs', 'Costs'],
@@ -172,7 +173,10 @@
       '<div class="row"><div class="field" style="flex:2"><label for="mn">Name</label>' +
         '<input id="mn" placeholder="Spring Craft Market"></div>' +
         '<div class="field"><label for="md">Date</label><input id="md" type="date"></div>' +
-        '<div class="field"><label for="ml">Where</label><input id="ml" placeholder="Church hall"></div>' +
+        '<div class="field"><label for="ml">Where</label>' +
+          '<input id="ml" placeholder="Church hall" oninput="SFA.mapsLink()">' +
+          '<a id="mlmap" href="#" target="_blank" rel="noopener" style="display:none;margin-top:6px;' +
+            'font-size:14px;font-weight:600">Open in Maps &#8599;</a></div>' +
       '</div><button class="ghost" onclick="SFA.addMarket()">Add market</button></div>';
   }
 
@@ -514,8 +518,29 @@
     addMarket: function () {
       var n = SF.el('mn').value;
       if (String(n).trim().length < 2) { SF.toast('Give the market a name.', true); return; }
-      SF.write('addMarket', { name: n, date: SF.el('md').value, location: SF.el('ml').value });
+      var date = SF.el('md').value, where = SF.el('ml').value;
+      // Show it in every market list straight away, as "saving", so it is
+      // there to choose even before the server (or the signal) has answered.
+      // The real id replaces this once the write goes through and the screens reload.
+      var temp = { id: 'pending-' + Date.now(), name: String(n).trim(), date: date,
+                   location: where, pending: true };
+      SF.write('addMarket', { name: n, date: date, location: where }, function () {
+        ['numbers', 'till'].forEach(function (v) {
+          var d = SF.state.data[v];
+          if (d && d.markets) d.markets.splice(Math.max(d.markets.length - 1, 0), 0, temp);
+        });
+      });
+      SF.el('mn').value = ''; SF.el('md').value = ''; SF.el('ml').value = '';
+      SFA.mapsLink();
       SF.toast('Market added');
+    },
+    /* "Open in Maps" beside the Where box: a plain Google Maps search for
+       whatever is typed. No key, no account, works on a phone. */
+    mapsLink: function () {
+      var a = SF.el('mlmap'), q = String(SF.el('ml').value || '').trim();
+      if (!a) return;
+      a.style.display = q ? 'inline-block' : 'none';
+      a.href = q ? 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(q) : '#';
     },
 
     labelMode: function (m) {

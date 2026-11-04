@@ -116,7 +116,9 @@
     var opts = (d.markets || []).map(function (m) {
       var label = m.id === 'HOME' ? 'Between markets (home, friends, WhatsApp)'
         : m.name + (m.date ? ' · ' + m.date : '');
+      if (m.pending) label = m.name + ' · saving…';
       return '<option value="' + (m.id === 'HOME' ? 'home' : esc(m.id)) + '"' +
+        (m.pending ? ' disabled' : '') +
         ((m.id === at || (m.id === 'HOME' && (at === 'HOME' || at === 'home'))) ? ' selected' : '') + '>' +
         esc(label) + '</option>';
     }).join('');
