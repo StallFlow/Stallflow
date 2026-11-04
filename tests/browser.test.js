@@ -174,7 +174,11 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
     });
     page.on('pageerror', (e) => { env.pageErrors = (env.pageErrors || []).concat(String(e)); });
     await ctx.route('https://script.google.com/**', async (route) => {
-      const body = JSON.parse(route.request().postData() || '{}');
+      const req = route.request();
+      // The order page reads with GET (?action=catalogue&market=…); the staff app always POSTs.
+      const body = req.method() === 'GET'
+        ? Object.fromEntries(new URL(req.url()).searchParams)
+        : JSON.parse(req.postData() || '{}');
       if (env.offline) return route.abort('internetdisconnected');
       if (opts.delay) await new Promise((r) => setTimeout(r, opts.delay));
       const out = SF.dispatch(body.action, body);
@@ -214,9 +218,9 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
     const names = await suggestions(page).allTextContents();
     assert.ok(names[0].indexOf('Monument Primary School') !== -1, names.join(' / '));
     assert.ok((await page.textContent('#ml-sug')).indexOf('Suggestions from Google') !== -1);
-    if (process.env.SF_SHOT) {           // a picture of the list, for a person to look at
+    if (process.env.SF_SHOT) {           // pictures for a person to look at: SF_SHOT is a folder
       await page.locator('.card:has(#ml)').scrollIntoViewIfNeeded();
-      await page.screenshot({ path: process.env.SF_SHOT });
+      await page.screenshot({ path: path.join(process.env.SF_SHOT, 'place-suggestions.png') });
     }
     assert.ok((await page.evaluate(() => window.__placeQueries)).every((q) => /\|za$/.test(q)), 'South Africa only');
     await suggestions(page).first().click();
@@ -453,11 +457,136 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
     await env.ctx.close();
   });
 
+  /* ---------- an order page for every market, and between markets ---------- */
+  const site = base.replace(/app\/$/, '');
+  const addFuture = (SF, id, name, n, where) =>
+    SF.append('markets', { MarketId: id, Name: name, Date: day(n), Location: where || '', Status: 'planned' });
+  async function customer(env, query) {
+    const page = await env.ctx.newPage();
+    await page.setViewportSize({ width: 412, height: 860 });
+    page.on('pageerror', (e) => { env.pageErrors = (env.pageErrors || []).concat(String(e)); });
+    await page.goto(site + (query || ''));
+    await page.waitForSelector('.card');
+    return page;
+  }
+  async function reserveOne(page, name) {
+    await page.click('.stepper button[aria-label^="More"]');
+    await page.fill('#nm', name || 'Anna Bester'); await page.fill('#ph', '082 555 0101');
+    await page.check('#cs'); await page.click('#go');
+    await page.waitForSelector('.done');
+  }
+
+  await test('the posters are one per open market plus between markets, each with its own link', async () => {
+    const env = await phone({ hash: '#labels' });
+    addFuture(env.SF, 'M02', 'Monument Primary Market', 2, 'Monument Primary School, Pretoria');
+    const page = env.page;
+    await page.evaluate(() => { SF.load('labels'); });
+    await page.waitForFunction(() => SF.state.data.labels && SF.state.data.labels.markets.length === 2);
+    await page.click('#tabP');
+    const options = await page.locator('#pfor option').allTextContents();
+    assert.ok(/Monument Primary Market/.test(options[0]), options.join(' / '));
+    assert.ok(/Between markets/.test(options[1]), options.join(' / '));
+    assert.ok(!options.some((o) => /Test Market/.test(o)), 'the past market has no poster');
+    assert.strictEqual((await page.textContent('.poster .url')).trim(), site + '?m=M02');
+    assert.ok(/Monument Primary School, Pretoria/.test(await page.textContent('.poster .mkt')));
+    if (process.env.SF_SHOT) await page.locator('.poster').screenshot({ path: path.join(process.env.SF_SHOT, 'poster-market.png') });
+    await page.selectOption('#pfor', 'home');
+    assert.strictEqual((await page.textContent('.poster .url')).trim(), site + '?m=home');
+    assert.ok(/Order any time/.test(await page.textContent('.poster .mkt')));
+    await env.ctx.close();
+  });
+
+  await test('a new market gets its own order page and poster straight away', async () => {
+    const env = await phone({ hash: '#numbers' });
+    const page = env.page;
+    await openNewMarket(page);
+    await page.fill('#mn', 'Spring Fair'); await page.fill('#md', day(4));
+    await page.click('text=Add market');
+    await page.waitForFunction(() => !SF.outbox.pending().length);
+    const id = env.sheets.Markets.rows.find((r) => r[1] === 'Spring Fair')[0];
+    await page.evaluate((m) => { SF.ls.set('sf.tab.numbers', 'today'); SFA.pickMarket(m); }, id);
+    await page.waitForFunction((m) => SF.state.data.numbers && SF.state.data.numbers.marketId === m, id);
+    await page.waitForSelector('#olink');
+    assert.strictEqual((await page.textContent('#olink')).trim(), site + '?m=' + id);
+    assert.ok(/Taking orders/.test(await page.textContent('.card:has(#olink)')));
+    await page.click('text=Poster');
+    await page.waitForSelector('.poster .url');
+    assert.strictEqual((await page.textContent('.poster .url')).trim(), site + '?m=' + id);
+    await env.ctx.close();
+  });
+
+  await test("a market's order page takes orders for that market only", async () => {
+    const env = await phone({ hash: '#till' });
+    addFuture(env.SF, 'M02', 'Monument Primary Market', 2, 'Monument Primary School');
+    const page = await customer(env, '?m=M02');
+    assert.ok(/Monument Primary Market/.test(await page.textContent('.when')));
+    await reserveOne(page);
+    assert.ok(/on \w{3} \d+ \w{3}/.test(await page.textContent('.done')), 'tells them which day');
+    const row = env.sheets.Orders.rows.find((r) => r[4] === 'Anna Bester');
+    assert.strictEqual(row[2], 'M02');
+    await env.ctx.close();
+  });
+
+  await test('the usual link with a past market offers the open markets instead of a dead end', async () => {
+    const env = await phone({ hash: '#till' });
+    addFuture(env.SF, 'M02', 'Monument Primary Market', 2);
+    const page = await customer(env, '');
+    const text = await page.textContent('.card');
+    assert.ok(/Pre-orders for Test Market are closed/.test(text), text);
+    assert.ok(/Which market are you coming to/.test(text));
+    if (process.env.SF_SHOT) await page.screenshot({ path: path.join(process.env.SF_SHOT, 'order-page-choose.png'), fullPage: true });
+    const choices = await page.locator('a.mkt b').allTextContents();
+    assert.deepStrictEqual(choices, ['Monument Primary Market', 'Between markets']);
+    await page.click('a.mkt:has-text("Monument Primary Market")');
+    await page.waitForSelector('.stepper');
+    assert.ok(page.url().endsWith('?m=M02'));
+    await env.ctx.close();
+  });
+
+  await test('orders between markets are taken any time and kept apart', async () => {
+    const env = await phone({ hash: '#till' });
+    const page = await customer(env, '?m=home');
+    assert.ok(/Order any time/.test(await page.textContent('.when')));
+    assert.ok(/Pay when you collect/.test(await page.textContent('.steps')));
+    await reserveOne(page, 'Thabo Nkosi');
+    assert.ok(/arrange the collection/.test(await page.textContent('.done')));
+    assert.strictEqual(env.sheets.Orders.rows.find((r) => r[4] === 'Thabo Nkosi')[2], 'HOME');
+    await env.ctx.close();
+  });
+
+  await test('with no market open and between markets off, the page says so plainly', async () => {
+    const env = await phone({ hash: '#till' });
+    env.SF.set('homeOrders', 'no');
+    const page = await customer(env, '');
+    assert.ok(/Pre-orders are closed/.test(await page.textContent('.card')));
+    assert.strictEqual(await page.locator('a.mkt').count(), 0);
+    await env.ctx.close();
+  });
+
+  await test('Collect shows the orders for the market this phone is at', async () => {
+    const env = await phone({ hash: '#collect' });
+    addFuture(env.SF, 'M02', 'Monument Primary Market', 2);
+    const placed = env.SF.dispatch('placeOrder', { opId: 'x1', market: 'M02', name: 'Marie du Plessis',
+      phone: '082 111 2222', consent: true, lines: [{ id: 'P01', qty: 1 }] });
+    assert.strictEqual(placed.ok, true, placed.message);
+    const page = env.page;
+    await page.goto(base + '#till'); await page.goto(base + '#collect');
+    await page.waitForSelector('#sellat');
+    await page.evaluate(() => { SF.ls.set('sf.tab.collect', 'topay'); SF.render(); });
+    assert.ok(!/Marie du Plessis/.test(await page.textContent('#view')), 'not at the live market');
+    await page.selectOption('#sellat', 'M02');
+    await page.waitForFunction(() => SF.state.data.collect && SF.state.data.collect.marketId === 'M02');
+    await page.evaluate(() => SF.render());
+    assert.ok(/Marie du Plessis/.test(await page.textContent('#view')));
+    await env.ctx.close();
+  });
+
   await test('no page errors anywhere in the run', async () => {
     const env = await phone({ hash: '#numbers' });
     for (const h of ['#till', '#collect', '#stock', '#labels', '#numbers', '#settings', '#health', '#report']) {
       await env.page.goto(base + h); await settle(env.page, 500);
     }
+    for (const q of ['', '?m=home', '?m=M01', '?m=nonsense']) await customer(env, q);
     assert.deepStrictEqual(env.pageErrors || [], []);
     await env.ctx.close();
   });

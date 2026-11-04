@@ -451,6 +451,108 @@ test('uncooked stock is a list she can add to and update', () => {
   assert.strictEqual(SF.dispatch('savePantry', { token: tok, opId: 'p4', item: 'x', qty: 1 }).ok, false);
 });
 
+/* ---------- an order page for every market, and one between markets ---------- */
+
+function markets3() {
+  const env = shop(day(3));                       // M01, live, in three days
+  env.SF.append('markets', { MarketId: 'M02', Name: 'Monument Primary', Date: day(10), Status: 'planned' });
+  env.SF.append('markets', { MarketId: 'M03', Name: 'Last Month', Date: day(-20), Status: 'planned' });
+  env.SF.setPin('owner', '4321');
+  env.tok = env.SF.dispatch('signIn', { pin: '4321', device: 'd' }).data.token;
+  return env;
+}
+const cat = (SF, market) => SF.dispatch('catalogue', market === undefined ? {} : { market }).data;
+
+test('each market has its own order page, and past ones are closed', () => {
+  const { SF } = markets3();
+  assert.strictEqual(cat(SF).market.id, 'M01', 'no ?m= is the live market');
+  assert.strictEqual(cat(SF).open, true);
+  assert.strictEqual(cat(SF, 'M02').market.name, 'Monument Primary');
+  assert.strictEqual(cat(SF, 'M02').open, true);
+  assert.strictEqual(cat(SF, 'M03').open, false);
+  assert.strictEqual(cat(SF, 'nonsense').open, false);
+  assert.strictEqual(cat(SF, 'nonsense').market, null);
+  assert.strictEqual(JSON.stringify(cat(SF).markets.map((m) => m.id)), '["M01","M02","home"]',
+                     'soonest first, past ones left out, between markets last');
+});
+
+test('an order from a market page belongs to that market and shows in its queue', () => {
+  const { SF, sheets, tok } = markets3();
+  const r = order(SF, { market: 'M02' });
+  assert.strictEqual(r.ok, true, r.message);
+  assert.strictEqual(r.market.name, 'Monument Primary');
+  const row = sheets.Orders.rows.find((x) => x[0] === r.orderNo);
+  assert.strictEqual(row[2], 'M02');
+  const here = SF.dispatch('queue', { token: tok, marketId: 'M02' }).data;
+  const live = SF.dispatch('queue', { token: tok }).data;
+  assert.ok(here.unpaid.some((o) => o.no === r.orderNo), 'in the M02 queue');
+  assert.ok(!live.unpaid.some((o) => o.no === r.orderNo), 'not in the live market queue');
+  assert.ok(SF.dispatch('till', { token: tok, marketId: 'M02' }).data.unpaid.some((o) => o.no === r.orderNo));
+});
+
+test('a past market refuses orders while the others still take them', () => {
+  const { SF } = markets3();
+  const refused = order(SF, { market: 'M03' });
+  assert.strictEqual(refused.ok, false);
+  assert.strictEqual(refused.code, 'closed');
+  assert.strictEqual(order(SF, { market: 'M02' }).ok, true);
+});
+
+test('orders between markets are always open, and can be switched off', () => {
+  const { SF, sheets, tok } = markets3();
+  const home = cat(SF, 'home');
+  assert.strictEqual(home.open, true);
+  assert.strictEqual(home.market.home, true);
+  assert.ok(/collected/.test(home.consentText), home.consentText);
+  const r = order(SF, { market: 'home' });
+  assert.strictEqual(r.ok, true, r.message);
+  assert.strictEqual(sheets.Orders.rows.find((x) => x[0] === r.orderNo)[2], 'HOME');
+  assert.ok(SF.dispatch('queue', { token: tok, marketId: 'home' }).data.unpaid.some((o) => o.no === r.orderNo));
+  SF.dispatch('setHomeOrders', { token: tok, opId: 'h0', open: false });
+  assert.strictEqual(cat(SF, 'home').open, false);
+  assert.strictEqual(order(SF, { market: 'home' }).ok, false);
+  assert.ok(!cat(SF).markets.some((m) => m.id === 'home'));
+});
+
+test('switching pre-orders off closes every market page', () => {
+  const { SF, tok } = markets3();
+  SF.dispatch('setPreordersOpen', { token: tok, opId: 'p0', open: false });
+  ['M01', 'M02', 'home'].forEach((m) => assert.strictEqual(cat(SF, m).open, false, m));
+  assert.strictEqual(cat(SF).markets.length, 0);
+});
+
+test('a between-markets customer keeps their details until the order is handed over', () => {
+  const { SF, sheets, tok } = markets3();
+  const r = order(SF, { market: 'home', name: 'Thabo Nkosi' });
+  const row = () => sheets.Orders.rows.find((x) => x[0] === r.orderNo);
+  SF.purgeCustomers();
+  assert.strictEqual(row()[4], 'Thabo Nkosi', 'still waiting, so the name stays');
+  SF.dispatch('markPaid', { token: tok, opId: 'mp', orderNo: r.orderNo });
+  SF.dispatch('markCollected', { token: tok, opId: 'mc', orderNo: r.orderNo });
+  SF.purgeCustomers();
+  assert.strictEqual(row()[4], 'Customer', 'handed over, so the name goes');
+  assert.strictEqual(row()[5], '');
+});
+
+test('made-to-order capacity is counted per market', () => {
+  const { SF, tok } = markets3();
+  SF.append('products', { ProductId: 'P09', Name: 'Coffee', Type: 'made', Unit: 'each', Price: 30,
+                          Capacity: 2, Active: 'Yes', Sort: 90 });
+  assert.strictEqual(order(SF, { market: 'M01', lines: [{ id: 'P09', qty: 2 }] }).ok, true);
+  const avail = (m) => cat(SF, m).products.find((p) => p.id === 'P09').available;
+  assert.strictEqual(avail('M01'), 0);
+  assert.strictEqual(avail('M02'), 2, 'another market has its own capacity');
+  assert.strictEqual(SF.dispatch('till', { token: tok, marketId: 'M02' }).data.products
+    .find((p) => p.id === 'P09').available, 2);
+});
+
+test('stock taken by an order is recorded against the market it is for', () => {
+  const { SF, sheets } = markets3();
+  const r = order(SF, { market: 'M02' });
+  const mv = sheets.Movements.rows.find((x) => x[4] === r.orderNo);
+  assert.strictEqual(mv[5], 'M02');
+});
+
 /* ---------- reporting a problem ---------- */
 
 function reporter(role) {

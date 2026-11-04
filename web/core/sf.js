@@ -296,6 +296,14 @@ window.SF = (function () {
     labels: 'labels', numbers: 'dashboard'
   };
 
+  /** Numbers shows the market picked on Numbers; Till and Collect the market this phone is at. */
+  function paramsFor(view) {
+    if (view === 'numbers' && S.marketId) return { marketId: S.marketId };
+    var at = LS.get('sf.sellAt', '');
+    if ((view === 'till' || view === 'collect') && at) return { marketId: at };
+    return {};
+  }
+
   function load(view) {
     var action = SOURCE[view];
     if (!action) { render(true); return Promise.resolve(); }
@@ -304,8 +312,7 @@ window.SF = (function () {
     if (cached) { S.data[view] = cached.data; S.at[view] = cached.at; }
     render(true);
 
-    var params = view === 'numbers' && S.marketId ? { marketId: S.marketId }
-      : view === 'till' && LS.get('sf.sellAt', '') ? { marketId: LS.get('sf.sellAt', '') } : {};
+    var params = paramsFor(view);
     return get(action, params).then(function (res) {
       if (res && res.code === 'auth') { signOut(true); return; }
       if (!res || res.ok === false) throw new Error((res && res.message) || 'refused');
@@ -321,8 +328,7 @@ window.SF = (function () {
   function fetchInto(view) {
     var action = SOURCE[view];
     if (!action) return Promise.resolve();
-    var params = view === 'numbers' && S.marketId ? { marketId: S.marketId }
-      : view === 'till' && LS.get('sf.sellAt', '') ? { marketId: LS.get('sf.sellAt', '') } : {};
+    var params = paramsFor(view);
     return get(action, params).then(function (res) {
       if (!res || res.ok === false) return;
       S.data[view] = res.data;

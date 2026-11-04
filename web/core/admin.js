@@ -21,6 +21,7 @@
     id: 'numbers', title: 'Numbers', cap: 'reports',
     render: function (ctx) {
       var d = ctx.data, s = d.summary, v = SF.state.vocab;
+      var on = d.preordersOn !== undefined ? d.preordersOn : d.preordersOpen;
       var opts = d.markets.map(function (m) {
         return '<option value="' + m.id + '"' + (m.id === d.marketId ? ' selected' : '') +
           (m.pending ? ' disabled' : '') + '>' +
@@ -43,22 +44,21 @@
         '</div></div>' +
 
         '<div class="toggle"><div><div class="t">Pre-orders are ' +
-          (d.preordersOpen ? 'open' : 'closed') + '</div><div class="s">' +
-          (d.preordersOpen ? 'Customers can reserve right now.'
-                           : 'The order page turns people away politely.') + '</div></div>' +
-          '<button class="' + (d.preordersOpen ? 'bad' : 'ok') + ' sm" onclick="SFA.togglePre(' +
-          (d.preordersOpen ? 'false' : 'true') + ')">' +
-          (d.preordersOpen ? 'Close' : 'Open') + '</button></div>' +
+          (on ? 'on' : 'off') + '</div><div class="s">' +
+          (on ? 'Every market takes orders on its own page until its day.'
+              : 'Every order page turns people away politely.') + '</div></div>' +
+          '<button class="' + (on ? 'bad' : 'ok') + ' sm" onclick="SFA.togglePre(' +
+          (on ? 'false' : 'true') + ')">' + (on ? 'Switch off' : 'Switch on') + '</button></div>' +
         (d.marketPassed ? '<div class="notice warn" style="border-radius:10px;margin-bottom:14px">' +
-          'This market\'s date has passed, so the order page is closed. Add the next market ' +
-          'below and make it live.</div>' : '') +
+          'The live market has been and gone. Customers on your usual link now choose from your ' +
+          'other markets. Make the next one live when you are ready.</div>' : '') +
         (d.summary.outstanding > 0 ? '<button class="ghost block" style="margin-bottom:14px" ' +
           'onclick="SFA.askRelease()">Release unpaid reservations (' +
           moneyShort(d.summary.outstanding) + ')</button>' : '') +
 
         tb.html +
         (tb.on === 'today'
-          ? '<div class="snap two">' +
+          ? orderPage(d, on) + '<div class="snap two">' +
               figure('Cost of what sold', moneyShort(s.cogs), 'to make it') +
               figure('Sold', qty(s.units, 'each') + ' ' + v.units, s.orders + ' sales') +
             '</div>' + breakEven(s, v) + best(d)
@@ -69,6 +69,50 @@
         '<div class="foot">StallFlow · market view</div></div>';
     }
   });
+
+  /* ------------------------------------------------------------------
+     Every market has its own order page and poster, made the moment the
+     market is added. Between markets has one too, open all the time.
+     ------------------------------------------------------------------ */
+  function orderLink(id) {
+    id = String(id || '');
+    return SF.site + (id ? '?m=' + encodeURIComponent(id.toUpperCase() === 'HOME' ? 'home' : id) : '');
+  }
+
+  /** 2026-11-06 → Fri 6 Nov. */
+  function prettyDate(iso) {
+    var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || ''));
+    if (!m) return String(iso || '');
+    var d = new Date(+m[1], +m[2] - 1, +m[3]);
+    return ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d.getDay()] + ' ' + d.getDate() + ' ' +
+      ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][d.getMonth()];
+  }
+
+  function orderPage(d, on) {
+    var home = d.marketId === 'HOME', m = null;
+    d.markets.forEach(function (x) { if (x.id === d.marketId) m = x; });
+    if (!m || m.pending) return '';
+    var state = !on ? 'Pre-orders are switched off, so this page turns people away politely.'
+      : home ? (d.homeOrders ? 'Open all the time. Customers collect by arrangement.'
+                             : 'Switched off. Customers who open it are shown your markets instead.')
+      : d.takesOrders ? 'Taking orders until the day of the market.'
+      : 'This market has been and gone, so its page shows your other markets instead.';
+    var id = esc(d.marketId);
+    return '<div class="card"><h2>' + (home ? 'Order page between markets' : 'Order page for this market') +
+      '</h2><div class="sub">' + state + '</div>' +
+      '<div class="linkbox" id="olink">' + esc(orderLink(d.marketId)) + '</div>' +
+      '<div class="row" style="margin-top:10px">' +
+        '<button class="ghost" onclick="SFA.shareLink(\'' + id + '\')">Share</button>' +
+        '<button class="ghost" onclick="SFA.copyLink(\'' + id + '\')">Copy link</button>' +
+        '<button class="ghost" onclick="SFA.openPoster(\'' + id + '\')">Poster</button>' +
+      '</div>' +
+      (home ? '<div class="toggle" style="margin:12px 0 0"><div><div class="t">Orders between markets ' +
+        (d.homeOrders ? 'on' : 'off') + '</div><div class="s">For friends, family and WhatsApp ' +
+        'orders when there is no market.</div></div><button class="' + (d.homeOrders ? 'bad' : 'ok') +
+        ' sm" onclick="SFA.toggleHome(' + (d.homeOrders ? 'false' : 'true') + ')">' +
+        (d.homeOrders ? 'Switch off' : 'Switch on') + '</button></div>' : '') +
+      '</div>';
+  }
 
   function breakEven(s, v) {
     var pct = s.expenses > 0 ? Math.min(100, Math.max(0, s.gross / s.expenses * 100)) : 100;
@@ -190,6 +234,27 @@
 
   var labelMode = 'labels';
 
+  /** Which market's poster: remembered on this phone, else the soonest. */
+  function posterChoice(d) {
+    var list = d.markets || [], want = SF.ls.get('sf.posterFor', ''), pick = null;
+    list.forEach(function (m) { if (m.id === want || (m.home && /^home$/i.test(want))) pick = m; });
+    return pick || list[0] || null;
+  }
+
+  function posterPicker(d) {
+    var pick = posterChoice(d);
+    return '<div id="posterpick"' + (labelMode === 'poster' ? '' : ' style="display:none"') + '>' +
+      ((d.markets || []).length
+        ? '<div class="field"><label for="pfor">Poster for</label><select id="pfor" ' +
+          'onchange="SF.ls.set(\'sf.posterFor\', this.value);SFA.drawLabels()">' +
+          d.markets.map(function (m) {
+            return '<option value="' + esc(m.id) + '"' + (pick && pick.id === m.id ? ' selected' : '') + '>' +
+              esc(m.home ? 'Between markets (order any time)'
+                         : m.name + (m.date ? ' · ' + prettyDate(m.date) : '')) + '</option>';
+          }).join('') + '</select></div>'
+        : '') + '</div>';
+  }
+
   SF.screen({
     id: 'labels', title: 'QR labels', cap: 'labels',
     render: function (ctx) {
@@ -200,9 +265,13 @@
           '<div class="sub">One per item. Stick it on the lid or the tag — at the till you ' +
             'scan it instead of hunting through the screen.</div>' +
           '<div class="row" style="margin-bottom:12px">' +
-            '<button id="tabL" onclick="SFA.labelMode(\'labels\')">Item labels</button>' +
-            '<button id="tabP" class="ghost" onclick="SFA.labelMode(\'poster\')">Order poster</button>' +
-          '</div><div id="picker">' + d.products.map(function (p) {
+            '<button id="tabL"' + (labelMode === 'labels' ? '' : ' class="ghost"') +
+              ' onclick="SFA.labelMode(\'labels\')">Item labels</button>' +
+            '<button id="tabP"' + (labelMode === 'poster' ? '' : ' class="ghost"') +
+              ' onclick="SFA.labelMode(\'poster\')">Order posters</button>' +
+          '</div>' + posterPicker(d) +
+          '<div id="picker"' + (labelMode === 'labels' ? '' : ' style="display:none"') + '>' +
+          d.products.map(function (p) {
             return '<div class="pick"><input type="checkbox" id="c-' + p.id + '"' +
               (p.active ? ' checked' : '') + ' onchange="SFA.drawLabels()">' +
               '<div class="info"><b>' + esc(p.name) + '</b><span>' + esc(p.id) +
@@ -415,6 +484,7 @@
     setActive: 'Hiding or showing a product', addMarket: 'A new market', reportIssue: 'A problem report',
     savePerson: 'A change to who has access',
     setActiveMarket: 'Changing the live market', setPreordersOpen: 'Opening or closing pre-orders',
+    setHomeOrders: 'Orders between markets',
     'cashup.record': 'A cash-up'
   };
 
@@ -539,9 +609,43 @@
     togglePre: function (open) {
       SF.write('setPreordersOpen', { open: open }, function () {
         var d = SF.state.data.numbers;
-        if (d) d.preordersOpen = open;
+        if (d) { d.preordersOpen = open; d.preordersOn = open; }
       });
-      SF.toast(open ? 'Pre-orders open' : 'Pre-orders closed');
+      SF.toast(open ? 'Pre-orders are on' : 'Pre-orders are off');
+    },
+    toggleHome: function (open) {
+      SF.write('setHomeOrders', { open: open }, function () {
+        var d = SF.state.data.numbers;
+        if (d) d.homeOrders = open;
+      });
+      SF.toast(open ? 'Orders between markets are on' : 'Orders between markets are off');
+    },
+    shareLink: function (id) {
+      var url = orderLink(id), name = (SF.state.boot && SF.state.boot.profile.name) || 'our stall';
+      if (navigator.share) {
+        navigator.share({ title: name, text: 'Order ahead from ' + name + ':', url: url })
+          .catch(function () { /* they closed the share sheet */ });
+      } else SFA.copyLink(id);
+    },
+    copyLink: function (id) {
+      var url = orderLink(id);
+      var done = function () { SF.toast('Link copied'); };
+      var byHand = function () {
+        var box = SF.el('olink');
+        if (box && window.getSelection) {
+          var r = document.createRange(); r.selectNodeContents(box);
+          var sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(r);
+        }
+        SF.toast('Press and hold the link to copy it.');
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(url).then(done, byHand);
+      } else byHand();
+    },
+    openPoster: function (id) {
+      SF.ls.set('sf.posterFor', String(id).toUpperCase() === 'HOME' ? 'home' : String(id));
+      labelMode = 'poster';
+      SF.go('labels');
     },
     addExpense: function () {
       var desc = SF.el('ed').value, amt = SF.el('ea').value;
@@ -586,7 +690,7 @@
         });
       });
       SF.el('mn').value = ''; SF.el('md').value = ''; SF.el('ml').value = '';
-      SF.toast('Market added');
+      SF.toast('Market added. Its order page and poster are ready.');
     },
 
     labelMode: function (m) {
@@ -594,6 +698,7 @@
       SF.el('tabL').className = m === 'labels' ? '' : 'ghost';
       SF.el('tabP').className = m === 'poster' ? '' : 'ghost';
       SF.el('picker').style.display = m === 'labels' ? '' : 'none';
+      if (SF.el('posterpick')) SF.el('posterpick').style.display = m === 'poster' ? '' : 'none';
       SFA.drawLabels();
     },
     tickAll: function (on) {
@@ -612,15 +717,30 @@
       var d = SF.state.data.labels, out = SF.el('out');
       if (!d || !out) return;
       if (labelMode === 'poster') {
-        out.innerHTML = '<div class="card noprint" style="padding:12px"><b>The poster QR</b> ' +
-          '<span class="muted small">— opens your order page. Put it at the entrance, or ' +
-          'hand it out the week before.</span></div>' +
+        var pick = posterChoice(d);
+        if (!pick) {
+          out.innerHTML = '<div class="card"><div class="empty">No market is taking orders right ' +
+            'now. Add one under Numbers › New market and its poster appears here.</div></div>';
+          return;
+        }
+        var link = orderLink(pick.id);
+        out.innerHTML = '<div class="card noprint" style="padding:12px"><b>' +
+          (pick.home ? 'The between-markets poster' : 'The poster for ' + esc(pick.name)) + '</b> ' +
+          '<span class="muted small">— the QR opens this market\'s own order page. Put it at ' +
+          'the entrance, or share it the week before.</span></div>' +
           '<div class="poster"><h1>' + esc(d.profile.name) + '</h1>' +
           '<div class="tag2">' + esc(d.profile.tagline || '') + '</div>' +
-          '<div class="qr">' + QR.svg(SF.site, { ec: 'H', border: 2 }) + '</div>' +
-          '<div class="cta">SCAN TO ORDER AHEAD</div>' +
-          '<div class="sub2">Reserve now — pay at the stall.<br>No app, no account.</div>' +
-          '<div class="url">' + esc(SF.site) + '</div></div>';
+          '<div class="mkt">' + (pick.home
+            ? 'Order any time<br><span>We arrange the collection with you</span>'
+            : esc(pick.name) + (pick.date ? '<br><span>' + prettyDate(pick.date) +
+              (pick.location ? ' · ' + esc(pick.location) : '') + '</span>'
+              : pick.location ? '<br><span>' + esc(pick.location) + '</span>' : '')) + '</div>' +
+          '<div class="qr">' + QR.svg(link, { ec: 'H', border: 2 }) + '</div>' +
+          '<div class="cta">' + (pick.home ? 'SCAN TO ORDER' : 'SCAN TO ORDER AHEAD') + '</div>' +
+          '<div class="sub2">' + (pick.home ? 'Reserve now — pay when you collect.'
+                                            : 'Reserve now — pay at the stall.') +
+            '<br>No app, no account.</div>' +
+          '<div class="url">' + esc(link) + '</div></div>';
         return;
       }
       var cards = [], n = 0;

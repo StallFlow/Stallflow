@@ -67,7 +67,8 @@ SF.madeSoFar = function (marketId) {
 SF.products = function (opts) {
   opts = opts || {};
   var hand = SF.onHand(), cost = SF.costPerUnit();
-  var made = SF.madeSoFar(SF.activeMarket());
+  // Made-to-order capacity is per market: what is left to make at THIS market.
+  var made = SF.madeSoFar(opts.market || SF.activeMarket());
 
   return SF.rows('products')
     .filter(function (p) {
@@ -119,10 +120,10 @@ SF.byId = function (list, id) {
   return null;
 };
 
-SF.move = function (productId, qty, type, ref) {
+SF.move = function (productId, qty, type, ref, marketId) {
   SF.append('movements', {
     When: new Date(), ProductId: productId, Qty: qty, Type: type,
-    Ref: ref || '', MarketId: SF.activeMarket()
+    Ref: ref || '', MarketId: marketId || SF.activeMarket()
   });
 };
 
@@ -170,7 +171,7 @@ SF.priceLine = function (product, line, ctx) {
 /** Shared by the order page and the till. Returns {ok, lines, units, total, cost}. */
 SF.buildLines = function (rawLines, ctx, opts) {
   opts = opts || {};
-  var catalogue = SF.products();
+  var catalogue = SF.products({ market: opts.market });
   var out = [], units = 0, total = 0, cost = 0;
 
   for (var i = 0; i < (rawLines || []).length; i++) {
@@ -256,6 +257,54 @@ SF.preordersOpen = function () {
 
 SF.MAX_OPEN_PER_PHONE = 2;
 
+/* -------------------------------------------------------------------------
+   Every market has its own order page: …/<slug>/?m=<MarketId>. Orders between
+   markets (home, friends, WhatsApp) use ?m=home and stay open all the time.
+   The plain address, without ?m=, is the live market, so QR codes printed
+   before this existed still work.
+   ------------------------------------------------------------------------- */
+
+/** Pre-orders switched on for the stall at all (the Numbers toggle). */
+SF.preordersOn = function () {
+  return String(SF.get('preordersOpen', 'yes')).toLowerCase() !== 'no';
+};
+
+/** Orders between markets switched on (default yes). */
+SF.homeOrdersOn = function () {
+  return String(SF.get('homeOrders', 'yes')).toLowerCase() !== 'no';
+};
+
+/** The market an order page or order is for. Blank: the live one. Unknown: null. */
+SF.orderMarket = function (id) {
+  id = String(id == null ? '' : id).trim();
+  var want = !id ? SF.activeMarket() : (id.toLowerCase() === 'home' ? SF.HOME : id);
+  var found = null;
+  SF.markets().forEach(function (m) { if (m.id === want) found = m; });
+  return found;
+};
+
+/** Is this market taking pre-orders right now? */
+SF.takesOrders = function (m) {
+  if (!m || !SF.preordersOn()) return false;
+  if (m.id === SF.HOME) return SF.homeOrdersOn();
+  if (String(m.status).toLowerCase() === 'cancelled') return false;
+  return !(m.date && m.date < SF.today());
+};
+
+/** Markets a customer can order for: upcoming ones by date, then between markets. */
+SF.orderableMarkets = function () {
+  return SF.markets().filter(SF.takesOrders).sort(function (a, b) {
+    if (a.id === SF.HOME) return 1;
+    if (b.id === SF.HOME) return -1;
+    return (a.date || '9999') < (b.date || '9999') ? -1 : (a.date || '9999') > (b.date || '9999') ? 1 : 0;
+  }).map(SF.publicMarket);
+};
+
+SF.publicMarket = function (m) {
+  return m ? { id: m.id === SF.HOME ? 'home' : m.id, name: m.id === SF.HOME ? 'Between markets' : m.name,
+               date: m.date, location: m.location, home: m.id === SF.HOME } : null;
+};
+
 /**
  * Wipe customer names, numbers and notes from orders of markets that are
  * over: not the live market, and dated before today (or undated). The order
@@ -264,11 +313,17 @@ SF.MAX_OPEN_PER_PHONE = 2;
 SF.purgeCustomers = function () {
   var live = SF.activeMarket(), today = SF.today(), over = {};
   SF.markets().forEach(function (m) {
+    if (m.id === SF.HOME) return;     // never "over": handled order by order below
     if (m.id !== live && (!m.date || m.date < today)) over[m.id] = true;
   });
   var n = 0;
   SF.rows('orders').forEach(function (o) {
-    if (!over[String(o.MarketId)] || String(o.Channel) !== 'preorder') return;
+    if (String(o.Channel) !== 'preorder') return;
+    // An order between markets has no market day to wait for: its details go
+    // once it is handed over or cancelled, and not before.
+    var home = String(o.MarketId) === SF.HOME;
+    var finished = /^(collected|cancelled)$/.test(String(o.Status));
+    if (home ? !finished : !over[String(o.MarketId)]) return;
     if (!o.Phone && String(o.Customer) === 'Customer') return;
     SF.setCell('orders', o._row, 'Customer', 'Customer');
     SF.setCell('orders', o._row, 'Phone', '');
@@ -318,12 +373,12 @@ SF.nextOrderNo = function () {
  * reservation is real. Made-to-order items are capacity, not stock, so they
  * are counted from the orders themselves and never touch the ledger.
  */
-SF.commitLines = function (lines, ref, direction) {
+SF.commitLines = function (lines, ref, direction, marketId) {
   var catalogue = SF.products({ all: true });
   lines.forEach(function (l) {
     var p = SF.byId(catalogue, l.id);
     if (!p || p.type === 'made') return;
-    SF.move(l.id, direction * l.units, direction < 0 ? 'sale' : 'return', ref);
+    SF.move(l.id, direction * l.units, direction < 0 ? 'sale' : 'return', ref, marketId);
   });
 };
 
@@ -331,23 +386,29 @@ SF.commitLines = function (lines, ref, direction) {
    5. ACTIONS — public
    ========================================================================= */
 
-SF.action('catalogue', null, 'read', function () {
+SF.action('catalogue', null, 'read', function (p) {
   var pr = SF.profile();
-  var market = null;
-  SF.markets().forEach(function (m) { if (m.id === SF.activeMarket()) market = m; });
+  var market = SF.orderMarket(p && p.market);
+  var home = !!market && market.id === SF.HOME;
 
   return {
     profile: {
       name: pr.name, tagline: pr.tagline, whatsapp: pr.whatsapp,
       colour: pr.colour, ink: pr.ink, paper: pr.paper, vocab: pr.vocab
     },
-    open: SF.preordersOpen(),
-    market: market,
+    open: SF.takesOrders(market),
+    market: SF.publicMarket(market),
+    asked: String((p && p.market) || ''),
+    markets: SF.orderableMarkets(),
     maxPerLine: SF.num(SF.get('maxPerLine', 12)) || 12,
-    consentText: SF.get('consentText',
-      'We keep your name and number only to hand your order over on the day, ' +
-      'and delete it after the market.'),
-    products: SF.products().map(function (p) {
+    consentText: home
+      ? SF.get('homeConsentText',
+          'We keep your name and number only to arrange handing your order over, ' +
+          'and delete them once you have collected it.')
+      : SF.get('consentText',
+          'We keep your name and number only to hand your order over on the day, ' +
+          'and delete it after the market.'),
+    products: SF.products({ market: market ? market.id : '' }).map(function (p) {
       return {
         id: p.id, name: p.name, variant: p.variant, category: p.category,
         type: p.type, unit: p.unit, weighed: p.weighed, price: p.price,
@@ -364,10 +425,12 @@ SF.action('placeOrder', null, 'write', function (p, ctx) {
   if (name.length < 2) return { ok: false, message: 'We still need your name.' };
   if (phone.replace(/\D/g, '').length < 9) return { ok: false, message: 'We need a working phone number.' };
   if (!p.consent) return { ok: false, message: 'Please tick the box so we may keep your details for the day.' };
-  if (!SF.preordersOpen()) {
-    return { ok: false, message: 'Pre-orders are closed. Come by the stall — we always keep some back.' };
+  var m = SF.orderMarket(p.market);
+  if (!SF.takesOrders(m)) {
+    return { ok: false, code: 'closed',
+             message: 'Pre-orders for this market are closed. Choose another market, or come by the stall.' };
   }
-  var digits = phone.replace(/\D/g, ''), open = 0, market = SF.activeMarket();
+  var digits = phone.replace(/\D/g, ''), open = 0, market = m.id;
   SF.orders().forEach(function (o) {
     if (o.marketId === market && o.status === 'reserved' &&
         o.phone.replace(/\D/g, '') === digits) open++;
@@ -377,21 +440,22 @@ SF.action('placeOrder', null, 'write', function (p, ctx) {
                                  'Collect those first, or message the stall.' };
   }
 
-  var built = SF.buildLines(p.lines, ctx, { max: SF.num(SF.get('maxPerLine', 12)) || 12 });
+  var built = SF.buildLines(p.lines, ctx, { max: SF.num(SF.get('maxPerLine', 12)) || 12, market: market });
   if (!built.ok) return built;
 
   var no = SF.nextOrderNo();
   SF.append('orders', {
-    OrderNo: no, When: new Date(), MarketId: SF.activeMarket(), Channel: 'preorder',
+    OrderNo: no, When: new Date(), MarketId: market, Channel: 'preorder',
     Customer: name, Phone: "'" + phone, Lines: JSON.stringify(built.lines),
     Units: built.units, Total: built.total, Cost: built.cost, Status: 'reserved',
     PaidAt: '', CollectedAt: '', Note: String(p.note || '').slice(0, 140),
     Consent: new Date()
   });
-  SF.commitLines(built.lines, no, -1);
+  SF.commitLines(built.lines, no, -1, market);
   SF.emit('order.placed', { orderNo: no, total: built.total, lines: built.lines }, ctx);
 
-  return { ok: true, orderNo: no, total: built.total, units: built.units, name: name };
+  return { ok: true, orderNo: no, total: built.total, units: built.units, name: name,
+           market: SF.publicMarket(m) };
 });
 
 /* =========================================================================
@@ -418,6 +482,7 @@ SF.sellableMarkets = function () {
 
 SF.action('till', 'sell', 'read', function (p) {
   var market = SF.sellMarket(p && p.marketId);
+  var forHere = { market: market };
   var orders = SF.orders().filter(function (o) {
     return o.marketId === market && o.status !== 'cancelled';
   });
@@ -432,7 +497,7 @@ SF.action('till', 'sell', 'read', function (p) {
   });
 
   return {
-    products: SF.products().map(function (p) {
+    products: SF.products(forHere).map(function (p) {
       return { id: p.id, name: p.name, variant: p.variant, category: p.category,
                type: p.type, unit: p.unit, weighed: p.weighed, price: p.price,
                options: p.options, available: p.available };
@@ -446,11 +511,11 @@ SF.action('till', 'sell', 'read', function (p) {
 });
 
 SF.action('sell', 'sell', 'write', function (p, ctx) {
-  var built = SF.buildLines(p.lines, ctx, {});
+  var mid = SF.sellMarket(p.marketId || p.where), home = mid === SF.HOME;
+  var built = SF.buildLines(p.lines, ctx, { market: mid });
   if (!built.ok) return built;
 
   var no = SF.nextOrderNo(), now = new Date();
-  var mid = SF.sellMarket(p.marketId || p.where), home = mid === SF.HOME;
   SF.append('orders', {
     OrderNo: no, When: now, MarketId: mid, Channel: 'till',
     Customer: String(p.customer || (home ? 'Between markets' : 'Walk-up')).slice(0, 60), Phone: '',
@@ -458,7 +523,7 @@ SF.action('sell', 'sell', 'write', function (p, ctx) {
     Cost: built.cost, Status: 'collected', PaidAt: now, CollectedAt: now,
     Note: '', Consent: ''
   });
-  SF.commitLines(built.lines, no, -1);
+  SF.commitLines(built.lines, no, -1, mid);
   SF.emit('order.completed', { orderNo: no, total: built.total, lines: built.lines,
                                channel: 'till' }, ctx);
 
@@ -490,14 +555,14 @@ SF.action('cancelOrder', 'orders', 'write', function (p, ctx) {
   var o = SF.findOrder(p.orderNo);
   if (!o) return { ok: false, message: 'Order not found.' };
   if (o.status === 'cancelled') return { ok: true };
-  SF.commitLines(o.lines, o.no, 1);
+  SF.commitLines(o.lines, o.no, 1, o.marketId);
   SF.setCell('orders', o.row, 'Status', 'cancelled');
   SF.emit('order.cancelled', { orderNo: o.no }, ctx);
   return { ok: true };
 });
 
-SF.action('queue', 'orders', 'read', function () {
-  var market = SF.activeMarket();
+SF.action('queue', 'orders', 'read', function (p) {
+  var market = SF.sellMarket(p && p.marketId);
   var all = SF.orders().filter(function (o) {
     return o.marketId === market && o.channel === 'preorder' && o.status !== 'cancelled';
   }).sort(function (a, b) { return a.when - b.when; });
@@ -505,7 +570,9 @@ SF.action('queue', 'orders', 'read', function () {
   return {
     waiting: all.filter(function (o) { return o.status === 'paid'; }),
     unpaid: all.filter(function (o) { return o.status === 'reserved'; }),
-    done: all.filter(function (o) { return o.status === 'collected'; }).reverse().slice(0, 12)
+    done: all.filter(function (o) { return o.status === 'collected'; }).reverse().slice(0, 12),
+    marketId: market,
+    markets: SF.sellableMarkets()
   };
 });
 
@@ -806,6 +873,8 @@ SF.action('labels', 'labels', 'read', function () {
   var pr = SF.profile();
   return {
     profile: { name: pr.name, tagline: pr.tagline, colour: pr.colour },
+    markets: SF.orderableMarkets(),
+    live: SF.publicMarket(SF.orderMarket('')),
     products: SF.products({ all: true }).map(function (p) {
       return { id: p.id, name: p.name, variant: p.variant, type: p.type, unit: p.unit,
                price: p.price, active: p.active, available: p.available, onHand: p.onHand };
@@ -882,6 +951,11 @@ SF.action('dashboard', 'reports', 'read', function (p) {
     }).sort(function (a, b) { return String(b.date).localeCompare(String(a.date)); }),
     stock: { value: stockValue, units: Math.round(stockUnits * 100) / 100 },
     preordersOpen: SF.preordersOpen(),
+    preordersOn: SF.preordersOn(),
+    homeOrders: SF.homeOrdersOn(),
+    // Is the market on screen taking orders through its own order page?
+    takesOrders: SF.takesOrders(SF.orderMarket(id === SF.HOME ? 'home' : id)),
+    liveId: SF.activeMarket(),
     marketPassed: SF.marketPassed()
   };
 });
@@ -906,6 +980,11 @@ SF.action('setActiveMarket', 'reports', 'write', function (p) {
 
 SF.action('setPreordersOpen', 'reports', 'write', function (p) {
   SF.set('preordersOpen', p.open ? 'yes' : 'no');
+  return { ok: true, open: !!p.open };
+});
+
+SF.action('setHomeOrders', 'reports', 'write', function (p) {
+  SF.set('homeOrders', p.open ? 'yes' : 'no');
   return { ok: true, open: !!p.open };
 });
 
@@ -944,7 +1023,7 @@ SF.action('releaseUnpaid', 'reports', 'write', function (p, ctx) {
   var market = SF.activeMarket(), n = 0;
   SF.orders().forEach(function (o) {
     if (o.marketId !== market || o.status !== 'reserved') return;
-    SF.commitLines(o.lines, o.no, 1);
+    SF.commitLines(o.lines, o.no, 1, o.marketId);
     SF.setCell('orders', o.row, 'Status', 'cancelled');
     n++;
   });
