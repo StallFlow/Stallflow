@@ -163,6 +163,7 @@
   /* Type first, then the product, then its size: never a long list. */
   var pickName = null;
   var payFor = null;          // a pre-order being paid for; null while ringing up a sale
+  var backToBasket = false;   // the "How many?" box was opened from the basket
 
   function dueNow() { return payFor ? payFor.total : cartTotals().total; }
   var tillQuery = '';         // what is typed in the till's product search
@@ -250,19 +251,35 @@
     var state = left === null ? '<span class="st">to order</span>'
       : out ? '<span class="st sold">SOLD OUT</span>'
       : '<span class="st' + (left <= 4 ? ' low' : '') + '">' + qty(left, p.unit) + ' left</span>';
-    return '<button class="tile' + (out ? ' out' : '') + '"' + (out ? ' disabled' : '') +
+    var have = inBasket(p.id);
+    return '<button class="tile' + (out ? ' out' : '') + (have ? ' has' : '') + '"' + (out ? ' disabled' : '') +
       ' onclick="SFT.tap(\'' + p.id + '\')">' +
       '<span class="nm">' + (sizeOnly ? esc(p.variant || p.name) : esc(p.name) +
         (p.variant ? ' <span class="vr">' + esc(p.variant) + '</span>' : '')) + '</span>' +
+      (have ? '<span class="inb">' + have + ' in basket</span>' : '') +
       '<span class="bot"><span class="pr">' + money(p.price) +
         (p.weighed ? '<span class="per">/' + esc(p.unit) + '</span>' : '') + '</span>' +
         state + '</span></button>';
   }
 
+  /* The basket. Docked at the bottom it is one slim bar — how many, how much,
+     Take payment — so it never hides the products, however big the text is.
+     Tapping it opens every line, full height, to change or remove. */
   function cartBar() {
     if (!cart.length) return '';
     var t = cartTotals();
-    return '<div class="cart"><div class="lines">' + cart.map(function (l, i) {
+    return '<div class="cart compact">' +
+      '<button class="basketbtn" onclick="SFT.openBasket()" aria-label="Open the basket: ' +
+        t.count + (t.count === 1 ? ' item, ' : ' items, ') + money(t.total) + '">' +
+        '<span class="cnt">' + t.count + '</span>' +
+        '<span class="lbl">' + (t.count === 1 ? 'item' : 'items') + '<i>View ▴</i></span>' +
+        '<span class="up" aria-hidden="true">▴</span></button>' +
+      '<button class="ok takebtn" onclick="SFT.take()"><span>Take payment</span>' +
+        '<b class="amt">' + money(t.total) + '</b></button></div>';
+  }
+
+  function basketLines() {
+    return cart.map(function (l, i) {
       var opts = (l.options || []).map(function (o) { return o.name || o.choice; }).join(', ');
       var name = esc(l.name) + (opts ? ' <span class="muted small">' + esc(opts) + '</span>' : '');
       if (l.type === 'weighed') {
@@ -281,11 +298,37 @@
             l.qty + '</button>' +
           '<button class="qb" aria-label="One more ' + label + '" onclick="SFT.step(' + i + ',1)">+</button>' +
         '</span><span class="num">' + money(l.total) + '</span></div>';
-    }).join('') + '</div>' +
-      '<div class="tot"><span class="muted small">' + t.count + ' on the till</span>' +
-      '<span class="amt">' + money(t.total) + '</span></div>' +
-      '<div class="row"><button class="ghost" onclick="SFT.clear()">Clear</button>' +
-      '<button class="ok" style="flex:2" onclick="SFT.take()">Take payment</button></div></div>';
+    }).join('');
+  }
+
+  function basketBody() {
+    var t = cartTotals();
+    // The total and Take payment stay pinned at the bottom while the lines scroll.
+    return '<div class="basketlist cart">' + basketLines() + '</div>' +
+      '<div class="bfoot"><div class="tot"><span class="muted">' + t.count +
+        (t.count === 1 ? ' item' : ' items') + '</span><span class="amt">' + money(t.total) + '</span></div>' +
+      '<button class="ok block" onclick="SFT.take()">Take payment</button>' +
+      '<div class="row" style="margin-top:10px">' +
+        '<button class="ghost" onclick="SF.closeSheet()">Add more</button>' +
+        '<button class="ghost" onclick="SFT.clear()">Clear the basket</button></div></div>';
+  }
+
+  /** Redraw the open basket in place, keeping where it was scrolled to. */
+  function refreshBasket() {
+    var body = SF.el('basketbody');
+    if (!body) return;
+    if (!cart.length) { SF.closeSheet(); return; }
+    var panel = body.closest('.panel'), y = panel ? panel.scrollTop : 0;
+    body.innerHTML = basketBody();
+    var c = SF.el('basketcount'), t = cartTotals();
+    if (c) c.textContent = t.count + (t.count === 1 ? ' item' : ' items');
+    if (panel) panel.scrollTop = y;
+  }
+
+  function inBasket(id) {
+    var n = 0;
+    cart.forEach(function (l) { if (l.id === id) n += l.type === 'weighed' ? 1 : l.qty; });
+    return n;
   }
 
   /* Till behaviour, exposed for the inline handlers above. */
@@ -335,12 +378,21 @@
         cart.push(line);
       }
       SF.render();
+      SF.toast('Added ' + p.name);
+    },
+
+    openBasket: function () {
+      if (!cart.length) return;
+      var t = cartTotals();
+      SF.openSheet('<div class="bhead"><h2>Basket</h2><span class="muted" id="basketcount">' +
+        t.count + (t.count === 1 ? ' item' : ' items') + '</span></div>' +
+        '<div id="basketbody">' + basketBody() + '</div>');
     },
 
     /** True while a sale is being rung up — an update must not interrupt it. */
     busy: function () { return cart.length > 0; },
 
-    drop: function (i) { cart.splice(i, 1); SF.render(); },
+    drop: function (i) { cart.splice(i, 1); SF.render(); refreshBasket(); },
 
     /** Set how many of one line, within what is left; 0 takes it off the sale. */
     setQty: function (i, n) {
@@ -354,7 +406,7 @@
         if (left !== null && n > left + l.units) {
           SF.toast('Only ' + qty(left + l.units, p.unit) + ' of ' + p.name + ' left.', true);
           n = left + l.units;
-          if (n <= l.qty) { SF.render(); return; }
+          if (n <= l.qty) { SF.render(); refreshBasket(); return; }
         }
         l.qty = n;
         var pr = priceOf(p, l);
@@ -363,12 +415,14 @@
         l.total = l.each * n; l.units = n; l.qty = n;
       }
       SF.render();
+      refreshBasket();
     },
     step: function (i, dir) { var l = cart[i]; if (l) SFT.setQty(i, l.qty + dir); },
 
     howMany: function (i) {
       var l = cart[i];
       if (!l) return;
+      backToBasket = !!SF.el('basketbody');
       SF.openSheet('<h2>How many?</h2><div class="sub">' + esc(l.name) + '</div>' +
         '<div class="field"><label for="hq">How many</label>' +
           '<input id="hq" type="number" inputmode="numeric" min="0" step="1" value="' + l.qty + '" ' +
@@ -384,10 +438,11 @@
     confirmQty: function (i) {
       var v = SF.el('hq') ? SF.el('hq').value : '';
       SF.closeSheet();
-      if (String(v).trim() === '') return;
-      SFT.setQty(i, v);
+      if (String(v).trim() !== '') SFT.setQty(i, v);
+      if (backToBasket && cart.length) SFT.openBasket();   // straight back to where she was
+      backToBasket = false;
     },
-    clear: function () { cart = []; SF.render(); },
+    clear: function () { cart = []; SF.closeSheet(); SF.render(); },
 
     options: function (p) {
       var html = '<h2>' + esc(p.name) + '</h2><div class="sub">Pick the extras.</div>' +
