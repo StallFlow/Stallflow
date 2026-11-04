@@ -1,0 +1,5 @@
+{
+  "_note": "Shared by every stall. mapsKey is a Google Maps browser key: it is visible in the page by design, so it must be restricted to https://stallflow.github.io/* and to the Maps JavaScript API and Places API (New). Leave it blank to turn place suggestions off.",
+  "mapsKey": "",
+  "mapsRegion": "za"
+}

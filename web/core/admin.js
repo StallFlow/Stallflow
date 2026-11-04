@@ -170,14 +170,18 @@
   function newMarket() {
     return '<div class="card"><h2>Add a market</h2>' +
       '<div class="sub">Each one keeps its own takings, costs and break-even.</div>' +
-      '<div class="row"><div class="field" style="flex:2"><label for="mn">Name</label>' +
+      // Name and date share a line on a wide screen and stack on a phone; the
+      // place gets a full line so Google's suggestions have room to be read.
+      '<div class="row"><div class="field" style="flex:2 1 220px"><label for="mn">Name</label>' +
         '<input id="mn" placeholder="Spring Craft Market"></div>' +
-        '<div class="field"><label for="md">Date</label><input id="md" type="date"></div>' +
-        '<div class="field"><label for="ml">Where</label>' +
-          '<input id="ml" placeholder="Church hall" oninput="SFA.mapsLink()">' +
-          '<a id="mlmap" href="#" target="_blank" rel="noopener" style="display:none;margin-top:6px;' +
-            'font-size:14px;font-weight:600">Open in Maps &#8599;</a></div>' +
-      '</div><button class="ghost" onclick="SFA.addMarket()">Add market</button></div>';
+        '<div class="field" style="flex:1 1 150px"><label for="md">Date</label><input id="md" type="date"></div>' +
+      '</div>' +
+      '<div class="field place"><label for="ml">Where</label>' +
+        '<input id="ml" placeholder="Start typing the place" autocomplete="off" maxlength="160" ' +
+          'role="combobox" aria-autocomplete="list" aria-controls="ml-sug" aria-expanded="false" ' +
+          'oninput="SFP.typed(this, event)" onkeydown="SFP.key(this, event)" onblur="SFP.blur(this)">' +
+        '<div class="sug" id="ml-sug" role="listbox" hidden></div></div>' +
+      '<button class="ghost" onclick="SFA.addMarket()">Add market</button></div>';
   }
 
   /* ==================================================================
@@ -582,16 +586,7 @@
         });
       });
       SF.el('mn').value = ''; SF.el('md').value = ''; SF.el('ml').value = '';
-      SFA.mapsLink();
       SF.toast('Market added');
-    },
-    /* "Open in Maps" beside the Where box: a plain Google Maps search for
-       whatever is typed. No key, no account, works on a phone. */
-    mapsLink: function () {
-      var a = SF.el('mlmap'), q = String(SF.el('ml').value || '').trim();
-      if (!a) return;
-      a.style.display = q ? 'inline-block' : 'none';
-      a.href = q ? 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(q) : '#';
     },
 
     labelMode: function (m) {
@@ -715,6 +710,8 @@
               figure('Version', esc(h.version), 'schema ' + h.schema.at + ' of ' + h.schema.expected) +
               figure('Market type', esc(h.preset), (h.plugins.filter(function (p) {
                 return p.on; }).length) + ' plugins on') +
+              figure('Place search', window.SFP && SFP.on() ? 'Google' : 'Off',
+                     window.SFP && SFP.on() ? 'suggests as you type' : 'stalls/platform.json mapsKey') +
               figure('Problem reports', h.reports ? 'To Claude' : 'Sheet only',
                      h.reports ? 'via GitHub' : 'StallFlow › Connect problem reports') +
             '</div>' +

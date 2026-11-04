@@ -100,6 +100,31 @@ function serveSite() {
   return new Promise((ok) => srv.listen(0, () => ok(srv)));
 }
 
+const MAPS_STUB = (mode) => `(function () {
+  var src = (document.currentScript && document.currentScript.src) || '';
+  var cb = (src.match(/callback=([^&]+)/) || [])[1];
+  window.__placeQueries = [];
+  function T(s) { this.s = s; } T.prototype.toString = function () { return this.s; };
+  var all = [['Monument Primary School', 'Monument Park, Pretoria, South Africa'],
+             ['Monument Park Shopping Centre', 'Pretoria, South Africa'],
+             ['Voortrekker Monument', 'Eeufees Road, Groenkloof, Pretoria, South Africa']];
+  var places = {
+    AutocompleteSessionToken: function () {},
+    AutocompleteSuggestion: { fetchAutocompleteSuggestions: function (req) {
+      window.__placeQueries.push(req.input + '|' + (req.includedRegionCodes || []).join(','));
+      if ('${mode}' === 'refused') return Promise.reject(new Error('RefererNotAllowedMapError'));
+      var q = req.input.toLowerCase();
+      return Promise.resolve({ suggestions: all.filter(function (a) {
+        return a[0].toLowerCase().indexOf(q) !== -1; }).map(function (a) {
+        return { placePrediction: { mainText: new T(a[0]), secondaryText: new T(a[1]), text: new T(a.join(', ')) } };
+      }) });
+    } }
+  };
+  window.google = { maps: { importLibrary: function () { return Promise.resolve(places); } } };
+  if (cb) window[cb]();
+  if ('${mode}' === 'refused' && window.gm_authFailure) setTimeout(window.gm_authFailure, 0);
+})();`;
+
 let failures = 0;
 async function test(name, fn) {
   try { await fn(); console.log('ok   ' + name); }
@@ -129,8 +154,23 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
       SF.setPin('owner', '4321');
       token = SF.dispatch('signIn', { pin: '4321', device: 'd' }).data.token;
     }
-    const ctx = await browser.newContext({ viewport: { width: 420, height: 640 } });
+    const ctx = await browser.newContext(Object.assign({ viewport: { width: 420, height: 640 },
+      deviceScaleFactor: process.env.SF_SHOT ? 2 : 1 },
+      opts.maps ? { serviceWorkers: 'block' } : {}));
     const page = await ctx.newPage();
+    env.mapsRequests = 0;
+    await ctx.route('https://maps.googleapis.com/**', async (route) => {
+      env.mapsRequests++;
+      if (env.offline) return route.abort('internetdisconnected');
+      await route.fulfill({ status: 200, contentType: 'text/javascript', body: MAPS_STUB(opts.maps || 'ok') });
+    });
+    if (opts.maps) {
+      await ctx.route('**/duxies/config.js', async (route) => {
+        const real = fs.readFileSync(path.join(ROOT, '_site', 'duxies', 'config.js'), 'utf8');
+        await route.fulfill({ status: 200, contentType: 'text/javascript',
+          body: real + '\nwindow.STALLFLOW.mapsKey = "test-key"; window.STALLFLOW.mapsRegion = "za";' });
+      });
+    }
     page.on('pageerror', (e) => { env.pageErrors = (env.pageErrors || []).concat(String(e)); });
     await ctx.route('https://script.google.com/**', async (route) => {
       const body = JSON.parse(route.request().postData() || '{}');
@@ -162,18 +202,110 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
     await page.waitForSelector('#ml');
   };
 
-  await test('typing a place shows Open in Maps with the right address', async () => {
-    const { page, ctx } = await phone({ hash: '#numbers' });
+  const suggestions = (page) => page.locator('#ml-sug .opt');
+
+  await test('typing a place suggests Google places inside the app', async () => {
+    const env = await phone({ hash: '#numbers', maps: 'ok' });
+    const page = env.page;
     await openNewMarket(page);
-    assert.strictEqual(await page.isVisible('#mlmap'), false, 'hidden while the box is empty');
-    await page.fill('#ml', 'Monument Primary School');
-    assert.strictEqual(await page.isVisible('#mlmap'), true);
-    const href = await page.getAttribute('#mlmap', 'href');
-    assert.strictEqual(href, 'https://www.google.com/maps/search/?api=1&query=Monument%20Primary%20School');
-    await ctx.close();
+    await page.click('#ml'); await page.keyboard.type('Monument', { delay: 30 });
+    await page.waitForSelector('#ml-sug .opt');
+    const names = await suggestions(page).allTextContents();
+    assert.ok(names[0].indexOf('Monument Primary School') !== -1, names.join(' / '));
+    assert.ok((await page.textContent('#ml-sug')).indexOf('Suggestions from Google') !== -1);
+    if (process.env.SF_SHOT) {           // a picture of the list, for a person to look at
+      await page.locator('.card:has(#ml)').scrollIntoViewIfNeeded();
+      await page.screenshot({ path: process.env.SF_SHOT });
+    }
+    assert.ok((await page.evaluate(() => window.__placeQueries)).every((q) => /\|za$/.test(q)), 'South Africa only');
+    await suggestions(page).first().click();
+    assert.strictEqual(await page.inputValue('#ml'), 'Monument Primary School, Monument Park, Pretoria, South Africa');
+    assert.strictEqual(await page.isVisible('#ml-sug'), false, 'the list closes');
+    assert.strictEqual(env.ctx.pages().length, 1, 'nothing opened another tab or browser');
+    await env.ctx.close();
   });
 
-  await test('going out to Maps and back keeps what was typed, and the link', async () => {
+  await test('arrow keys and Enter pick a suggestion', async () => {
+    const env = await phone({ hash: '#numbers', maps: 'ok' });
+    const page = env.page;
+    await openNewMarket(page);
+    await page.click('#ml'); await page.keyboard.type('Monu', { delay: 30 });
+    await page.waitForSelector('#ml-sug .opt');
+    await page.keyboard.press('ArrowDown'); await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('Enter');
+    assert.strictEqual(await page.inputValue('#ml'), 'Monument Park Shopping Centre, Pretoria, South Africa');
+    assert.strictEqual(await page.inputValue('#mn'), '', 'Enter picked the place, it did not add the market');
+    await env.ctx.close();
+  });
+
+  await test('the whole place Google suggested is saved with the market', async () => {
+    const env = await phone({ hash: '#numbers', maps: 'ok' });
+    const page = env.page;
+    await openNewMarket(page);
+    await page.fill('#mn', 'Voortrekker Craft Day'); await page.fill('#md', day(6));
+    await page.click('#ml'); await page.keyboard.type('Voortrekker', { delay: 20 });
+    await page.waitForSelector('#ml-sug .opt'); await suggestions(page).first().click();
+    await page.click('text=Add market');
+    await page.waitForFunction(() => !SF.outbox.pending().length);
+    const row = env.sheets.Markets.rows.find((r) => r[1] === 'Voortrekker Craft Day');
+    assert.strictEqual(row[3], 'Voortrekker Monument, Eeufees Road, Groenkloof, Pretoria, South Africa');
+    await env.ctx.close();
+  });
+
+  await test('coming back to the app keeps the place and does not pop the list open', async () => {
+    const env = await phone({ hash: '#numbers', maps: 'ok' });
+    const page = env.page;
+    await openNewMarket(page);
+    await page.fill('#mn', 'Monument Primary Market');
+    await page.click('#ml'); await page.keyboard.type('Monument Pri', { delay: 20 });
+    await page.waitForSelector('#ml-sug .opt');
+    await leaveAndReturn(page); await settle(page);
+    assert.strictEqual(await page.inputValue('#mn'), 'Monument Primary Market');
+    assert.strictEqual(await page.inputValue('#ml'), 'Monument Pri');
+    assert.strictEqual(await page.isVisible('#ml-sug .opt'), false, 'no list pops up by itself');
+    await env.ctx.close();
+  });
+
+  await test('with no Maps key the Where box is plain text and never calls Google', async () => {
+    const env = await phone({ hash: '#numbers' });
+    const page = env.page;
+    await openNewMarket(page);
+    await page.click('#ml'); await page.keyboard.type('Church hall', { delay: 20 });
+    await settle(page, 800);
+    assert.strictEqual(await page.inputValue('#ml'), 'Church hall');
+    assert.strictEqual(await page.isVisible('#ml-sug .opt'), false);
+    assert.strictEqual(env.mapsRequests, 0);
+    assert.strictEqual(await page.locator('a[href*="google.com/maps"]').count(), 0, 'no link out to Maps');
+    await env.ctx.close();
+  });
+
+  await test('a key Google refuses turns suggestions off quietly', async () => {
+    const env = await phone({ hash: '#numbers', maps: 'refused' });
+    const page = env.page;
+    await openNewMarket(page);
+    await page.click('#ml'); await page.keyboard.type('Monument', { delay: 20 });
+    await settle(page, 900);
+    assert.strictEqual(await page.isVisible('#ml-sug .opt'), false);
+    assert.strictEqual(await page.inputValue('#ml'), 'Monument');
+    assert.strictEqual(await page.evaluate(() => SFP.on()), false);
+    assert.deepStrictEqual(env.pageErrors || [], []);
+    await env.ctx.close();
+  });
+
+  await test('with no signal there are no suggestions and typing still works', async () => {
+    const env = await phone({ hash: '#numbers', maps: 'ok' });
+    const page = env.page;
+    await openNewMarket(page);
+    env.offline = true; await env.ctx.setOffline(true);
+    await page.click('#ml'); await page.keyboard.type('Monument', { delay: 20 });
+    await settle(page, 800);
+    assert.strictEqual(await page.inputValue('#ml'), 'Monument');
+    assert.strictEqual(await page.isVisible('#ml-sug .opt'), false);
+    assert.deepStrictEqual(env.pageErrors || [], []);
+    await env.ctx.close();
+  });
+
+  await test('going out of the app and back keeps what was typed', async () => {
     const { page, ctx } = await phone({ hash: '#numbers' });
     await openNewMarket(page);
     await page.fill('#mn', 'Monument Primary Market');
@@ -184,7 +316,6 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
     assert.strictEqual(await page.inputValue('#mn'), 'Monument Primary Market');
     assert.strictEqual(await page.inputValue('#md'), day(2));
     assert.strictEqual(await page.inputValue('#ml'), 'Monument Primary');
-    assert.strictEqual(await page.isVisible('#mlmap'), true, 'the Maps link is still there');
     await ctx.close();
   });
 

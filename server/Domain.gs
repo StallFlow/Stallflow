@@ -892,7 +892,7 @@ SF.action('addMarket', 'reports', 'write', function (p) {
   var id = 'M' + ('00' + (SF.rows('markets').length + 1)).slice(-2);
   SF.append('markets', {
     MarketId: id, Name: name, Date: String(p.date || ''),
-    Location: String(p.location || '').slice(0, 80), Status: 'planned', Note: ''
+    Location: String(p.location || '').slice(0, 160), Status: 'planned', Note: ''
   });
   if (p.makeActive) { SF.set('activeMarket', id); SF.purgeCustomers(); }
   return { ok: true, id: id };

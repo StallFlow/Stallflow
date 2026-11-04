@@ -34,6 +34,7 @@ var SHELL = [
   '../core/sf.js',
   '../core/screens.js',
   '../core/admin.js',
+  '../core/places.js',
   '../core/scan.js',
   '../plugins/kitchen.js',
   '../plugins/scale.js',
