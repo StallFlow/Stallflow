@@ -43,28 +43,26 @@ the same server and sheet. Leave it alone; give people the new links.
 If the deploying account changes, the OAuth client and the `CLASPRC_JSON`
 key should move to that account too.
 
-## Place suggestions in the app (built, needs a Google Maps key)
+## Place suggestions in the app (on)
 
 The **Where** box on New market suggests places from Google as you type,
 inside the app (South Africa only). Nothing opens another browser. Without a
-key the box is plain text, so nothing breaks while this is off.
+key, with no signal, or if Google refuses the key, the box is plain text.
 
-To switch it on, once for every stall:
-
-1. In Google Cloud (project "Stallflow Stalls", or any project with billing
-   switched on; Google requires a billing account even for free use):
-   **APIs & Services › Library**, enable **Maps JavaScript API** and
-   **Places API (New)**.
-2. **APIs & Services › Credentials › Create credentials › API key.** Edit it:
-   - Application restrictions: **Websites**, add `https://stallflow.github.io/*`
-   - API restrictions: **Maps JavaScript API** and **Places API (New)** only
-3. Put the key in `stalls/platform.json` as `mapsKey` and push. Pages
-   republishes, and **More › Health check** shows "Place search: Google".
-
-This key is meant to be seen. A Maps browser key is sent to every phone that
-opens the app, so it is safe in this public repo only because of the website
-and API restrictions in step 2. Do not skip them. Set a budget alert in
-Google Cloud Billing to be told if usage ever climbs.
+- **Key:** `mapsKey` in `stalls/platform.json`, shared by every stall. Set on
+  4 November 2026. It lives in the Google Cloud project **"My First Project"**
+  (not "Stallflow Stalls").
+- **Restrictions (checked 4 Nov):** websites `https://stallflow.github.io/*`
+  only; APIs: Maps JavaScript API and Places API (New) only. A request from
+  another website is refused with `API_KEY_HTTP_REFERRER_BLOCKED`.
+- **Billing: action needed.** The Google account is on the $300 free trial.
+  Before the trial ends, convert it or link the project to a paying billing
+  account, or suggestions stop (the box then falls back to plain text). Set a
+  budget alert in Google Cloud Billing while you are there.
+- The key is meant to be seen: every phone that opens the app receives it.
+  The website and API restrictions are what protect it, so never loosen them.
+  To change keys, replace `mapsKey` and push; blank turns suggestions off.
+- **More › Health check** shows "Place search: Google" when it is on.
 
 ## Reporting problems to Claude (built, needs two switches)
 

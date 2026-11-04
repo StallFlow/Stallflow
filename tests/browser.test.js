@@ -154,9 +154,9 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
       SF.setPin('owner', '4321');
       token = SF.dispatch('signIn', { pin: '4321', device: 'd' }).data.token;
     }
-    const ctx = await browser.newContext(Object.assign({ viewport: { width: 420, height: 640 },
-      deviceScaleFactor: process.env.SF_SHOT ? 2 : 1 },
-      opts.maps ? { serviceWorkers: 'block' } : {}));
+    // Service workers off, so the routed config.js above is what the app really reads.
+    const ctx = await browser.newContext({ viewport: { width: 420, height: 640 },
+      deviceScaleFactor: process.env.SF_SHOT ? 2 : 1, serviceWorkers: 'block' });
     const page = await ctx.newPage();
     env.mapsRequests = 0;
     await ctx.route('https://maps.googleapis.com/**', async (route) => {
@@ -164,13 +164,14 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
       if (env.offline) return route.abort('internetdisconnected');
       await route.fulfill({ status: 200, contentType: 'text/javascript', body: MAPS_STUB(opts.maps || 'ok') });
     });
-    if (opts.maps) {
-      await ctx.route('**/duxies/config.js', async (route) => {
-        const real = fs.readFileSync(path.join(ROOT, '_site', 'duxies', 'config.js'), 'utf8');
-        await route.fulfill({ status: 200, contentType: 'text/javascript',
-          body: real + '\nwindow.STALLFLOW.mapsKey = "test-key"; window.STALLFLOW.mapsRegion = "za";' });
-      });
-    }
+    // The test decides whether there is a Maps key, whatever stalls/platform.json holds,
+    // and Google itself is never called: maps.googleapis.com is the stand-in above.
+    await ctx.route('**/duxies/config.js', async (route) => {
+      const real = fs.readFileSync(path.join(ROOT, '_site', 'duxies', 'config.js'), 'utf8');
+      await route.fulfill({ status: 200, contentType: 'text/javascript',
+        body: real + (opts.maps ? '\nwindow.STALLFLOW.mapsKey = "test-key"; window.STALLFLOW.mapsRegion = "za";'
+                                : '\ndelete window.STALLFLOW.mapsKey;') });
+    });
     page.on('pageerror', (e) => { env.pageErrors = (env.pageErrors || []).concat(String(e)); });
     await ctx.route('https://script.google.com/**', async (route) => {
       const body = JSON.parse(route.request().postData() || '{}');
