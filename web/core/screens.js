@@ -200,13 +200,24 @@
     if (!cart.length) return '';
     var t = cartTotals();
     return '<div class="cart"><div class="lines">' + cart.map(function (l, i) {
-      var what = l.type === 'weighed' ? qty(l.qty, l.unit) + ' × ' + esc(l.name)
-        : l.qty + ' × ' + esc(l.name);
       var opts = (l.options || []).map(function (o) { return o.name || o.choice; }).join(', ');
-      return '<div class="l"><span>' + what +
-        (opts ? ' <span class="muted small">' + esc(opts) + '</span>' : '') +
-        ' <button class="quiet" onclick="SFT.drop(' + i + ')">remove</button></span>' +
-        '<span class="num">' + money(l.total) + '</span></div>';
+      var name = esc(l.name) + (opts ? ' <span class="muted small">' + esc(opts) + '</span>' : '');
+      if (l.type === 'weighed') {
+        return '<div class="l"><span class="what">' + qty(l.qty, l.unit) + ' × ' + name +
+          ' <button class="quiet" onclick="SFT.drop(' + i + ')">remove</button></span>' +
+          '<span class="num">' + money(l.total) + '</span></div>';
+      }
+      // − 2 +  : change how many without going back through the products.
+      // Tap the number to type it (twelve jars is not twelve taps).
+      var label = esc(l.name);
+      return '<div class="l"><span class="what">' + name + '</span>' +
+        '<span class="qstep">' +
+          '<button class="qb" aria-label="' + (l.qty > 1 ? 'One less ' : 'Remove ') + label + '" ' +
+            'onclick="SFT.step(' + i + ',-1)">' + (l.qty > 1 ? '&minus;' : '&times;') + '</button>' +
+          '<button class="qn num" aria-label="How many ' + label + '" onclick="SFT.howMany(' + i + ')">' +
+            l.qty + '</button>' +
+          '<button class="qb" aria-label="One more ' + label + '" onclick="SFT.step(' + i + ',1)">+</button>' +
+        '</span><span class="num">' + money(l.total) + '</span></div>';
     }).join('') + '</div>' +
       '<div class="tot"><span class="muted small">' + t.count + ' on the till</span>' +
       '<span class="amt">' + money(t.total) + '</span></div>' +
@@ -262,6 +273,52 @@
     busy: function () { return cart.length > 0; },
 
     drop: function (i) { cart.splice(i, 1); SF.render(); },
+
+    /** Set how many of one line, within what is left; 0 takes it off the sale. */
+    setQty: function (i, n) {
+      var l = cart[i];
+      if (!l) return;
+      n = Math.floor(Number(n));
+      if (!(n > 0)) { SFT.drop(i); return; }
+      var p = SF.find(SF.state.data.till.products, l.id);
+      if (p) {
+        var left = availableNow(p);
+        if (left !== null && n > left + l.units) {
+          SF.toast('Only ' + qty(left + l.units, p.unit) + ' of ' + p.name + ' left.', true);
+          n = left + l.units;
+          if (n <= l.qty) { SF.render(); return; }
+        }
+        l.qty = n;
+        var pr = priceOf(p, l);
+        l.each = pr.each; l.total = pr.total; l.units = pr.units;
+      } else {
+        l.total = l.each * n; l.units = n; l.qty = n;
+      }
+      SF.render();
+    },
+    step: function (i, dir) { var l = cart[i]; if (l) SFT.setQty(i, l.qty + dir); },
+
+    howMany: function (i) {
+      var l = cart[i];
+      if (!l) return;
+      SF.openSheet('<h2>How many?</h2><div class="sub">' + esc(l.name) + '</div>' +
+        '<div class="field"><label for="hq">How many</label>' +
+          '<input id="hq" type="number" inputmode="numeric" min="0" step="1" value="' + l.qty + '" ' +
+          'style="font-size:28px;text-align:center" ' +
+          'onkeydown="if(event.key===\'Enter\'){event.preventDefault();SFT.confirmQty(' + i + ')}"></div>' +
+        '<div class="row tight" style="margin-bottom:12px">' + [1, 2, 3, 5, 10, 12].map(function (n) {
+          return '<button class="ghost sm" onclick="SF.el(\'hq\').value=' + n + ';SFT.confirmQty(' + i + ')">' +
+            n + '</button>';
+        }).join('') + '</div>' +
+        '<button class="block" onclick="SFT.confirmQty(' + i + ')">Done</button>');
+      setTimeout(function () { var x = SF.el('hq'); if (x) { x.focus(); x.select(); } }, 60);
+    },
+    confirmQty: function (i) {
+      var v = SF.el('hq') ? SF.el('hq').value : '';
+      SF.closeSheet();
+      if (String(v).trim() === '') return;
+      SFT.setQty(i, v);
+    },
     clear: function () { cart = []; SF.render(); },
 
     options: function (p) {
@@ -608,7 +665,8 @@
       var next = q.waiting[0] || null, rest = q.waiting.slice(1);
 
       var head = next
-        ? '<div class="serving"><div class="k">Now serving</div>' +
+        ? '<div class="serving"' + SF.filters.row('collect', { text: findText(next) }) +
+          '><div class="k">Now serving</div>' +
           '<div class="nm">' + esc(next.customer) + '</div>' +
           '<div class="no">' + esc(next.no) + '</div>' +
           '<div class="what">' + next.lines.map(function (l) {
@@ -625,21 +683,25 @@
 
       var tb = SF.tabs('collect', [['queue', 'Queue'], ['topay', 'Still to pay'],
                                    ['done', 'Handed over']]);
+      var none = '<div class="empty" data-fempty="collect" style="display:none">Nobody by that ' +
+        'name or number here. Try the other tabs.</div>';
+      var find = SF.filters.bar('collect', { search: 'Find a name or order number',
+        count: q.waiting.length + q.unpaid.length + q.done.length, noun: 'orders' });
       var sections = {
-        queue: head + '<div class="card"><h2>Next in line</h2>' +
+        queue: find + head + none + '<div class="card"><h2>Next in line</h2>' +
           '<div class="sub">Oldest first — whoever ordered first gets served first.</div>' +
           (rest.length ? rest.map(function (o, i) {
             return row(i + 2, 'var(--ink)', o,
               '<button class="ghost sm" onclick="SFT.collect(\'' + o.no + '\')">Done</button>',
               true);
           }).join('') : '<div class="empty">No one else in the line.</div>') + '</div>',
-        topay: '<div class="card"><h2>Still to pay</h2>' +
+        topay: find + none + '<div class="card"><h2>Still to pay</h2>' +
           '<div class="sub">They join the queue once the money is in.</div>' +
           (q.unpaid.length ? q.unpaid.map(function (o) {
             return row('!', 'var(--warn)', o,
               '<button class="ok sm" onclick="SFT.pay(\'' + o.no + '\')">Paid</button>', true);
           }).join('') : '<div class="empty">Everyone who ordered ahead has paid.</div>') + '</div>',
-        done: '<div class="card"><h2>Handed over</h2>' +
+        done: find + none + '<div class="card"><h2>Handed over</h2>' +
           (q.done.length ? '<div class="done">' + q.done.map(function (o) {
             return row('✓', 'var(--ok)', o, '');
           }).join('') + '</div>' : '<div class="empty">Nothing handed over yet.</div>') + '</div>'
@@ -656,8 +718,14 @@
     }
   });
 
+  function findText(o) {
+    return [o.customer, o.no, o.no.replace(/\D/g, '')].concat((o.lines || []).map(function (l) {
+      return l.name; })).join(' ');
+  }
+
   function row(pos, colour, o, action, cancellable) {
-    return '<div class="rowitem"><span class="pos" style="background:' + colour + '">' +
+    return '<div class="rowitem"' + SF.filters.row('collect', { text: findText(o) }) +
+      '><span class="pos" style="background:' + colour + '">' +
       pos + '</span><div class="who"><b>' + esc(o.customer) + '</b><span>' + esc(o.no) +
       ' · ' + SF.countOf(o.units) +
       (o.status === 'reserved' ? ' · ordered ' + esc(o.time) : ' · ' + esc(waited(o))) +
@@ -832,7 +900,8 @@
     var items = s.pantry || [];
     var units = ['kg', 'g', 'litre', 'each'];
     var rows = items.length ? items.map(function (r) {
-      return '<tr><td>' + esc(r.item) + (r.note ? ' <span class="muted small">' + esc(r.note) + '</span>' : '') +
+      return '<tr' + SF.filters.row('cupboard', { text: r.item + ' ' + (r.note || '') + ' ' + r.unit },
+                                     { name: String(r.item).toLowerCase(), qty: r.qty }) + '><td>' + esc(r.item) + (r.note ? ' <span class="muted small">' + esc(r.note) + '</span>' : '') +
         '</td><td class="num"><b>' + esc(r.qty) + '</b> ' + esc(r.unit) + '</td>' +
         '<td class="muted small">' + esc(r.updated) + '</td>' +
         '<td><button class="quiet" onclick="SFS.editPantry(\'' + esc(r.item).replace(/'/g, '&#39;') +
@@ -842,7 +911,11 @@
     return '<div class="card"><h2>Uncooked stock</h2>' +
       '<div class="sub">Fruit, sugar, bottles and bags in the cupboard. Type the new amount ' +
         'whenever you check; set it to 0 when it is used up.</div>' +
-      '<table><tbody>' + rows + '</tbody></table>' +
+      SF.filters.bar('cupboard', { search: 'Search the cupboard', count: items.length, noun: 'items',
+        sorts: [['', 'As listed'], ['name', 'A–Z'], ['qty', 'Least first']] }) +
+      '<table><tbody>' + rows +
+      '<tr data-fempty="cupboard" style="display:none"><td colspan="4" class="empty">Nothing matches.</td></tr>' +
+      '</tbody></table>' +
       '<div class="row" style="margin-top:12px">' +
         '<div class="field" style="flex:2"><label for="pi">What</label>' +
           '<input id="pi" placeholder="Strawberries, sugar, 352 ml bottles…"></div>' +
@@ -1177,8 +1250,21 @@
     }
   };
 
+  function uniq(list) {
+    var seen = {}, out = [];
+    list.forEach(function (x) { if (x && !seen[x]) { seen[x] = true; out.push(x); } });
+    return out.sort();
+  }
+
   function priceTable(s) {
+    var F = 'shelf';
+    var cats = uniq(s.products.map(function (p) { return p.category; }));
+    var types = uniq(s.products.map(function (p) { return p.type; }));
+    var uncategorised = s.products.some(function (p) { return !p.category; });
     var rows = s.products.map(function (p) {
+      var show = [p.active ? 'onsale' : 'hidden'];
+      if (p.type !== 'made') show.push(p.onHand <= 0 ? 'out' : p.onHand <= 4 ? 'low' : 'instock');
+      var left = p.type === 'made' ? (p.available === null ? 1e9 : p.available) : p.onHand;
       var state = !p.active ? '<span class="tag">Hidden</span>'
         : p.type === 'made'
           ? '<span class="tag ok">' + (p.available === null ? 'to order'
@@ -1187,7 +1273,11 @@
         : p.onHand <= 4 ? '<span class="tag warn">' + qty(p.onHand, p.unit) + '</span>'
         : '<span class="tag ok">' + qty(p.onHand, p.unit) + '</span>';
 
-      return '<tr><td><b>' + esc(p.name) + '</b>' +
+      return '<tr' + SF.filters.row(F, {
+          text: [p.name, p.variant, p.category, p.id, p.type].join(' '),
+          cat: p.category || 'none', show: show.join(' '), type: p.type
+        }, { name: p.name.toLowerCase() + ' ' + String(p.variant || '').toLowerCase(), left: left,
+             keep: p.cost > 0 ? Math.round(p.margin * 100) / 100 : -1e9 }) + '><td><b>' + esc(p.name) + '</b>' +
         (p.variant ? '<div class="muted small">' + esc(p.variant) + '</div>' : '') + '</td>' +
         '<td><span class="tag">' + esc(p.type) + '</span></td>' +
         '<td>' + state + '</td>' +
@@ -1209,9 +1299,24 @@
       '<button class="ghost sm" onclick="SFS.newProduct()">Add product</button></div>' +
       '<div class="sub">Change a price and it takes effect at once — the order page and the ' +
         'till both follow.</div>' +
+      SF.filters.bar(F, {
+        search: 'Search products', count: s.products.length, noun: 'products',
+        facets: [
+          { key: 'cat', label: 'Category', options: [['all', 'All']].concat(cats.map(function (c) {
+              return [c, c]; }), cats.length && uncategorised ? [['none', 'No category']] : []) },
+          { key: 'show', label: 'Show', options: [['all', 'All'], ['onsale', 'On sale'],
+              ['low', 'Running low'], ['out', 'Sold out'], ['hidden', 'Hidden']] },
+          { key: 'type', label: 'Sold as', options: [['all', 'All']].concat(types.map(function (t) {
+              return [t, t]; })) }
+        ],
+        sorts: [['', 'Shelf order'], ['name', 'A–Z'], ['left', 'Least left first'],
+                ['-left', 'Most left first'], ['-keep', 'Most kept each'], ['keep', 'Least kept each']]
+      }) +
       '<div class="scroll"><table><tr><th>Product</th><th>Sold as</th><th>Left</th>' +
       '<th class="r">Costs you</th><th>Sells for</th><th class="r">You keep</th><th></th></tr>' +
       (rows || '<tr><td colspan="7" class="empty">Nothing here yet.</td></tr>') +
+      '<tr data-fempty="' + F + '" style="display:none"><td colspan="7" class="empty">Nothing matches. ' +
+        '<button class="quiet" onclick="SF.filters.clear(\'' + F + '\')">Show all</button></td></tr>' +
       '</table></div></div>';
   }
 

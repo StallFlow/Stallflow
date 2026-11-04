@@ -13,7 +13,9 @@ web/                 the front end, one copy for every stall
   index.html         customer order page            → /<slug>/
   app/               staff app (PWA, works offline)  → /<slug>/app/
   core/ plugins/     shared scripts and styles (core/places.js: Google place
-                     suggestions for Where boxes; off without a mapsKey)
+                     suggestions for Where boxes; off without a mapsKey.
+                     core/filters.js: search/filter/sort bars for long lists,
+                     SF.filters.bar + SF.filters.row; filters rows in place)
   landing.html       stallflow.github.io/Stallflow/
 server/              Apps Script, identical in every stall's sheet
   Core.gs            sheets, settings, identity, audit, plugin host, router, migrations

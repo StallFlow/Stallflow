@@ -192,8 +192,15 @@
   }
 
   function history(d, v) {
+    var now = new Date();
+    var today = now.getFullYear() + '-' + ('0' + (now.getMonth() + 1)).slice(-2) + '-' +
+                ('0' + now.getDate()).slice(-2);
     var rows = d.history.length ? d.history.map(function (h) {
-      return '<tr' + (h.id === d.marketId ? ' class="here"' : '') + '>' +
+      var when = h.id === 'HOME' ? 'home' : !h.date ? 'undated' : h.date >= today ? 'upcoming' : 'past';
+      return '<tr' + (h.id === d.marketId ? ' class="here"' : '') +
+        SF.filters.row('markets', { text: [h.name, h.location, h.date].join(' '), when: when },
+                       { name: String(h.name).toLowerCase(), date: h.date || '0000', profit: h.profit,
+                         taken: h.revenue }) + '>' +
         '<td><b>' + esc(h.name) + '</b>' +
         (h.location ? '<div class="muted small">' + esc(h.location) + '</div>' : '') + '</td>' +
         '<td>' + esc(h.date || '—') + '</td><td class="r">' + qty(h.units, 'each') + '</td>' +
@@ -204,9 +211,16 @@
 
     return '<div class="card"><h2>Every market so far</h2>' +
       '<div class="sub">The record that tells you which ones are worth going back to.</div>' +
+      SF.filters.bar('markets', { search: 'Search markets', count: d.history.length, noun: 'markets',
+        facets: [{ key: 'when', label: 'Show', options: [['all', 'All'], ['upcoming', 'Coming up'],
+          ['past', 'Been and gone'], ['home', 'Between markets']] }],
+        sorts: [['', 'Newest first'], ['date', 'Oldest first'], ['-profit', 'Most profit'],
+                ['-taken', 'Most taken'], ['name', 'A–Z']] }) +
       '<div class="scroll"><table><tr><th>Market</th><th>Date</th><th class="r">' +
       esc(v.units.charAt(0).toUpperCase() + v.units.slice(1)) + '</th><th class="r">Taken</th>' +
-      '<th class="r">Costs</th><th class="r">Profit</th></tr>' + rows + '</table></div>' +
+      '<th class="r">Costs</th><th class="r">Profit</th></tr>' + rows +
+      '<tr data-fempty="markets" style="display:none"><td colspan="6" class="empty">No market matches.</td></tr>' +
+      '</table></div>' +
       '<div class="muted small" style="margin-top:10px">' + qty(d.stock.units, 'each') +
       ' in stock, worth ' + money(d.stock.value) + ' in what it cost to make.</div></div>';
   }
@@ -233,6 +247,24 @@
      ================================================================== */
 
   var labelMode = 'labels';
+
+  function labelCats(d) {
+    var seen = {}, out = [];
+    d.products.forEach(function (p) { if (p.category && !seen[p.category]) { seen[p.category] = 1; out.push(p.category); } });
+    return out.sort();
+  }
+
+  /** The products on screen in the label picker (all of them unless a filter narrows it). */
+  function shownProducts() {
+    var shown = {};
+    SF.filters.visible('labels').forEach(function (r) {
+      var c = r.querySelector('input[type=checkbox]');
+      if (c) shown[c.id.slice(2)] = true;
+    });
+    return SF.state.data.labels.products.filter(function (p) {
+      return !document.querySelector('[data-frow="labels"]') || shown[p.id];
+    });
+  }
 
   /** Which market's poster: remembered on this phone, else the soonest. */
   function posterChoice(d) {
@@ -271,8 +303,16 @@
               ' onclick="SFA.labelMode(\'poster\')">Order posters</button>' +
           '</div>' + posterPicker(d) +
           '<div id="picker"' + (labelMode === 'labels' ? '' : ' style="display:none"') + '>' +
+          SF.filters.bar('labels', { search: 'Search products', count: d.products.length, noun: 'products',
+            facets: [{ key: 'cat', label: 'Category', options: [['all', 'All']].concat(
+              labelCats(d).map(function (c) { return [c, c]; })) },
+              { key: 'show', label: 'Show', options: [['all', 'All'], ['onsale', 'On sale'],
+                ['hidden', 'Hidden']] }] }) +
           d.products.map(function (p) {
-            return '<div class="pick"><input type="checkbox" id="c-' + p.id + '"' +
+            return '<div class="pick"' + SF.filters.row('labels', {
+                text: [p.name, p.variant, p.category, p.id].join(' '), cat: p.category || 'none',
+                show: p.active ? 'onsale' : 'hidden' }) +
+              '><input type="checkbox" id="c-' + p.id + '"' +
               (p.active ? ' checked' : '') + ' onchange="SFA.drawLabels()">' +
               '<div class="info"><b>' + esc(p.name) + '</b><span>' + esc(p.id) +
               (p.variant ? ' · ' + esc(p.variant) : '') + ' · ' + money(p.price) + '</span></div>' +
@@ -702,13 +742,13 @@
       SFA.drawLabels();
     },
     tickAll: function (on) {
-      SF.state.data.labels.products.forEach(function (p) {
+      shownProducts().forEach(function (p) {
         var c = SF.el('c-' + p.id); if (c) c.checked = on;
       });
       SFA.drawLabels();
     },
     each: function (n) {
-      SF.state.data.labels.products.forEach(function (p) {
+      shownProducts().forEach(function (p) {
         var i = SF.el('n-' + p.id); if (i) i.value = n;
       });
       SFA.drawLabels();

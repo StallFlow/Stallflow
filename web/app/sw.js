@@ -32,6 +32,7 @@ var SHELL = [
   '../core/components.css',
   '../core/qr.js',
   '../core/sf.js',
+  '../core/filters.js',
   '../core/screens.js',
   '../core/admin.js',
   '../core/places.js',
