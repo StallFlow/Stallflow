@@ -73,13 +73,45 @@
       var d = ctx.data, t = d.totals;
       var tiles = picker(d);
 
-      var unpaid = d.unpaid.length ? d.unpaid.map(function (o) {
-        return '<div class="rowitem"><div class="who"><b>' + esc(o.customer) + '</b>' +
-          '<span>' + esc(o.no) + ' · ' + SF.countOf(o.units) + ' · ordered ' + esc(o.time) +
-          ' · <button class="quiet" onclick="SFT.cancel(\'' + o.no + '\')">cancel</button>' +
-          '</span></div><span class="amt">' + money(o.total) + '</span>' +
-          '<button class="ok sm" onclick="SFT.pay(\'' + o.no + '\')">Paid</button></div>';
-      }).join('') : '<div class="empty">Nothing outstanding — every pre-order has paid.</div>';
+      // What they ordered, so it can be checked against the bag before the money
+      // changes hands — and the note they left, if any.
+      var collect = SF.collectOn();
+      var here = null;
+      (d.markets || []).forEach(function (m) {
+        if (m.id === d.marketId || (m.id === 'HOME' && d.marketId === 'HOME')) here = m;
+      });
+      var hereName = !here ? '' : here.id === 'HOME' ? 'between markets'
+        : esc(here.name) + (here.date ? ' · ' + esc(here.date) : '');
+      var orderRow = function (o, action) {
+        return '<div class="porder"' + SF.filters.row('topay', { text: [o.customer, o.no,
+            o.no.replace(/\D/g, '')].concat((o.lines || []).map(function (l) { return l.name; })).join(' ') }) +
+          '><div class="hd"><div class="who"><b>' + esc(o.customer) + '</b>' +
+          '<span>' + esc(o.no) + ' · ordered ' + esc(o.time) +
+          ' · <button class="quiet" onclick="SFT.cancel(\'' + o.no + '\')">cancel</button></span></div>' +
+          '<span class="amt">' + money(o.total) + '</span>' + action + '</div>' +
+          '<ul class="items">' + (o.lines || []).map(function (l) {
+            var opts = (l.options || []).map(function (x) { return x.name || x.choice; }).join(', ');
+            return '<li><b>' + (l.type === 'weighed' ? qty(l.units, l.unit) : l.qty + ' ×') + '</b> ' +
+              esc(l.name) + (opts ? ' <span class="muted small">' + esc(opts) + '</span>' : '') +
+              '<span class="num">' + money(l.total) + '</span></li>';
+          }).join('') + '</ul>' +
+          (o.note ? '<div class="note">“' + esc(o.note) + '”</div>' : '') + '</div>';
+      };
+      var unpaid = d.unpaid.length ? SF.filters.bar('topay', { search: 'Find a name or order number',
+          count: d.unpaid.length, noun: 'orders' }) +
+        d.unpaid.map(function (o) {
+          return orderRow(o, '<button class="ok sm" onclick="SFT.payOrder(\'' + o.no + '\')">Take payment</button>');
+        }).join('') +
+        '<div class="empty" data-fempty="topay" style="display:none">Nobody by that name or number.</div>'
+        : '<div class="empty">Nothing outstanding — every pre-order ' +
+        (hereName ? 'for ' + hereName + ' ' : '') + 'has paid.</div>';
+      var waiting = !collect && (d.waiting || []).length
+        ? '<div class="card"><h2>Paid, not handed over yet</h2>' +
+          '<div class="sub">From before paying meant handing over. Tap when it is in their hands.</div>' +
+          d.waiting.map(function (o) {
+            return orderRow(o, '<button class="ghost sm" onclick="SFT.collect(\'' + o.no + '\')">Handed over</button>');
+          }).join('') + '</div>'
+        : '';
 
       // Takings and the day's count deliberately live on Numbers, not here —
       // this screen faces the customer and is for ringing up, not reporting.
@@ -98,10 +130,12 @@
               '<h2 style="flex:1">Ring up a sale</h2>' +
               '<button class="ghost sm" onclick="SFT.scan()">Scan</button>' +
               SF.slot('till.actions', ctx) +
-            '</div>' + marketPicker(d) + tiles + '</div>'
-          : '<div class="card"><h2>Pre-orders still to pay</h2>' +
-              '<div class="sub">Already put aside. Tap <b>Paid</b> when the money is in.</div>' +
-              unpaid + '</div>') +
+            '</div>' + marketPicker(d) + tillSearch(d) + '<div id="tilesbox">' + tiles + '</div></div>'
+          : '<div class="card"><h2>Pre-orders still to pay' +
+              (hereName ? '<span class="for"> for ' + hereName + '</span>' : '') + '</h2>' +
+              '<div class="sub">Already put aside. Check the items with them, then tap ' +
+                '<b>Take payment</b>' + (collect ? '' : ' and hand the order over') + '.</div>' +
+              marketPicker(d) + unpaid + '</div>' + waiting) +
         SF.slot('till.after', ctx) +
         '<div class="foot">StallFlow · till</div></div>' + cartBar();
     }
@@ -128,8 +162,37 @@
 
   /* Type first, then the product, then its size: never a long list. */
   var pickName = null;
+  var payFor = null;          // a pre-order being paid for; null while ringing up a sale
+
+  function dueNow() { return payFor ? payFor.total : cartTotals().total; }
+  var tillQuery = '';         // what is typed in the till's product search
+
+  /** Products matching every word typed, by name, size, category or code. */
+  function tillMatches(d) {
+    var words = tillQuery.toLowerCase().split(/\s+/).filter(Boolean);
+    return d.products.filter(function (p) {
+      var text = [p.name, p.variant, p.category, p.id].join(' ').toLowerCase();
+      return words.every(function (w) { return text.indexOf(w) !== -1; });
+    });
+  }
+
+  /** The search box above the products; it only redraws the tiles under it. */
+  function tillSearch(d) {
+    if (d.products.length < 6) return '';
+    return '<div class="fbar" style="margin:10px 0 4px"><input type="search" id="tq" class="fq" ' +
+      'autocomplete="off" enterkeyhint="search" placeholder="Search products" aria-label="Search products" ' +
+      'value="' + esc(tillQuery) + '" oninput="SFT.search(this.value)" onfocus="this.select()"></div>';
+  }
 
   function picker(d) {
+    if (tillQuery.trim()) {
+      // Searching skips category, product and size: every match is one tap away.
+      var hits = tillMatches(d);
+      return hits.length
+        ? '<div class="tiles">' + hits.map(function (p) { return tile(p, false); }).join('') + '</div>'
+        : '<div class="empty">Nothing called “' + esc(tillQuery) + '”. ' +
+          '<button class="quiet" onclick="SFT.search(\'\');SF.el(\'tq\').value=\'\'">Show everything</button></div>';
+    }
     var groups = {}, order = [];
     d.products.forEach(function (p) {
       var cat = p.category || 'Other';
@@ -234,6 +297,11 @@
       SF.load(SF.state.view === 'collect' ? 'till' : 'collect');
     },
     cat: function (c) { SF.ls.set('sf.tillcat', c); pickName = null; SF.render(); },
+    search: function (v) {
+      tillQuery = String(v || '');
+      var box = SF.el('tilesbox'), d = SF.state.data.till;
+      if (box && d) box.innerHTML = picker(d);
+    },
     name: function (n) { pickName = n; SF.render(); },
     back: function () { pickName = null; SF.render(); },
     tap: function (id) {
@@ -416,12 +484,23 @@
      */
     take: function () {
       if (!cart.length) return;
+      payFor = null;
+      SFT.paySheet(cartTotals().total, 'Take payment', 'Record the sale');
+    },
+
+    /** A pre-order paying at the table: the same notes, typed amount and change as a sale. */
+    payOrder: function (no) {
+      var till = SF.state.data.till, o = till && till.unpaid.filter(function (x) { return x.no === no; })[0];
+      if (!o) return;
+      payFor = { no: o.no, total: o.total, customer: o.customer };
+      SFT.paySheet(o.total, esc(o.customer) + ' · ' + esc(o.no), 'Record the payment');
+    },
+
+    paySheet: function (total, title, recordLabel) {
       tendered = 0;
       notes = [];
-      var total = cartTotals().total;
-
       SF.openSheet(
-        '<h2>Take payment</h2>' +
+        '<h2>' + title + '</h2>' +
         '<div class="moneyrow"><span>Total</span><b>' + money(total) + '</b></div>' +
         '<label style="margin-top:16px">Money received — tap the notes, or type it</label>' +
         '<div class="cash">' +
@@ -438,7 +517,7 @@
         '<div class="change short" id="changeBox"><i id="changeLbl">Still short</i>' +
           '<b id="changeAmt">' + money(total) + '</b></div>' +
         '<button class="ok block" id="doSale" disabled onclick="SFT.recordSale()">' +
-          'Record the sale</button>' +
+          recordLabel + '</button>' +
         '<button class="quiet block" style="margin-top:6px" onclick="SF.closeSheet()">' +
           'Back to the till</button>');
       SFT.paintChange();
@@ -457,7 +536,7 @@
       SFT.paintChange();
     },
     exact: function () {
-      tendered = cartTotals().total;
+      tendered = dueNow();
       notes = [];
       SF.el('got').value = tendered;
       SFT.paintChange();
@@ -472,7 +551,7 @@
       var box = SF.el('changeBox');
       if (!box) return;
       tendered = Number(SF.el('got').value) || 0;
-      var total = cartTotals().total;
+      var total = dueNow();
       var diff = Math.round((tendered - total) * 100) / 100;
       var short = diff < 0;
       box.className = 'change' + (short ? ' short' : '');
@@ -482,6 +561,20 @@
     },
 
     recordSale: function () {
+      if (payFor) {
+        // A pre-order: mark it paid (and handed over, where there is no Collect step).
+        var o = payFor, back = Math.round((tendered - o.total) * 100) / 100;
+        payFor = null;
+        SFT.pay(o.no);
+        SF.closeSheet();
+        if (back > 0) {
+          SF.openSheet('<div class="give"><i>Give change</i><b>' + money(back) + '</b>' +
+            '<span>' + esc(o.customer) + ' · ' + money(o.total) + ' · ' + money(tendered) +
+            ' received</span></div>' +
+            '<button class="block" onclick="SF.closeSheet()">Done</button>');
+        } else SF.toast('Paid — ' + money(o.total));
+        return;
+      }
       if (!cart.length) return;
       var t = cartTotals();
       var change = Math.round((tendered - t.total) * 100) / 100;
@@ -528,6 +621,7 @@
     },
 
     pay: function (no) {
+      var handOver = !SF.collectOn();
       SF.write('markPaid', { orderNo: no }, function () {
         var till = SF.state.data.till, q = SF.state.data.collect;
         if (till) {
@@ -545,7 +639,8 @@
           for (var j = 0; j < q.unpaid.length; j++) {
             if (q.unpaid[j].no === no) {
               var oo = q.unpaid.splice(j, 1)[0];
-              oo.status = 'paid';
+              oo.status = handOver ? 'collected' : 'paid';
+              if (handOver) { q.done.unshift(oo); break; }
               q.waiting.push(oo);
               q.waiting.sort(function (a, b) { return a.when - b.when; });
               break;
@@ -1277,6 +1372,7 @@
           text: [p.name, p.variant, p.category, p.id, p.type].join(' '),
           cat: p.category || 'none', show: show.join(' '), type: p.type
         }, { name: p.name.toLowerCase() + ' ' + String(p.variant || '').toLowerCase(), left: left,
+             type: p.type, cost: p.cost > 0 ? Math.round(p.cost * 100) / 100 : -1e9, price: p.price,
              keep: p.cost > 0 ? Math.round(p.margin * 100) / 100 : -1e9 }) + '><td><b>' + esc(p.name) + '</b>' +
         (p.variant ? '<div class="muted small">' + esc(p.variant) + '</div>' : '') + '</td>' +
         '<td><span class="tag">' + esc(p.type) + '</span></td>' +
@@ -1309,11 +1405,16 @@
           { key: 'type', label: 'Sold as', options: [['all', 'All']].concat(types.map(function (t) {
               return [t, t]; })) }
         ],
-        sorts: [['', 'Shelf order'], ['name', 'A–Z'], ['left', 'Least left first'],
-                ['-left', 'Most left first'], ['-keep', 'Most kept each'], ['keep', 'Least kept each']]
+        sorts: [['', 'Shelf order'], ['name', 'A–Z'], ['-name', 'Z–A'], ['type', 'Sold as'],
+                ['left', 'Least left first'], ['-left', 'Most left first'],
+                ['cost', 'Cheapest to make'], ['-cost', 'Dearest to make'],
+                ['price', 'Lowest price'], ['-price', 'Highest price'],
+                ['-keep', 'Most kept each'], ['keep', 'Least kept each']]
       }) +
-      '<div class="scroll"><table><tr><th>Product</th><th>Sold as</th><th>Left</th>' +
-      '<th class="r">Costs you</th><th>Sells for</th><th class="r">You keep</th><th></th></tr>' +
+      '<div class="scroll"><table><tr>' + SF.filters.th(F, 'name', 'Product') +
+      SF.filters.th(F, 'type', 'Sold as') + SF.filters.th(F, 'left', 'Left') +
+      SF.filters.th(F, 'cost', 'Costs you', 'r') + SF.filters.th(F, 'price', 'Sells for') +
+      SF.filters.th(F, 'keep', 'You keep', 'r') + '<th></th></tr>' +
       (rows || '<tr><td colspan="7" class="empty">Nothing here yet.</td></tr>') +
       '<tr data-fempty="' + F + '" style="display:none"><td colspan="7" class="empty">Nothing matches. ' +
         '<button class="quiet" onclick="SF.filters.clear(\'' + F + '\')">Show all</button></td></tr>' +
@@ -1323,15 +1424,23 @@
   function runHistory(s, v) {
     var names = {};
     s.products.forEach(function (p) { names[p.id] = p.name; });
-    var body = s.batches.length ? s.batches.slice(0, 12).map(function (b) {
-      return '<div class="runrow"><div class="hd"><b>' +
+    var list = s.batches.slice(0, 300);
+    var body = list.length ? SF.filters.bar('runs', { search: 'Search what you made', count: list.length,
+        noun: 'entries', sorts: [['', 'Newest first'], ['-each', 'Dearest each'], ['each', 'Cheapest each'],
+                                 ['-made', 'Most made']] }) +
+      list.map(function (b) {
+      return '<div class="runrow"' + SF.filters.row('runs', {
+          text: [names[b.productId] || b.productId, b.productId, b.when, b.note].concat(
+            (b.lines || []).map(function (l) { return l.label; })).join(' ') },
+          { each: b.costPerUnit, made: b.made }) + '><div class="hd"><b>' +
         esc(names[b.productId] || b.productId) + ' — ' + b.made + '</b>' +
         '<span class="num"><b>' + money(b.costPerUnit) + '</b> ' +
         '<span class="muted small">each</span></span></div>' +
         '<div class="det">' + esc(b.when) + ' · ' + money(b.totalCost) + ' total · ' +
         b.lines.map(function (l) { return esc(l.label) + ' ' + money(l.amount); }).join(' · ') +
         (b.note ? ' · ' + esc(b.note) : '') + '</div></div>';
-    }).join('') : '<div class="empty">Nothing recorded yet.</div>';
+    }).join('') + '<div class="empty" data-fempty="runs" style="display:none">Nothing matches.</div>'
+      : '<div class="empty">Nothing recorded yet.</div>';
 
     return '<div class="card"><h2>' + esc(v.runs.charAt(0).toUpperCase() + v.runs.slice(1)) +
       ' you have made</h2><div class="sub">Cost per ' + esc(v.unit) +

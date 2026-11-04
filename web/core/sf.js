@@ -570,6 +570,37 @@ window.SF = (function () {
     render(true);
   }
 
+  /** Ask for the newest version now. If there is one it installs and the app reloads. */
+  function checkUpdate() {
+    if (!('serviceWorker' in navigator)) { location.reload(); return; }
+    navigator.serviceWorker.getRegistration().then(function (reg) {
+      if (!reg) { location.reload(); return; }
+      SF.toast('Checking…');
+      return reg.update().then(function () {
+        if (reg.installing || reg.waiting) SF.toast('A new version is on its way. The app will reload.');
+        else SF.toast('You have the latest version (' + (CFG.build || 'dev') + ').');
+      });
+    }).catch(function () { SF.toast('No signal to check. Try again when you have some.', true); });
+  }
+
+  /**
+   * The escape hatch: forget this app's saved copy and load it fresh. Sales
+   * waiting to go up stay put; they live in this phone's storage, not the copy.
+   */
+  function repairUpdate() {
+    closeSheet();
+    var done = function () { location.reload(); };
+    if (!('serviceWorker' in navigator)) { done(); return; }
+    navigator.serviceWorker.getRegistration().then(function (reg) {
+      var scope = reg ? reg.scope : '';
+      var wipe = window.caches ? caches.keys().then(function (keys) {
+        return Promise.all(keys.filter(function (k) { return k.indexOf('stallflow:' + scope) === 0; })
+          .map(function (k) { return caches.delete(k); }));
+      }) : Promise.resolve();
+      return wipe.then(function () { return reg ? reg.unregister() : null; });
+    }).then(done, done);
+  }
+
   function applyUpdate() {
     updateReady = false;
     location.reload();
@@ -643,8 +674,12 @@ window.SF = (function () {
     el('notices').innerHTML = out;
   }
 
+  /** The Collect screen exists only where the stall has a separate hand-over step. */
+  function collectOn() { return !!(S.boot && S.boot.collect === true); }
+
   function paintTabs() {
     var items = TABS.filter(function (id) {
+      if (id === 'collect' && !collectOn()) return false;
       return screens[id] && can(screens[id].cap);
     }).map(function (id) {
       return { id: id, title: screens[id].title, icon: ICONS[id] };
@@ -757,6 +792,8 @@ window.SF = (function () {
   function route() {
     var v = (location.hash || '#till').slice(1);
     if (v === 'more') { openMore(); location.replace('#' + S.view); return; }
+    // An old bookmark to Collect, at a stall without one, goes to the till.
+    if (v === 'collect' && S.ready && !collectOn()) { location.replace('#till'); return; }
     S.view = v;
     // Not signed in yet: remember where they were heading, but ask the server
     // for nothing. A request without a token is refused and signs them out.
@@ -806,7 +843,11 @@ window.SF = (function () {
         '<button class="ghost" onclick="SF.toggleTheme()">Light / dark</button>' +
         '<button class="ghost" onclick="SF.signOut()">Sign out</button>' +
       '</div>' +
-      '<div class="foot">StallFlow ' + esc((S.boot && S.boot.version) || '') +
+      '<div class="hr"></div>' +
+      '<div class="row"><button class="ghost" onclick="SF.checkUpdate()">Check for update</button>' +
+        '<button class="ghost" onclick="SF.repairUpdate()">Fix a stuck update</button></div>' +
+      '<div class="foot">App version ' + esc(CFG.build || 'dev') + ' · server ' +
+        esc((S.boot && S.boot.version) || '') +
         ' · signed in as ' + (S.user ? esc(S.user) + ' (' + esc(S.role) + ')' : esc(S.role)) +
         '</div>');
   }
@@ -1028,7 +1069,8 @@ window.SF = (function () {
     // helpers
     el: el, esc: esc, money: money, moneyShort: moneyShort, qty: qty, countOf: countOf,
     clock: clock, uid: uid, find: find, toast: toast, can: can, units: UNITS,
-    openSheet: openSheet, closeSheet: closeSheet, openMore: openMore,
-    install: install, dismissInstall: dismissInstall, applyUpdate: applyUpdate
+    openSheet: openSheet, closeSheet: closeSheet, openMore: openMore, collectOn: collectOn,
+    install: install, dismissInstall: dismissInstall, applyUpdate: applyUpdate,
+    checkUpdate: checkUpdate, repairUpdate: repairUpdate
   };
 })();
