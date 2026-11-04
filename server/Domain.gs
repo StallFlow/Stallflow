@@ -876,8 +876,8 @@ SF.action('labels', 'labels', 'read', function () {
     markets: SF.orderableMarkets(),
     live: SF.publicMarket(SF.orderMarket('')),
     products: SF.products({ all: true }).map(function (p) {
-      return { id: p.id, name: p.name, variant: p.variant, type: p.type, unit: p.unit,
-               price: p.price, active: p.active, available: p.available, onHand: p.onHand };
+      return { id: p.id, name: p.name, variant: p.variant, category: p.category, type: p.type,
+               unit: p.unit, price: p.price, active: p.active, available: p.available, onHand: p.onHand };
     })
   };
 });

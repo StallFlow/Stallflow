@@ -146,6 +146,7 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
     SF.move('P01', 10, 'adjust', 'test'); SF.move('P02', 10, 'adjust', 'test');
     SF.append('markets', { MarketId: 'M01', Name: 'Test Market', Date: day(-3), Status: 'planned' });
     SF.set('activeMarket', 'M01');
+    if (opts.seed) opts.seed(SF);
     let token;
     if (opts.google) {
       SF.PLATFORM.googleClientId = 'x.apps.googleusercontent.com'; SF.PLATFORM.admins = ['boss@x.com'];
@@ -578,6 +579,225 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
     await page.waitForFunction(() => SF.state.data.collect && SF.state.data.collect.marketId === 'M02');
     await page.evaluate(() => SF.render());
     assert.ok(/Marie du Plessis/.test(await page.textContent('#view')));
+    await env.ctx.close();
+  });
+
+  /* ---------- filters on long lists ---------- */
+  // Ten products: 4 jams (one running low, one sold out), 3 dolls (one hidden), 3 resin.
+  const shop10 = (SF) => {
+    [['P03', 'Strawberry Jam', 'Jams', 3], ['P04', 'Fig Jam', 'Jams', 0], ['P05', 'Guava Jam', 'Jams', 9],
+     ['P06', 'Apricot Preserve', 'Jams', 7], ['P07', 'Topsy-turvy doll', 'Dolls', 5],
+     ['P08', 'Rag doll', 'Dolls', 6], ['P09', 'Sock monkey', 'Dolls', 2],
+     ['P10', 'Resin coaster', 'Resin', 12], ['P11', 'Resin bookmark', 'Resin', 8],
+     ['P12', 'Resin keyring', 'Resin', 10]].forEach(([id, name, cat, n], i) => {
+      SF.append('products', { ProductId: id, Name: name, Category: cat, Type: 'stocked', Unit: 'each',
+                              Price: 50 + i * 10, Active: id === 'P08' ? 'No' : 'Yes', Sort: 30 + i });
+      if (n) SF.move(id, n, 'adjust', 'test');
+    });
+  };
+  const openShelf = async (page) => {
+    await page.waitForFunction(() => SF.state.data.stock);
+    await page.evaluate(() => { SF.ls.set('sf.tab.stock', 'shelf'); SF.render(); });
+    await page.waitForSelector('#fq-shelf');
+  };
+  const shownNames = (page, id) => page.$$eval('[data-frow="' + id + '"]', (rows) =>
+    rows.filter((r) => r.style.display !== 'none').map((r) => r.querySelector('b').textContent));
+
+  await test('Stock: the search narrows the list as you type and keeps the keyboard', async () => {
+    const env = await phone({ hash: '#stock', seed: shop10 });
+    const page = env.page;
+    await openShelf(page);
+    assert.strictEqual((await shownNames(page, 'shelf')).length, 12);
+    await page.click('#fq-shelf'); await page.keyboard.type('resin', { delay: 25 });
+    assert.deepStrictEqual(await shownNames(page, 'shelf'), ['Resin coaster', 'Resin bookmark', 'Resin keyring']);
+    assert.strictEqual(await page.evaluate(() => document.activeElement.id), 'fq-shelf');
+    assert.ok(/Showing 3 of 12 products/.test(await page.textContent('#fc-shelf')));
+    await page.keyboard.type(' key', { delay: 25 });
+    assert.deepStrictEqual(await shownNames(page, 'shelf'), ['Resin keyring'], 'every word must match');
+    await page.fill('#fq-shelf', 'zzz');
+    assert.strictEqual(await page.isVisible('[data-fempty="shelf"]'), true, 'says nothing matches');
+    await env.ctx.close();
+  });
+
+  await test('Stock: Category, Show and Sort narrow and order the list', async () => {
+    const env = await phone({ hash: '#stock', seed: shop10 });
+    const page = env.page;
+    await openShelf(page);
+    await page.selectOption('#ff-shelf-cat', 'Jams');
+    assert.strictEqual((await shownNames(page, 'shelf')).length, 4);
+    if (process.env.SF_SHOT) {
+      await page.locator('.card:has(#fq-shelf)').scrollIntoViewIfNeeded();
+      await page.locator('.card:has(#fq-shelf)').screenshot({ path: path.join(process.env.SF_SHOT, 'stock-filters.png') });
+    }
+    await page.selectOption('#ff-shelf-show', 'out');
+    assert.deepStrictEqual(await shownNames(page, 'shelf'), ['Fig Jam']);
+    await page.selectOption('#ff-shelf-show', 'low');
+    assert.deepStrictEqual(await shownNames(page, 'shelf'), ['Strawberry Jam']);
+    await page.selectOption('#ff-shelf-cat', 'all'); await page.selectOption('#ff-shelf-show', 'hidden');
+    assert.deepStrictEqual(await shownNames(page, 'shelf'), ['Rag doll']);
+    await page.selectOption('#ff-shelf-show', 'all'); await page.selectOption('#ff-shelf-cat', 'Resin');
+    await page.selectOption('#ff-shelf-sort', 'left');
+    assert.deepStrictEqual(await shownNames(page, 'shelf'), ['Resin bookmark', 'Resin keyring', 'Resin coaster']);
+    await page.selectOption('#ff-shelf-sort', 'name');
+    assert.deepStrictEqual(await shownNames(page, 'shelf'), ['Resin bookmark', 'Resin coaster', 'Resin keyring']);
+    await page.click('#fc-shelf button');
+    assert.strictEqual((await shownNames(page, 'shelf')).length, 12, 'Show all clears the filters');
+    await env.ctx.close();
+  });
+
+  await test('Stock: choices are remembered on this phone, the search is not', async () => {
+    const env = await phone({ hash: '#stock', seed: shop10 });
+    const page = env.page;
+    await openShelf(page);
+    await page.selectOption('#ff-shelf-cat', 'Dolls');
+    await page.fill('#fq-shelf', 'rag');
+    await page.goto('about:blank'); await page.goto(base + '#stock');
+    await openShelf(page);
+    assert.strictEqual(await page.inputValue('#ff-shelf-cat'), 'Dolls');
+    assert.strictEqual(await page.inputValue('#fq-shelf'), '');
+    assert.strictEqual((await shownNames(page, 'shelf')).length, 3);
+    await env.ctx.close();
+  });
+
+  await test('Stock: the filter survives a refresh and hiding a product', async () => {
+    const env = await phone({ hash: '#stock', seed: shop10 });
+    const page = env.page;
+    await openShelf(page);
+    await page.click('#fq-shelf'); await page.keyboard.type('doll', { delay: 20 });
+    await leaveAndReturn(page); await settle(page);
+    assert.strictEqual(await page.inputValue('#fq-shelf'), 'doll');
+    // "doll" also finds Sock monkey: the search covers the category (Dolls) too.
+    const dolls = ['Topsy-turvy doll', 'Rag doll', 'Sock monkey'];
+    assert.deepStrictEqual(await shownNames(page, 'shelf'), dolls, 'after coming back');
+    await page.click('tr:has-text("Topsy-turvy doll") button:has-text("hide")');
+    await settle(page, 600);
+    assert.strictEqual(await page.inputValue('#fq-shelf'), 'doll');
+    assert.deepStrictEqual(await shownNames(page, 'shelf'), dolls, 'after hiding');
+    await env.ctx.close();
+  });
+
+  await test('a short list has no filter bar', async () => {
+    const env = await phone({ hash: '#stock' });
+    await openShelf(env.page).catch(() => {});
+    assert.strictEqual(await env.page.locator('.fbar').count(), 0);
+    await env.ctx.close();
+  });
+
+  await test('QR labels: Tick none only touches the products you filtered to', async () => {
+    const env = await phone({ hash: '#labels', seed: shop10 });
+    const page = env.page;
+    await page.waitForSelector('#fq-labels');
+    await page.selectOption('#ff-labels-cat', 'Dolls');
+    await page.click('text=Tick none');
+    assert.strictEqual(await page.isChecked('#c-P07'), false);
+    assert.strictEqual(await page.isChecked('#c-P03'), true, 'a jam, not shown, stays ticked');
+    await page.emulateMedia({ media: 'print' });
+    assert.strictEqual(await page.isVisible('.fbar'), false, 'the filter never prints');
+    await env.ctx.close();
+  });
+
+  await test('Collect: find a customer by name or order number', async () => {
+    const placed = {};
+    const env = await phone({ hash: '#collect', seed: (SF) => {
+      ['Anna Bester', 'Marie du Plessis', 'Thabo Nkosi', 'Pieter Smit', 'Lerato Dube', 'Johan Venter', 'Zanele Mokoena']
+        .forEach((n, i) => {
+          const r = SF.dispatch('placeOrder', { opId: 'q' + i, name: n, phone: '082 000 00' + (10 + i),
+            consent: true, lines: [{ id: 'P01', qty: 1 }], market: 'home' });
+          if (!r.ok) throw new Error(r.message);
+          placed[n] = r.orderNo;
+        });
+    } });
+    const page = env.page;
+    await page.evaluate(() => { SF.ls.set('sf.sellAt', 'home'); SF.ls.set('sf.tab.collect', 'topay'); });
+    await page.goto('about:blank'); await page.goto(base + '#collect');
+    await page.waitForSelector('#fq-collect');
+    await page.fill('#fq-collect', 'marie');
+    assert.deepStrictEqual(await shownNames(page, 'collect'), ['Marie du Plessis']);
+    await page.fill('#fq-collect', placed['Thabo Nkosi']);
+    assert.deepStrictEqual(await shownNames(page, 'collect'), ['Thabo Nkosi'], 'by order number ' + placed['Thabo Nkosi']);
+    await page.fill('#fq-collect', 'zzz');
+    assert.strictEqual(await page.isVisible('[data-fempty="collect"]'), true);
+    await env.ctx.close();
+  });
+
+  await test('All markets: Show Coming up and sort by profit', async () => {
+    const env = await phone({ hash: '#numbers', seed: (SF) => {
+      [['M02', 'Spring Fair', 5], ['M03', 'Winter Fair', -40], ['M04', 'Craft Night', 12], ['M05', 'Easter Market', -200],
+       ['M06', 'School Fete', 2]].forEach(([id, name, n]) =>
+        SF.append('markets', { MarketId: id, Name: name, Date: day(n), Status: 'planned' }));
+    } });
+    const page = env.page;
+    await page.waitForFunction(() => SF.state.data.numbers);
+    await page.evaluate(() => { SF.ls.set('sf.tab.numbers', 'all'); SF.render(); });
+    await page.waitForSelector('#fq-markets');
+    await page.selectOption('#ff-markets-when', 'upcoming');
+    assert.deepStrictEqual((await shownNames(page, 'markets')).sort(), ['Craft Night', 'School Fete', 'Spring Fair']);
+    await page.selectOption('#ff-markets-when', 'past');
+    assert.deepStrictEqual((await shownNames(page, 'markets')).sort(), ['Easter Market', 'Test Market', 'Winter Fair']);
+    await page.selectOption('#ff-markets-sort', 'date');
+    assert.deepStrictEqual(await shownNames(page, 'markets'), ['Easter Market', 'Winter Fair', 'Test Market']);
+    await env.ctx.close();
+  });
+
+  /* ---------- the till: how many of each ---------- */
+  const cartQty = (page) => page.$$eval('.cart .qn', (b) => b.map((x) => Number(x.textContent)));
+
+  await test('Till: − and + change how many, and − at one takes it off', async () => {
+    const env = await phone({ hash: '#till' });
+    const page = env.page;
+    await page.waitForFunction(() => SF.state.data.till);
+    await page.evaluate(() => SFT.tap('P01'));
+    await page.waitForSelector('.cart .qn');
+    await page.click('button[aria-label="One more Apricot Jam"]');
+    await page.click('button[aria-label="One more Apricot Jam"]');
+    assert.deepStrictEqual(await cartQty(page), [3]);
+    assert.ok(/R 210\.00/.test(await page.textContent('.cart .tot')), await page.textContent('.cart .tot'));
+    if (process.env.SF_SHOT) {
+      await page.evaluate(() => SFT.tap('P02'));
+      await page.screenshot({ path: path.join(process.env.SF_SHOT, 'till-basket.png') });
+      await page.click('button[aria-label="Remove Marmalade"]');
+    }
+    await page.click('button[aria-label="One less Apricot Jam"]');
+    assert.deepStrictEqual(await cartQty(page), [2]);
+    await page.click('button[aria-label="One less Apricot Jam"]');
+    assert.deepStrictEqual(await cartQty(page), [1]);
+    await page.click('button[aria-label="Remove Apricot Jam"]');
+    assert.strictEqual(await page.locator('.cart').count(), 0, 'the line is gone');
+    await env.ctx.close();
+  });
+
+  await test('Till: tap the number to type how many, never more than is left', async () => {
+    const env = await phone({ hash: '#till' });
+    const page = env.page;
+    await page.waitForFunction(() => SF.state.data.till);
+    await page.evaluate(() => SFT.tap('P01'));
+    await page.click('button[aria-label="How many Apricot Jam"]');
+    await page.waitForSelector('#hq');
+    await page.fill('#hq', '6'); await page.keyboard.press('Enter');
+    assert.deepStrictEqual(await cartQty(page), [6]);
+    await page.click('button[aria-label="How many Apricot Jam"]');
+    await page.click('.sheet button:has-text("12")');
+    assert.deepStrictEqual(await cartQty(page), [10], 'only 10 in stock, so it stops at 10');
+    assert.ok(/Only 10/.test(await page.textContent('#toast')));
+    await page.click('button[aria-label="One more Apricot Jam"]');
+    assert.deepStrictEqual(await cartQty(page), [10]);
+    await env.ctx.close();
+  });
+
+  await test('Till: the sale is recorded with the amount chosen', async () => {
+    const env = await phone({ hash: '#till' });
+    const page = env.page;
+    await page.waitForFunction(() => SF.state.data.till);
+    await page.evaluate(() => { SFT.tap('P01'); SFT.tap('P02'); });
+    await page.click('button[aria-label="How many Apricot Jam"]');
+    await page.fill('#hq', '3'); await page.click('.sheet button:has-text("Done")');
+    await page.click('text=Take payment');
+    await page.click('.sheet button:has-text("Exact")');
+    await page.click('#doSale');
+    await page.waitForFunction(() => !SF.outbox.pending().length);
+    const sale = env.sheets.Orders.rows.slice(1).find((r) => r[3] === 'till');
+    assert.strictEqual(sale[7], 4, 'three jam and one marmalade: ' + sale[6]);
+    assert.strictEqual(sale[8], 280);
     await env.ctx.close();
   });
 

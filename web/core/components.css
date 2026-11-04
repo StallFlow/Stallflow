@@ -22,7 +22,15 @@
   z-index:54;background:var(--surface);border-top:1px solid var(--rule);
   padding:12px var(--pad);box-shadow:0 -6px 26px rgba(27,26,24,.14)}
 .cart .lines{max-height:136px;overflow-y:auto;margin-bottom:10px}
-.cart .l{display:flex;justify-content:space-between;gap:10px;font-size:14.5px;padding:4px 0}
+.cart .l{display:flex;justify-content:space-between;align-items:center;gap:10px;font-size:14.5px;padding:4px 0}
+.cart .l .what{flex:1;min-width:0}
+.cart .l > .num{white-space:nowrap;min-width:84px;text-align:right}
+.qstep{display:inline-flex;align-items:center;border:1.5px solid var(--rule);border-radius:10px;
+  overflow:hidden;background:var(--surface);flex:none}
+.qstep button{min-height:40px;min-width:40px;padding:0 10px;border:0;border-radius:0;background:none;
+  color:var(--ink);font:inherit;font-size:18px;font-weight:800;box-shadow:none;cursor:pointer}
+.qstep .qn{min-width:44px;font-size:16px;border-left:1px solid var(--rule);border-right:1px solid var(--rule)}
+.qstep button:active{background:var(--surface-2)}
 .cart .tot{display:flex;justify-content:space-between;align-items:center;
   border-top:1px solid var(--rule);padding-top:10px;margin-bottom:10px}
 .cart .amt{font-size:24px;font-weight:800;font-family:var(--mono)}
@@ -154,6 +162,18 @@ tr.here{background:var(--surface-2)}
 
 .linkbox{font-family:var(--mono);font-size:13px;background:var(--surface-2);border:1px solid var(--rule);
   border-radius:var(--radius-sm);padding:10px 12px;word-break:break-all;user-select:all;-webkit-user-select:all}
+
+/* ---- filter bars (filters.js) ------------------------------------------ */
+.fbar{display:grid;gap:8px;margin:12px 0 10px}
+.fbar .fq{width:100%;padding-left:38px;background-repeat:no-repeat;background-position:12px 50%;
+  background-size:18px;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%239B928A' stroke-width='2' stroke-linecap='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E")}
+.fsels{display:flex;gap:8px;flex-wrap:wrap}
+.fsel{flex:1 1 130px;min-width:0;display:flex;flex-direction:column;gap:3px;margin:0;
+  font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.fsel select{width:100%;text-transform:none;letter-spacing:0;font-weight:600}
+.fcount{font-size:13px;color:var(--muted);min-height:0}
+.fcount:empty{display:none}
+@media print{.fbar{display:none!important}}
 
 /* ---- place suggestions (places.js) ------------------------------------ */
 .field.place{position:relative}
