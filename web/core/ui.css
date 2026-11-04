@@ -248,7 +248,7 @@ tr:last-child td{border-bottom:none}
 .loading{text-align:center;padding:44px;color:var(--muted)}
 
 @media print{
-  .rail,.tabs,.notice,.noprint{display:none!important}
+  .rail,.tabs,.notice,.noprint,#controls,#toast,.foot{display:none!important}
   body{background:#fff;color:#000}
   main{padding-bottom:0}
   .wrap{max-width:none;padding:0}
