@@ -38,6 +38,7 @@ var SHELL = [
   '../core/labelimg.js',
   '../core/places.js',
   '../core/scan.js',
+  '../core/vendor/jsQR.js',
   '../plugins/kitchen.js',
   '../plugins/scale.js',
   '../plugins/cashup.js'

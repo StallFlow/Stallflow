@@ -17,7 +17,10 @@ web/                 the front end, one copy for every stall
                      core/filters.js: search/filter/sort bars for long lists,
                      SF.filters.bar + .row + .th (sortable headings); filters
                      rows in place. core/labelimg.js: labels as 300 dpi PNGs
-                     and a .zip, for separate label printers)
+                     and a .zip, for separate label printers. core/scan.js:
+                     the till scanner; BarcodeDetector where the phone has
+                     it, else core/vendor/jsQR.js — jsqr 1.4.0 from npm,
+                     unchanged, Apache-2.0 — which is how iPhones scan)
   landing.html       stallflow.github.io/Stallflow/
 server/              Apps Script, identical in every stall's sheet
   Core.gs            sheets, settings, identity, audit, plugin host, router, migrations
