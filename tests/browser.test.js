@@ -158,6 +158,7 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
     // Service workers off, so the routed config.js above is what the app really reads.
     const ctx = await browser.newContext({ viewport: { width: 420, height: 640 },
       deviceScaleFactor: process.env.SF_SHOT ? 2 : 1, serviceWorkers: 'block' });
+    if (opts.init) await ctx.addInitScript(opts.init);
     const page = await ctx.newPage();
     env.mapsRequests = 0;
     await ctx.route('https://maps.googleapis.com/**', async (route) => {
@@ -1082,6 +1083,72 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
     const first = zip.readUInt16LE(26), data = zip.slice(30 + first, 30 + first + zip.readUInt32LE(18));
     assert.strictEqual(pngInfo(data).w, 591, 'the files inside are the labels');
     await env.ctx.close();
+  });
+
+  /* ---------- scanning on a phone without BarcodeDetector, like every iPhone ---------- */
+  // A fake back camera that films whatever QR code window.__fakeText holds.
+  const iphoneCamera = () => {
+    delete window.BarcodeDetector;
+    window.__fakeText = 'SF:P01';
+    navigator.mediaDevices.getUserMedia = async () => {
+      if (window.__denyCamera) { const e = new Error('denied'); e.name = 'NotAllowedError'; throw e; }
+      const c = document.createElement('canvas'); c.width = 640; c.height = 480;
+      const x = c.getContext('2d');
+      const paint = () => {
+        x.fillStyle = '#fff'; x.fillRect(0, 0, 640, 480);
+        const q = window.QR.make(window.__fakeText, 'M'), cell = Math.floor(300 / (q.size + 4));
+        x.fillStyle = '#000';
+        for (let r = 0; r < q.size; r++) for (let k = 0; k < q.size; k++)
+          if (q.modules[r][k]) x.fillRect(170 + (k + 2) * cell, 90 + (r + 2) * cell, cell, cell);
+      };
+      paint(); setInterval(paint, 100);
+      return c.captureStream(10);
+    };
+  };
+
+  await test('Scan works with no BarcodeDetector, as on an iPhone', async () => {
+    const env = await phone({ hash: '#till', init: iphoneCamera });
+    const page = env.page;
+    await page.waitForFunction(() => SF.state.data.till);
+    assert.strictEqual(await page.evaluate(() => 'BarcodeDetector' in window), false);
+    await page.click('button:has-text("Scan")');
+    await page.waitForFunction(() => document.querySelector('.basketbtn .cnt'), null, { timeout: 10000 });
+    assert.strictEqual((await page.textContent('.basketbtn .cnt')).trim(), '1');
+    assert.strictEqual(await page.isVisible('#scan'), false, 'the camera closes after a hit');
+    assert.strictEqual(await page.evaluate(() => typeof window.jsQR), 'function', 'the built-in reader was used');
+    await env.ctx.close();
+  });
+
+  await test('Scan says so when the code is not a product label, then keeps looking', async () => {
+    const env = await phone({ hash: '#till', init: iphoneCamera });
+    const page = env.page;
+    await page.waitForFunction(() => SF.state.data.till);
+    await page.evaluate(() => { window.__fakeText = 'https://stallflow.github.io/Stallflow/duxies/'; });
+    await page.click('button:has-text("Scan")');
+    await page.waitForFunction(() => /not a product label/.test((document.getElementById('scanhint') || {}).textContent || ''),
+                               null, { timeout: 10000 });
+    assert.strictEqual(await page.locator('.basketbtn').count(), 0, 'nothing added');
+    await page.evaluate(() => { window.__fakeText = 'SF:P02'; });
+    await page.waitForFunction(() => document.querySelector('.basketbtn .cnt'), null, { timeout: 10000 });
+    await openBasket(page);
+    assert.ok(/Marmalade/.test(await page.textContent('#basketbody')));
+    await env.ctx.close();
+  });
+
+  await test('Scan with the camera blocked says how to allow it on an iPhone', async () => {
+    const env = await phone({ hash: '#till', init: iphoneCamera });
+    const page = env.page;
+    await page.waitForFunction(() => SF.state.data.till);
+    await page.evaluate(() => { window.__denyCamera = true; });
+    await page.click('button:has-text("Scan")');
+    await page.waitForFunction(() => /Settings › Safari › Camera/.test(document.getElementById('toast').textContent));
+    await env.ctx.close();
+  });
+
+  await test('the QR reader is kept for offline use', async () => {
+    const sw = fs.readFileSync(path.join(ROOT, 'web', 'app', 'sw.js'), 'utf8');
+    assert.ok(sw.indexOf("'../core/vendor/jsQR.js'") !== -1);
+    assert.ok(fs.existsSync(path.join(ROOT, 'web', 'core', 'vendor', 'jsQR.LICENSE.txt')));
   });
 
   await test('no page errors anywhere in the run', async () => {
