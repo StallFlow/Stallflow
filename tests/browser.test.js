@@ -736,34 +736,30 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
     // "doll" also finds Sock monkey: the search covers the category (Dolls) too.
     const dolls = ['Topsy-turvy doll', 'Rag doll', 'Sock monkey'];
     assert.deepStrictEqual(await shownNames(page, 'shelf'), dolls, 'after coming back');
-    await page.click('tr:has-text("Topsy-turvy doll") button:has-text("hide")');
+    await page.click('.pcard:has-text("Topsy-turvy doll") button:has-text("hide")');
     await settle(page, 600);
     assert.strictEqual(await page.inputValue('#fq-shelf'), 'doll');
     assert.deepStrictEqual(await shownNames(page, 'shelf'), dolls, 'after hiding');
     await env.ctx.close();
   });
 
-  await test('Stock: tapping a column heading sorts by it, then reverses, then goes back', async () => {
+  await test('Stock: the Sort box orders the price cards, and remembers the choice', async () => {
     const env = await phone({ hash: '#stock', seed: shop10 });
     const page = env.page;
     await openShelf(page);
     await page.selectOption('#ff-shelf-cat', 'Resin');
-    await page.click('th[data-field="price"] button');
+    await page.selectOption('#ff-shelf-sort', 'price');
     assert.deepStrictEqual(await shownNames(page, 'shelf'), ['Resin coaster', 'Resin bookmark', 'Resin keyring']);
-    assert.strictEqual(await page.getAttribute('th[data-field="price"]', 'aria-sort'), 'ascending');
-    assert.strictEqual(await page.inputValue('#ff-shelf-sort'), 'price', 'the Sort dropdown agrees');
-    await page.click('th[data-field="price"] button');
+    await page.selectOption('#ff-shelf-sort', '-price');
     assert.deepStrictEqual(await shownNames(page, 'shelf'), ['Resin keyring', 'Resin bookmark', 'Resin coaster']);
-    assert.strictEqual(await page.getAttribute('th[data-field="price"]', 'aria-sort'), 'descending');
-    assert.ok(/▼/.test(await page.textContent('th[data-field="price"]')));
-    await page.click('th[data-field="price"] button');
-    assert.strictEqual(await page.inputValue('#ff-shelf-sort'), '', 'back to shelf order');
-    await page.click('th[data-field="left"] button');
+    await page.selectOption('#ff-shelf-sort', '');
+    await page.selectOption('#ff-shelf-sort', 'left');
     assert.deepStrictEqual(await shownNames(page, 'shelf'), ['Resin bookmark', 'Resin keyring', 'Resin coaster']);
     await page.goto('about:blank'); await page.goto(base + '#stock'); await openShelf(page);
-    assert.strictEqual(await page.getAttribute('th[data-field="left"]', 'aria-sort'), 'ascending', 'remembered');
+    assert.strictEqual(await page.inputValue('#ff-shelf-sort'), 'left', 'remembered');
     await env.ctx.close();
   });
+
 
   await test('Till: a sale of ten different things — all added, all visible, all changeable', async () => {
     const env = await phone({ hash: '#till', seed: shop10 });
@@ -886,6 +882,71 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
       if (w) wide.push('order page at ' + width + 'px ' + zoom + '×: ' + w);
     }
     assert.deepStrictEqual(wide, [], 'screens wider than the phone:\n  ' + wide.join('\n  '));
+    await env.ctx.close();
+  });
+
+  await test('Prices: type a price, or tap +5 and −5; it saves by itself, says so under the box, and the till follows', async () => {
+    const env = await phone({ hash: '#stock', seed: shop10 });
+    const page = env.page;
+    await openShelf(page);
+    const priceOf = (id) => env.SF.products({ all: true }).find((p) => p.id === id).price;
+    // the selling price comes first and is the biggest thing on the card
+    const order = await page.$eval('#shelf-P01', (c) => ({
+      price: c.querySelector('.pricebox').getBoundingClientRect().top, meta: c.querySelector('.pmeta').getBoundingClientRect().top,
+      size: parseFloat(getComputedStyle(c.querySelector('.pricebox')).fontSize) }));
+    assert.ok(order.price < order.meta && order.size >= 24, JSON.stringify(order));
+    // typing
+    await page.fill('#pp-P01', '75'); await page.keyboard.press('Tab');
+    await page.waitForFunction(() => !SF.outbox.pending().length);
+    assert.strictEqual(priceOf('P01'), 75);
+    assert.ok(/Saved/.test(await page.textContent('#ps-P01')), await page.textContent('#ps-P01'));
+    assert.strictEqual(await page.inputValue('#pp-P01'), '75.00');
+    // +5 three times and −5 once, quickly: one save, for the final amount
+    const before = env.sheets.Ops ? env.sheets.Ops.rows.length : 0;
+    for (const d of ['5', '5', '5', '-5']) await page.click('#shelf-P01 .step[data-d="' + d + '"]');
+    assert.strictEqual(await page.inputValue('#pp-P01'), '85.00');
+    await page.waitForTimeout(1000);                      // the save follows once the taps stop
+    await page.waitForFunction(() => !SF.outbox.pending().length, null, { timeout: 8000 });
+    assert.strictEqual(priceOf('P01'), 85);
+    assert.strictEqual((env.sheets.Ops ? env.sheets.Ops.rows.length : 0) - before, 1, 'the quick taps made one change, not four');
+    // a price cannot go below nothing
+    await page.fill('#pp-P01', '3'); await page.keyboard.press('Tab');
+    for (let i = 0; i < 2; i++) await page.click('#shelf-P01 .step[data-d="-5"]');
+    assert.strictEqual(await page.inputValue('#pp-P01'), '0.00');
+    // the till shows the new price
+    await page.waitForFunction(() => !SF.outbox.pending().length);
+    await page.fill('#pp-P01', '90'); await page.keyboard.press('Tab');
+    await page.waitForFunction(() => !SF.outbox.pending().length);
+    await page.evaluate(() => { location.hash = 'till'; });
+    await page.waitForFunction(() => SF.state.data.till && SF.find(SF.state.data.till.products, 'P01').price === 90, null, { timeout: 8000 });
+    await page.evaluate(() => SFT.tap('P01'));
+    assert.ok(/R 90\.00/.test(await page.textContent('.cart .takebtn')), 'the till sells it at the new price');
+    await env.ctx.close();
+  });
+
+  await test('Prices: every card fits the smallest phone, even with large text, and a long name wraps', async () => {
+    const env = await phone({ hash: '#stock', seed: (SF) => {
+      shop10(SF);
+      SF.append('products', { ProductId: 'P40', Name: 'Handmade-knitted-topsy-turvy-doll-with-matching-bonnet', Variant: 'extra large, made to order', Category: 'Dolls', Type: 'stocked', Unit: 'each', Price: 1250, Active: 'Yes', Sort: 400 });
+      SF.move('P40', 2, 'adjust', 't');
+    } });
+    const page = env.page;
+    await openShelf(page);
+    for (const [w, zoom] of [[320, '1'], [360, '1.6']]) {
+      await page.setViewportSize({ width: w, height: 640 });
+      await page.evaluate((z) => { document.documentElement.style.zoom = z; }, zoom);
+      await page.waitForTimeout(300);
+      const wide = await tooWide(page);
+      assert.ok(!wide, 'price cards at ' + w + 'px ' + zoom + '×: ' + wide);
+      const ok = await page.evaluate(() => {
+        const W = document.documentElement.clientWidth;
+        return Array.from(document.querySelectorAll('.pcard')).every((c) => {
+          const b = c.querySelector('.pricebox').getBoundingClientRect();
+          return b.width > 60 && b.right <= W && c.getBoundingClientRect().right <= W + 1;
+        });
+      });
+      assert.ok(ok, 'the price box is usable on every card at ' + w + 'px ' + zoom + '×');
+    }
     await env.ctx.close();
   });
 

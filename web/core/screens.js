@@ -1144,12 +1144,10 @@
       return p.active && p.type !== 'made' && p.onHand > 0 && !(p.cost > 0);
     });
     var nudge = free.length && on !== 'count'
-      ? '<div class="card stale"><b>' + free.length + (free.length === 1 ? ' product has' : ' products have') +
-          ' no cost yet</b>: ' + free.slice(0, 4).map(function (p) { return esc(p.name); }).join(', ') +
-          (free.length > 4 ? ' and ' + (free.length - 4) + ' more' : '') + '. Until each has a batch with what ' +
-          'it cost, profit counts them as free and a stocktake loss as nothing.' +
-          (on !== 'cook' ? '<button class="block" style="margin-top:10px" onclick="SF.pickTab(\'stock\',\'cook\')">' +
-            esc(tabs[0][1]) + '</button>' : '') + '</div>'
+      ? '<div class="card stale slim"><b>' + free.length + (free.length === 1 ? ' product has' : ' products have') +
+          ' no cost yet.</b> Profit counts ' + (free.length === 1 ? 'it' : 'them') + ' as free, and a stocktake ' +
+          'loss as nothing.' + (on !== 'cook'
+            ? ' <button class="quiet" onclick="SF.pickTab(\'stock\',\'cook\')">' + esc(tabs[0][1]) + '</button>' : '') + '</div>'
       : '';
     var body = on === 'cook' ? (pots ? '<div class="card" id="cookbox"></div>' : runCard(s, v))
       : on === 'other' ? '<div class="sub" style="margin:4px 2px 10px">Biscuits, crochet, anything ' +
@@ -1428,6 +1426,8 @@
 
     setPrice: function (id, value) {
       var price = Math.round((Number(value) || 0) * 100) / 100;
+      var box = SF.el('pp-' + id), note = SF.el('ps-' + id);
+      if (box) box.value = price.toFixed(2);
       SF.write('setPrice', { productId: id, price: price }, function () {
         ['till', 'stock'].forEach(function (v) {
           var d = SF.state.data[v];
@@ -1442,7 +1442,30 @@
           }
         });
       });
-      SF.toast('Price is now ' + money(price));
+      // The answer sits right under the price, where the eyes already are. A save
+      // redraws the screen, so the note is kept and painted by the redraw as well.
+      var p0 = SF.find((SF.state.data.stock || {}).products || [], id);
+      var text = 'Saved \u2713' + (p0 && p0.cost > 0 ? ' \u00b7 you keep ' + money(price - p0.cost) + ' each' : '');
+      justSaved[id] = { text: text, at: Date.now() };
+      var paint = function () {
+        var n = SF.el('ps-' + id);
+        if (n) { n.textContent = text; n.className = 'saved on'; }
+      };
+      paint(); setTimeout(paint, 60);
+      setTimeout(function () {
+        var n = SF.el('ps-' + id);
+        if (n && justSaved[id] && Date.now() - justSaved[id].at >= 2500) n.className = 'saved';
+      }, 2700);
+    },
+
+    /** −5 / +5: change the box, then save once the taps stop. */
+    nudge: function (btn) {
+      var id = btn.getAttribute('data-id'), box = SF.el('pp-' + id);
+      if (!box) return;
+      var v = Math.max(0, Math.round(((Number(box.value) || 0) + Number(btn.getAttribute('data-d'))) * 100) / 100);
+      box.value = v.toFixed(2);
+      clearTimeout(box._t);
+      box._t = setTimeout(function () { SFS.setPrice(id, box.value); }, 600);
     },
 
     toggle: function (id, on) { SF.write('setActive', { productId: id, active: on }); },
@@ -1540,6 +1563,8 @@
     return out.sort();
   }
 
+  var justSaved = {};   // product id -> what the Saved note says, kept across the redraw a save causes
+
   function priceTable(s) {
     var F = 'shelf';
     var cats = uniq(s.products.map(function (p) { return p.category; }));
@@ -1557,34 +1582,45 @@
         : p.onHand <= 4 ? '<span class="tag warn">' + qty(p.onHand, p.unit) + '</span>'
         : '<span class="tag ok">' + qty(p.onHand, p.unit) + '</span>';
 
-      return '<tr id="shelf-' + esc(p.id) + '"' + SF.filters.row(F, {
+      var kept = p.cost > 0
+        ? 'Costs you <b>' + money(p.cost) + '</b> · you keep <b>' + money(p.margin) + '</b> <span class="muted">(' +
+            Math.round(p.marginPct) + '%)</span>'
+        : 'No ' + esc(SF.state.vocab.run) + ' yet: cost not known';
+      var id = esc(p.id), js = justSaved[p.id];
+      return '<div class="pcard' + (p.active ? '' : ' off') + '" id="shelf-' + id + '"' + SF.filters.row(F, {
           text: [p.name, p.variant, p.category, p.id, p.type].join(' '),
           cat: p.category || 'none', show: show.join(' '), type: p.type
         }, { name: p.name.toLowerCase() + ' ' + String(p.variant || '').toLowerCase(), left: left,
              type: p.type, cost: p.cost > 0 ? Math.round(p.cost * 100) / 100 : -1e9, price: p.price,
-             keep: p.cost > 0 ? Math.round(p.margin * 100) / 100 : -1e9 }) + '><td><b>' + esc(p.name) + '</b>' +
-        (p.variant ? '<div class="muted small">' + esc(p.variant) + '</div>' : '') + '</td>' +
-        '<td><span class="tag">' + esc(p.type) + '</span></td>' +
-        '<td>' + state + '</td>' +
-        '<td class="r">' + (p.cost > 0 ? money(p.cost) : '—') + '</td>' +
-        '<td><input type="number" min="0" step="0.5" inputmode="decimal" class="pricebox num" ' +
-          'value="' + p.price.toFixed(2) + '" onchange="SFS.setPrice(\'' + p.id + '\',this.value)"></td>' +
-        '<td class="r">' + (p.cost > 0
-          ? money(p.margin) + ' <span class="muted small">(' + Math.round(p.marginPct) + '%)</span>'
-          : '<span class="muted small">no ' + esc(SF.state.vocab.run) + ' yet</span>') + '</td>' +
-        '<td class="r"><button class="quiet" onclick="SFS.toggle(\'' + p.id + '\',' +
-          (p.active ? 'false' : 'true') + ')">' + (p.active ? 'hide' : 'show') + '</button>' +
+             keep: p.cost > 0 ? Math.round(p.margin * 100) / 100 : -1e9 }) + '>' +
+        '<div class="ptop"><div class="pname"><b>' + esc(p.name) + '</b>' +
+          (p.variant ? ' <span class="muted">' + esc(p.variant) + '</span>' : '') + '</div>' + state + '</div>' +
+        '<div class="pprice"><label for="pp-' + id + '">Selling price (rand)</label>' +
+          '<div class="pinput">' +
+            '<button type="button" class="step" data-id="' + id + '" data-d="-5" aria-label="R5 less for ' + esc(p.name) +
+              '" onclick="SFS.nudge(this)">&minus;5</button>' +
+            '<input id="pp-' + id + '" type="number" min="0" step="0.5" inputmode="decimal" class="pricebox num" ' +
+              'data-id="' + id + '" value="' + p.price.toFixed(2) + '" aria-label="Selling price of ' + esc(p.name) + '" ' +
+              'onchange="SFS.setPrice(this.getAttribute(\'data-id\'),this.value)" onfocus="this.select()">' +
+            '<button type="button" class="step" data-id="' + id + '" data-d="5" aria-label="R5 more for ' + esc(p.name) +
+              '" onclick="SFS.nudge(this)">+5</button>' +
+          '</div><div class="saved' + (js && Date.now() - js.at < 2600 ? ' on' : '') + '" id="ps-' + id +
+          '" aria-live="polite">' + (js && Date.now() - js.at < 2600 ? esc(js.text) : '') + '</div></div>' +
+        '<div class="pmeta">' + kept + '</div>' +
+        '<div class="pacts"><button class="quiet" data-id="' + id + '" data-on="' + (p.active ? 'false' : 'true') +
+          '" onclick="SFS.toggle(this.getAttribute(\'data-id\'),this.getAttribute(\'data-on\')===\'true\')">' +
+          (p.active ? 'hide' : 'show') + '</button>' +
           (p.type !== 'made'
-            ? '<button class="quiet" onclick="SFS.adjust(\'' + p.id + '\')">adjust</button>' : '') +
-        '</td></tr>';
+            ? '<button class="quiet" data-id="' + id + '" onclick="SFS.adjust(this.getAttribute(\'data-id\'))">adjust stock</button>' : '') +
+        '</div></div>';
     }).join('');
 
     return '<div class="card"><div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">' +
       '<h2 style="flex:1">Prices and what is left</h2>' +
       '<button class="ghost sm" onclick="SFS.scanCheck()">Scan a jar</button>' +
       '<button class="ghost sm" onclick="SFS.newProduct()">Add product</button></div>' +
-      '<div class="sub">Change a price and it takes effect at once — the order page and the ' +
-        'till both follow.</div>' +
+      '<div class="sub">Type a new price, or tap <b>−5</b> / <b>+5</b>. It saves by itself and takes ' +
+        'effect at once: the order page and the till both follow.</div>' +
       SF.filters.bar(F, {
         search: 'Search products', count: s.products.length, noun: 'products',
         facets: [
@@ -1601,14 +1637,11 @@
                 ['price', 'Lowest price'], ['-price', 'Highest price'],
                 ['-keep', 'Most kept each'], ['keep', 'Least kept each']]
       }) +
-      '<div class="scroll"><table><tr>' + SF.filters.th(F, 'name', 'Product') +
-      SF.filters.th(F, 'type', 'Sold as') + SF.filters.th(F, 'left', 'Left') +
-      SF.filters.th(F, 'cost', 'Costs you', 'r') + SF.filters.th(F, 'price', 'Sells for') +
-      SF.filters.th(F, 'keep', 'You keep', 'r') + '<th></th></tr>' +
-      (rows || '<tr><td colspan="7" class="empty">Nothing here yet.</td></tr>') +
-      '<tr data-fempty="' + F + '" style="display:none"><td colspan="7" class="empty">Nothing matches. ' +
-        '<button class="quiet" onclick="SF.filters.clear(\'' + F + '\')">Show all</button></td></tr>' +
-      '</table></div></div>';
+      '<div class="plist">' +
+      (rows || '<div class="empty">Nothing here yet.</div>') +
+      '<div class="empty" data-fempty="' + F + '" style="display:none">Nothing matches. ' +
+        '<button class="quiet" onclick="SF.filters.clear(\'' + F + '\')">Show all</button></div>' +
+      '</div></div>';
   }
 
   function runHistory(s, v) {
