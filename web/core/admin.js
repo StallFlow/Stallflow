@@ -134,6 +134,9 @@
         '<span>' + money(s.expenses) + ' to be there</span></div>' +
       '<div class="ledger">' +
         line('Taken at the table', money(s.revenue)) +
+        (s.byMethod && (s.byMethod.card || s.byMethod.eft)
+          ? '<div class="muted small" style="margin:-4px 0 6px">Cash ' + money(s.byMethod.cash) +
+            ' \u00b7 Card ' + money(s.byMethod.card) + ' \u00b7 EFT ' + money(s.byMethod.eft) + '</div>' : '') +
         line('Less what those cost to make', '− ' + money(s.cogs)) +
         line('Made on the goods', money(s.gross), 'sum') +
         line('Less the cost of being there', '− ' + money(s.expenses)) +
@@ -143,6 +146,10 @@
           ? '<div class="muted small" style="margin-top:8px">Each ' + esc(v.unit) +
             ' puts about ' + money(s.contributionPerUnit) + ' towards the day' +
             (s.breakEvenUnits ? ' — so ' + s.breakEvenUnits + ' covers it' : '') + '.</div>' : '') +
+        (s.uncosted > 0
+          ? '<div class="muted small" style="margin-top:6px">' + s.uncosted + ' product' +
+            (s.uncosted === 1 ? ' has' : 's have') + ' no cost yet, so profit counts ' +
+            (s.uncosted === 1 ? 'it' : 'them') + ' as free. Add a batch under Stock.</div>' : '') +
         (s.outstanding > 0
           ? '<div class="muted small" style="margin-top:6px">' + money(s.outstanding) +
             ' is reserved but not paid for — not counted above.</div>' : '') +
@@ -1131,6 +1138,18 @@
     },
     forget1: function (opId) { SF.outbox.remove(opId); SF.render(); },
 
+    backupNow: function () {
+      var b = SF.el('backupnow');
+      if (b) { b.disabled = true; b.textContent = 'Backing up\u2026'; }
+      SF.get('backupNow').then(function (res) {
+        if (!res || res.ok === false || !res.data || !res.data.ok) throw new Error('refused');
+        SF.toast('Backed up: ' + res.data.tabs + ' tabs');
+        SFA.loadHealth();
+      }).catch(function () {
+        if (b) { b.disabled = false; b.textContent = 'Back up now'; }
+        SF.toast('The backup did not go through. Try again with signal.', true);
+      });
+    },
     loadHealth: function () {
       SF.get('health').then(function (res) {
         var box = SF.el('healthbox');
@@ -1167,7 +1186,14 @@
                   return '• ' + esc(x); }).join('<br>') + '</div>'
               : '<div class="notice" style="background:var(--ok-bg);color:var(--ok);' +
                 'border-radius:10px;margin-bottom:12px">No problems found.</div>') +
-            '<h3 style="margin-bottom:8px">Plugins</h3>' +
+            '<h3 style="margin-bottom:8px">Backup</h3>' +
+            '<div class="muted small" style="margin-bottom:8px">' + (h.backup
+              ? 'Last copy of the sheet: ' + esc(String(h.backup.at).slice(0, 16).replace('T', ' ')) +
+                ' (UTC), in the StallFlow Google Drive. One is made each week.'
+              : 'No backup yet. One is made each week by itself, or make one now.') +
+              ' Customers\' names and numbers are never copied.</div>' +
+            (SF.can('settings') ? '<button class="ghost" id="backupnow" onclick="SFA.backupNow()">Back up now</button>' : '') +
+            '<h3 style="margin:16px 0 8px">Plugins</h3>' +
             h.plugins.map(function (p) {
               return '<div class="rowitem"><div class="who"><b>' + esc(p.name) + '</b>' +
                 '<span>' + esc(p.id) + ' · v' + esc(p.version) + '</span></div>' +

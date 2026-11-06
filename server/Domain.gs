@@ -362,7 +362,8 @@ SF.orders = function () {
       lines: SF.json(o.Lines, []),
       units: SF.num(o.Units), total: SF.num(o.Total), cost: SF.num(o.Cost),
       status: String(o.Status || 'reserved'),
-      note: String(o.Note || '')
+      note: String(o.Note || ''),
+      paid: SF.payMethod(o.Paid)
     };
   });
 };
@@ -521,7 +522,11 @@ SF.action('till', 'sell', 'read', function (p) {
     collect: SF.collectOn(),
     totals: t,
     marketId: market,
-    markets: SF.sellableMarkets()
+    markets: SF.sellableMarkets(),
+    // So the till can say when the live market is one that is already over.
+    liveId: SF.activeMarket(), today: SF.today(),
+    allMarkets: SF.markets().filter(function (m) { return m.id !== SF.HOME; })
+                  .map(function (m) { return { id: m.id, name: m.name, date: m.date }; })
   };
 });
 
@@ -536,7 +541,7 @@ SF.action('sell', 'sell', 'write', function (p, ctx) {
     Customer: String(p.customer || (home ? 'Between markets' : 'Walk-up')).slice(0, 60), Phone: '',
     Lines: JSON.stringify(built.lines), Units: built.units, Total: built.total,
     Cost: built.cost, Status: 'collected', PaidAt: now, CollectedAt: now,
-    Note: '', Consent: ''
+    Note: '', Consent: '', Paid: SF.payMethod(p.paid)
   });
   SF.commitLines(built.lines, no, -1, mid);
   SF.emit('order.completed', { orderNo: no, total: built.total, lines: built.lines,
@@ -552,6 +557,7 @@ SF.action('markPaid', 'sell', 'write', function (p, ctx) {
   var now = new Date(), handOver = !SF.collectOn() && o.status !== 'collected';
   SF.setCell('orders', o.row, 'Status', o.status === 'collected' || handOver ? 'collected' : 'paid');
   SF.setCell('orders', o.row, 'PaidAt', now);
+  SF.setCell('orders', o.row, 'Paid', SF.payMethod(p.paid));
   SF.emit('order.paid', { orderNo: o.no, total: o.total }, ctx);
   if (handOver) {
     // No separate hand-over at this stall: paying at the table is collecting.
@@ -949,12 +955,18 @@ SF.action('dashboard', 'reports', 'read', function (p) {
     };
   });
 
+  var uncosted = SF.products().filter(function (x) {
+    return x.type !== 'made' && x.onHand > 0 && !(x.cost > 0);
+  }).length;
+
   function summarise(mid) {
     var orders = all.filter(function (o) { return o.marketId === mid && o.status !== 'cancelled'; });
     var sold = orders.filter(function (o) { return o.status === 'paid' || o.status === 'collected'; });
     var revenue = 0, cogs = 0, units = 0, preTotal = 0, tillTotal = 0, outstanding = 0;
+    var byMethod = { cash: 0, card: 0, eft: 0 };
     sold.forEach(function (o) {
       revenue += o.total; cogs += o.cost; units += o.units;
+      byMethod[o.paid] += o.total;
       if (o.channel === 'till') tillTotal += o.total; else preTotal += o.total;
     });
     orders.forEach(function (o) { if (o.status === 'reserved') outstanding += o.total; });
@@ -967,6 +979,7 @@ SF.action('dashboard', 'reports', 'read', function (p) {
       revenue: revenue, cogs: cogs, gross: gross, expenses: spend, profit: gross - spend,
       units: Math.round(units * 100) / 100, orders: sold.length,
       preTotal: preTotal, tillTotal: tillTotal, outstanding: outstanding,
+      byMethod: byMethod, uncosted: uncosted,
       contributionPerUnit: per,
       breakEvenUnits: per > 0 ? Math.ceil(spend / per) : null,
       unitsToBreakEven: per > 0 ? Math.max(0, Math.ceil((spend - gross) / per)) : null,
@@ -1513,4 +1526,64 @@ SF.action('countLocationsSave', 'stock', 'write', function (p) {
   if (!list.length) return { ok: false, message: 'Keep at least one location.' };
   SF.set('countLocations', JSON.stringify(list));
   return { ok: true, locations: list };
+});
+
+/* =========================================================================
+   11. BACKUP — a weekly copy of the whole sheet, in the StallFlow account's Drive
+   -------------------------------------------------------------------------
+   Plain values only, so a backup can never run a formula. Customers'
+   names and phone numbers are left out: the order page promises they are
+   deleted after the market, and a backup must not keep them longer.
+   Only the spreadsheets permission the stall already has is used, so the
+   live app needs no new authorisation. (Old backups pile up in Drive;
+   delete them there now and then.)
+   ========================================================================= */
+
+SF.BACKUP_DAYS = 7;
+
+SF.backup = function (ctx) {
+  var src = SpreadsheetApp.getActiveSpreadsheet();
+  var stamp = Utilities.formatDate(new Date(), SF.TZ, 'yyyy-MM-dd HH:mm');
+  var name = (SF.profile().name || src.getName()) + ' — backup ' + stamp;
+  var dest = SpreadsheetApp.create(name);
+  var blank = dest.getSheets()[0], copied = 0;
+  var orderHead = SF.SHEETS.orders;
+  var cCol = orderHead.indexOf('Customer'), pCol = orderHead.indexOf('Phone'), chCol = orderHead.indexOf('Channel');
+
+  src.getSheets().forEach(function (s) {
+    var tab = dest.insertSheet(s.getName());
+    if (s.getLastRow() < 1 || s.getLastColumn() < 1) return;
+    var values = s.getRange(1, 1, s.getLastRow(), s.getLastColumn()).getValues();
+    if (s.getName() === 'Orders') {
+      for (var r = 1; r < values.length; r++) {
+        if (pCol < values[r].length) values[r][pCol] = '';
+        if (cCol < values[r].length && String(values[r][chCol]) !== 'till') values[r][cCol] = '(not kept)';
+      }
+    }
+    tab.getRange(1, 1, values.length, values[0].length)
+       .setValues(values.map(function (row) { return row.map(SF.safe); }));
+    copied++;
+  });
+  dest.deleteSheet(blank);
+
+  var when = new Date().toISOString();
+  SF.set('lastBackup', JSON.stringify({ at: when, url: dest.getUrl(), name: name }));
+  SF.audit(ctx || { role: 'system' }, 'backup', name, copied + ' tabs', 'ok');
+  return { ok: true, at: when, url: dest.getUrl(), name: name, tabs: copied };
+};
+
+SF.lastBackup = function () { return SF.json(SF.get('lastBackup', ''), null); };
+
+/* Reads, so the copy never holds the lock a sale is waiting for. */
+SF.action('backupNow', 'settings', 'read', function (p, ctx) { return SF.backup(ctx); });
+
+SF.action('autoBackup', 'settings', 'read', function (p, ctx) {
+  var last = SF.lastBackup();
+  var due = !last || Date.now() - new Date(last.at).getTime() > SF.BACKUP_DAYS * 864e5;
+  // Two phones opening at once must not both start one.
+  var started = Number(SF.get('backupStarted', 0)) || 0;
+  if (!due || Date.now() - started < 10 * 60e3) return { ok: true, skipped: true, last: last };
+  SF.set('backupStarted', Date.now());
+  try { return SF.backup(ctx); }
+  catch (e) { return { ok: false, message: 'The backup did not go through: ' + e.message }; }
 });

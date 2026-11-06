@@ -59,11 +59,19 @@ function makeSheet() {
   };
 }
 function server() {
-  const sheets = {}, props = {}, gh = [];
+  const sheets = {}, props = {}, gh = [], backups = [];
   const ctx = {
     console,
     SpreadsheetApp: { getActiveSpreadsheet: () => ({
-      getSheetByName: (n) => sheets[n] || null, insertSheet: (n) => (sheets[n] = makeSheet()), getName: () => 'Test sheet' }) },
+      getSheetByName: (n) => sheets[n] || null, getName: () => 'Test sheet',
+      insertSheet: (n) => (sheets[n] = Object.assign(makeSheet(), { getName: () => n })),
+      getSheets: () => Object.keys(sheets).map((n) => sheets[n]) }),
+      // The weekly backup: a new spreadsheet, kept in memory.
+      create: (name) => { const tabs = {}; backups.push({ name, tabs });
+        tabs.Sheet1 = Object.assign(makeSheet(), { getName: () => 'Sheet1' });
+        return { getUrl: () => 'https://docs.google.com/spreadsheets/d/backup', getSheets: () => Object.values(tabs),
+          insertSheet: (n) => (tabs[n] = Object.assign(makeSheet(), { getName: () => n })),
+          deleteSheet: (t) => { delete tabs[t.getName()]; } }; } },
     PropertiesService: { getScriptProperties: () => ({
       getProperty: (k) => (k in props ? props[k] : null), setProperty: (k, v) => { props[k] = v; } }) },
     Utilities: {
@@ -88,7 +96,7 @@ function server() {
     .forEach((f) => vm.runInContext(fs.readFileSync(path.join(dir, f), 'utf8'), ctx, { filename: f }));
   ctx.SF.PLATFORM.googleClientId = ''; ctx.SF.PLATFORM.admins = [];
   ctx.SF.migrate();
-  return { SF: ctx.SF, sheets, props, gh };
+  return { SF: ctx.SF, sheets, props, gh, backups };
 }
 
 /* ---------- the built site, served locally ---------- */
@@ -1608,6 +1616,148 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
       return out;
     });
     assert.deepStrictEqual(bad, []);
+    await env.ctx.close();
+  });
+
+  /* ---------- paid by, receipts, the live market, costs, a day with no signal ---------- */
+  const sellOne = async (page, id, how, notes) => {
+    await page.evaluate((x) => SFT.tap(x), id);
+    await page.click('.cart .takebtn');
+    await page.waitForSelector('#doSale');
+    if (how !== 'cash') await page.click('#pw-' + how);
+    else for (const n of notes || []) await page.click('.sheet .cash button:has-text("R' + n + '")');
+    await page.click('#doSale');
+    await page.evaluate(() => { if (document.querySelector('.give')) SF.closeSheet(); });
+  };
+
+  await test('Till: a card sale needs no notes, gives no change, and is kept as card', async () => {
+    const env = await phone({ hash: '#till' });
+    const page = env.page;
+    await page.waitForFunction(() => SF.state.data.till);
+    await page.evaluate(() => SFT.tap('P01'));
+    await page.click('.cart .takebtn');
+    await page.waitForSelector('#doSale');
+    assert.strictEqual(await page.isDisabled('#doSale'), true, 'cash first: nothing received yet');
+    await page.click('#pw-card');
+    assert.strictEqual(await page.isVisible('.sheet .cash'), false, 'no notes for a card');
+    assert.strictEqual(await page.isDisabled('#doSale'), false);
+    await page.click('#doSale');
+    await page.waitForFunction(() => !SF.outbox.pending().length);
+    assert.strictEqual(await page.locator('.give').count(), 0, 'no change to give');
+    const sale = env.SF.orders().find((o) => o.channel === 'till');
+    assert.strictEqual(sale.paid, 'card');
+    assert.ok(/Last sale\s*R 70\.00\s*· card/.test(await page.textContent('.lastsale')), await page.textContent('.lastsale'));
+    await env.ctx.close();
+  });
+
+  await test('Still to pay: a pre-order paid by EFT is kept as EFT', async () => {
+    const env = await phone({ hash: '#till', seed: withPreorder });
+    const page = env.page;
+    await openToPay(page);
+    await page.click('.porder button:has-text("Take payment")');
+    await page.click('#pw-eft');
+    await page.click('#doSale');
+    await page.waitForFunction(() => !SF.outbox.pending().length);
+    assert.strictEqual(env.SF.orders().find((o) => o.customer === 'Viv Pieters').paid, 'eft');
+    await env.ctx.close();
+  });
+
+  await test('Send receipt opens WhatsApp with the sale typed in, and the number goes nowhere else', async () => {
+    const sent = [];
+    const env = await phone({ hash: '#till', init: () => { window.open = (u) => { window.__opened = u; return null; }; } });
+    const page = env.page;
+    page.on('request', (r) => sent.push(r.url() + ' ' + (r.postData() || '')));
+    await page.waitForFunction(() => SF.state.data.till);
+    await page.evaluate(() => { SFT.tap('P01'); SFT.tap('P01'); SFT.tap('P02'); });
+    await page.click('.cart .takebtn');
+    await page.click('.sheet button:has-text("R200")');
+    await page.click('.sheet button:has-text("R20")');
+    await page.click('#doSale');
+    await page.evaluate(() => SF.closeSheet());
+    await page.click('.lastsale button:has-text("Send receipt")');
+    await page.fill('#rph', '082 555 0101');
+    await page.click('#rsend');
+    const url = await page.evaluate(() => window.__opened);
+    assert.ok(url.startsWith('https://wa.me/27825550101?text='), url);
+    const text = decodeURIComponent(url.split('text=')[1]);
+    for (const want of ['2 × Apricot Jam', '1 × Marmalade', 'Total R 210.00', 'paid by cash']) {
+      assert.ok(text.indexOf(want) !== -1, 'receipt has "' + want + '":\n' + text);
+    }
+    await page.waitForTimeout(300);
+    assert.ok(!sent.some((x) => /555.?0101/.test(x)), 'the number never reached the server');
+    assert.ok(!/555.?0101/.test(await page.evaluate(() => JSON.stringify(localStorage))), 'nor is it kept on the phone');
+    await env.ctx.close();
+  });
+
+  await test('Till: when the live market is over, the owner makes today\'s market live in one tap', async () => {
+    const env = await phone({ hash: '#till', seed: (SF) => {
+      SF.append('markets', { MarketId: 'M02', Name: 'Monument Primary Market', Date: day(0), Status: 'planned' });
+    } });
+    const page = env.page;
+    await page.waitForSelector('.card.stale');
+    const text = await page.textContent('.card.stale');
+    assert.ok(/The live market, Test Market, was on/.test(text) && /Monument Primary Market is today/.test(text), text);
+    await page.click('.card.stale button:has-text("Make Monument Primary Market live")');
+    await page.waitForFunction(() => !SF.outbox.pending().length);
+    assert.strictEqual(env.SF.activeMarket(), 'M02');
+    await page.waitForFunction(() => !document.querySelector('.card.stale'));
+    await env.ctx.close();
+  });
+
+  await test('Till: a cashier is told to ask the owner, with no button', async () => {
+    const env = await phone({ hash: '#till', seed: (SF) => {
+      SF.append('markets', { MarketId: 'M02', Name: 'Monument Primary Market', Date: day(0), Status: 'planned' });
+      SF.setPin('cashier', '1111');
+    } });
+    const page = env.page;
+    const tok = env.SF.dispatch('signIn', { pin: '1111', device: 'c' }).data.token;
+    await page.evaluate((t) => SF.ls.set('sf.auth', { token: t, role: 'cashier', user: '' }), tok);
+    await page.goto('about:blank'); await page.goto(base + '#till');
+    await page.waitForSelector('.card.stale');
+    assert.ok(/Ask the owner to make Monument Primary Market live/.test(await page.textContent('.card.stale')));
+    assert.strictEqual(await page.locator('.card.stale button').count(), 0);
+    await env.ctx.close();
+  });
+
+  await test('Stock says which products have no cost yet, until a batch gives them one', async () => {
+    const env = await phone({ hash: '#stock' });
+    const page = env.page;
+    await page.waitForSelector('.card.stale');
+    assert.ok(/2 products have no cost yet/.test(await page.textContent('.card.stale')));
+    const tok = env.SF.dispatch('signIn', { pin: '4321', device: 'x' }).data.token;
+    for (const id of ['P01', 'P02']) {
+      env.SF.dispatch('addBatch', { token: tok, opId: 'b' + id, productId: id, made: 6, lines: [{ label: 'Fruit', amount: 120 }] });
+    }
+    await page.evaluate(() => SF.load('stock'));
+    await page.waitForFunction(() => !document.querySelector('.card.stale'));
+    await env.ctx.close();
+  });
+
+  await test('a whole market day with no signal: every sale arrives once when it comes back', async () => {
+    const env = await phone({ hash: '#till' });
+    const page = env.page;
+    await page.waitForFunction(() => SF.state.data.till);
+    env.offline = true; await env.ctx.setOffline(true);
+    await page.evaluate(() => window.dispatchEvent(new Event('offline')));
+    await sellOne(page, 'P01', 'cash', [100]);
+    await sellOne(page, 'P02', 'card');
+    await sellOne(page, 'P01', 'cash', [50, 20]);
+    await sellOne(page, 'P02', 'eft');
+    await sellOne(page, 'P01', 'card');
+    assert.strictEqual(await page.evaluate(() => SF.outbox.pending().length), 5, 'five sales waiting on the phone');
+    assert.strictEqual(env.SF.orders().length, 0, 'nothing reached the sheet yet');
+    // The phone is closed and opened again, still without signal: the sales are still there.
+    assert.strictEqual(await page.evaluate(() => JSON.parse(JSON.stringify(SF.outbox.pending())).length), 5);
+    env.offline = false; await env.ctx.setOffline(false);
+    await page.evaluate(() => window.dispatchEvent(new Event('online')));
+    await page.waitForFunction(() => !SF.outbox.pending().length, null, { timeout: 15000 });
+    await page.evaluate(() => SF.sync());                 // a second sync must not add anything
+    await page.waitForTimeout(500);
+    const sales = env.SF.orders().filter((o) => o.channel === 'till');
+    assert.strictEqual(sales.length, 5, 'five sales, no doubles');
+    assert.strictEqual(JSON.stringify(sales.map((o) => o.paid)), JSON.stringify(['cash', 'card', 'cash', 'eft', 'card']));
+    const hand = env.SF.onHand();
+    assert.strictEqual(hand.P01, 7); assert.strictEqual(hand.P02, 8);
     await env.ctx.close();
   });
 

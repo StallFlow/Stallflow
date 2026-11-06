@@ -62,11 +62,19 @@ function makeSheet() {
   };
 }
 function server() {
-  const sheets = {}, props = {}, gh = [];
+  const sheets = {}, props = {}, gh = [], backups = [];
   const ctx = {
     console,
     SpreadsheetApp: { getActiveSpreadsheet: () => ({
-      getSheetByName: (n) => sheets[n] || null, insertSheet: (n) => (sheets[n] = makeSheet()), getName: () => 'Test sheet' }) },
+      getSheetByName: (n) => sheets[n] || null, getName: () => 'Test sheet',
+      insertSheet: (n) => (sheets[n] = Object.assign(makeSheet(), { getName: () => n })),
+      getSheets: () => Object.keys(sheets).map((n) => sheets[n]) }),
+      // The weekly backup: a new spreadsheet, kept in memory.
+      create: (name) => { const tabs = {}; backups.push({ name, tabs });
+        tabs.Sheet1 = Object.assign(makeSheet(), { getName: () => 'Sheet1' });
+        return { getUrl: () => 'https://docs.google.com/spreadsheets/d/backup', getSheets: () => Object.values(tabs),
+          insertSheet: (n) => (tabs[n] = Object.assign(makeSheet(), { getName: () => n })),
+          deleteSheet: (t) => { delete tabs[t.getName()]; } }; } },
     PropertiesService: { getScriptProperties: () => ({
       getProperty: (k) => (k in props ? props[k] : null), setProperty: (k, v) => { props[k] = v; } }) },
     Utilities: {
@@ -98,7 +106,7 @@ function server() {
     .forEach((f) => vm.runInContext(fs.readFileSync(path.join(dir, f), 'utf8'), ctx, { filename: f }));
   ctx.SF.PLATFORM.googleClientId = ''; ctx.SF.PLATFORM.admins = [];
   ctx.SF.migrate();
-  return { SF: ctx.SF, sheets, props, gh };
+  return { SF: ctx.SF, sheets, props, gh, backups };
 }
 
 /* ---------- the built site, served locally ---------- */

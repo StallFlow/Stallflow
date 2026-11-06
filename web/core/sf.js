@@ -1043,6 +1043,9 @@ window.SF = (function () {
     S.ready = true;
     route();
     sync().then(warm);
+    // The weekly copy of the sheet. The server does nothing unless a week has
+    // passed; it runs in the background, long after the screen has loaded.
+    if (can('settings')) setTimeout(function () { if (S.online) get('autoBackup').catch(function () {}); }, 20000);
   }
 
   function init() {

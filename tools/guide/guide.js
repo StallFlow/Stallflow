@@ -243,7 +243,7 @@ class Recorder {
       await beat(800);
       await say('Then tap Take payment.', 1200);
       await tap('#basketbody button:has-text("Take payment")');
-      await say('Tap the notes the customer hands you. The app works out the change.', 1500);
+      await say('Paying cash? Tap the notes they hand you. The app works out the change.', 1500);
       await tap('.sheet button:has-text("R200")', { after: 500 });
       await tap('.sheet button:has-text("R200")', { after: 500 });
       await tap('.sheet button:has-text("R200")', { after: 1200 });
@@ -264,14 +264,22 @@ class Recorder {
       await camera(site + '?p=P05', 'Pineapple Jam', 1300);
       await page.waitForFunction(() => !document.querySelector('#scan') || document.querySelector('#scan').style.display === 'none', null, { timeout: 15000 });
       await say('…and the jar goes straight onto the bill.', 2400);
-      await say('Take payment as before. Exact, when they pay the exact amount.', 600);
+      await say('Paying by card or EFT? Tap it: no notes, no change.', 600);
       await tap('.cart .takebtn');
-      await tap('.sheet button:has-text("Exact")', { after: 900 });
+      await tap('#pw-card', { after: 1400 });
       await tap('#doSale', { after: 1600 });
       const done = page.locator('.sheet button:has-text("Next sale"), .sheet button:has-text("Done"), .sheet button:has-text("Back to the till")').first();
       if (await done.count()) await tap('.sheet button:has-text("Next sale"), .sheet button:has-text("Done"), .sheet button:has-text("Back to the till")');
       else await page.evaluate(() => SF.closeSheet && SF.closeSheet());
       await beat(600);
+      await page.evaluate(() => window.scrollTo(0, 0));
+      await say('Want a receipt? Send receipt opens WhatsApp with the sale typed in.', 600);
+      await tap('.lastsale button:has-text("Send receipt")', { after: 600 });
+      await type('#rph', '082 555 0101');
+      await tap('#rsend', { markOnly: true, after: 600 });
+      await say('Their number is not saved anywhere.', 2200);
+      await page.evaluate(() => SF.closeSheet && SF.closeSheet());
+      await beat(500);
     }],
     /* 3 */ ['preorder', '3 · Pre-orders and WhatsApp', async () => {
       const shop = await ctx.newPage();
@@ -301,8 +309,8 @@ class Recorder {
       await beat(1500);
       await say('In the app, the order waits under Till › Still to pay.', 2400);
       await tap('.porder button:has-text("Take payment")');
-      await say('When Anna pays, record it, and the order is done.', 1400);
-      await tap('.sheet button:has-text("Exact")');
+      await say('When Anna pays (here by EFT), record it, and the order is done.', 1400);
+      await tap('#pw-eft', { after: 700 });
       await tap('#doSale', { after: 1500 });
       await page.evaluate(() => SF.closeSheet && SF.closeSheet());
       await tab('till', 'sell');

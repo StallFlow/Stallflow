@@ -43,6 +43,43 @@
   var cart = [];
   var tendered = 0;      // money handed over for the sale being rung up
   var notes = [];        // the notes tapped, so the last one can be undone
+  var method = 'cash';   // how the sale being rung up is paid: cash, card or eft
+  var lastSale = null;   // for Send receipt; kept on this phone only, never the customer's number
+  var METHODS = [['cash', 'Cash'], ['card', 'Card'], ['eft', 'EFT']];
+
+  /** A South African number as WhatsApp wants it: 082 123 4567 → 27821234567. */
+  function waNumber(v) {
+    var d = String(v || '').replace(/[^0-9]/g, '');
+    if (d.charAt(0) === '0') d = '27' + d.slice(1);
+    return /^27[0-9]{9}$/.test(d) || /^[1-9][0-9]{9,13}$/.test(d) ? d : '';
+  }
+
+  /** The live market is one whose day is already over: offer today's (or the next) instead. */
+  function staleMarket(d) {
+    if (!d.liveId || !d.today || !d.allMarkets) return '';
+    var live = SF.find(d.allMarkets, d.liveId);
+    if (!live || !live.date || live.date >= d.today) return '';
+    var next = d.allMarkets.filter(function (m) { return m.date && m.date >= d.today; })
+      .sort(function (a, b) { return a.date < b.date ? -1 : a.date > b.date ? 1 : 0; })[0];
+    var when = next && next.date === d.today ? 'today' : next ? 'on ' + esc(next.date) : '';
+    return '<div class="card stale"><b>The live market, ' + esc(live.name) + ', was on ' + esc(live.date) + '.</b> ' +
+      (next
+        ? (SF.can('settings')
+            ? 'Sales and the order page still go to it. ' + esc(next.name) + ' is ' + when + '.' +
+              '<button class="block" style="margin-top:10px" data-id="' + esc(next.id) + '" ' +
+              'onclick="SFT.makeLive(this.getAttribute(\'data-id\'))">Make ' + esc(next.name) + ' live</button>'
+            : 'Ask the owner to make ' + esc(next.name) + ' live, so today\'s sales go to it.')
+        : 'Add the next market under Numbers \u203a New market, then make it live.') +
+      '</div>';
+  }
+
+  /** The last sale, with a way to send the customer a receipt on WhatsApp. */
+  function lastSaleBar() {
+    if (!lastSale) return '';
+    return '<div class="lastsale"><span>Last sale <b>' + money(lastSale.total) + '</b> · ' +
+      esc(lastSale.methodName) + '</span>' +
+      '<button class="ghost sm" onclick="SFT.receipt()">Send receipt</button></div>';
+  }
 
   function priceOf(product, line) {
     if (product.type === 'weighed') {
@@ -124,9 +161,9 @@
           figure('Walk-ups', moneyShort(t.tillTotal), t.tillCount + ' sold'),
           figure('Still to pay', moneyShort(owed), d.unpaid.length + (d.unpaid.length === 1 ? ' order' : ' orders'))
         ]) +
-        SF.slot('till.figures', ctx) + SF.slot('till.top', ctx) + tb.html +
+        SF.slot('till.figures', ctx) + staleMarket(d) + SF.slot('till.top', ctx) + tb.html +
         (tb.on === 'sell'
-          ? '<div class="card"><div style="display:flex;gap:10px;align-items:center">' +
+          ? lastSaleBar() + '<div class="card"><div style="display:flex;gap:10px;align-items:center">' +
               '<h2 style="flex:1">Ring up a sale</h2>' +
               '<button class="ghost sm" onclick="SFT.scan()">Scan</button>' +
               SF.slot('till.actions', ctx) +
@@ -554,9 +591,17 @@
     paySheet: function (total, title, recordLabel) {
       tendered = 0;
       notes = [];
+      method = 'cash';
       SF.openSheet(
         '<h2>' + title + '</h2>' +
         '<div class="moneyrow"><span>Total</span><b>' + money(total) + '</b></div>' +
+        '<div class="paywith" role="group" aria-label="How they pay">' +
+          METHODS.map(function (m) {
+            return '<button id="pw-' + m[0] + '" class="' + (m[0] === 'cash' ? 'on' : 'ghost') + '" ' +
+              'aria-pressed="' + (m[0] === 'cash') + '" onclick="SFT.payWith(\'' + m[0] + '\')">' + m[1] + '</button>';
+          }).join('') +
+        '</div>' +
+        '<div id="cashbits">' +
         '<label style="margin-top:16px">Money received — tap the notes, or type it</label>' +
         '<div class="cash">' +
           [5, 10, 20, 50, 100, 200].map(function (n) {
@@ -571,6 +616,9 @@
           'oninput="SFT.paintChange()"></span></div>' +
         '<div class="change short" id="changeBox"><i id="changeLbl">Still short</i>' +
           '<b id="changeAmt">' + money(total) + '</b></div>' +
+        '</div>' +
+        '<div id="cardnote" class="muted small" style="display:none;margin:14px 0">' +
+          'Take the payment on the card machine or check the EFT first, then record it.</div>' +
         '<button class="ok block" id="doSale" disabled onclick="SFT.recordSale()">' +
           recordLabel + '</button>' +
         '<button class="quiet block" style="margin-top:6px" onclick="SF.closeSheet()">' +
@@ -602,9 +650,56 @@
       SFT.paintChange();
     },
 
+    /** Cash, card or EFT. Card and EFT need no notes and give no change. */
+    payWith: function (m) {
+      method = m;
+      METHODS.forEach(function (x) {
+        var b = SF.el('pw-' + x[0]);
+        if (b) { b.className = x[0] === m ? 'on' : 'ghost'; b.setAttribute('aria-pressed', String(x[0] === m)); }
+      });
+      SF.el('cashbits').style.display = m === 'cash' ? '' : 'none';
+      SF.el('cardnote').style.display = m === 'cash' ? 'none' : '';
+      SFT.paintChange();
+    },
+
+    /** Ask for the customer's WhatsApp number; it opens WhatsApp and is not kept anywhere. */
+    receipt: function () {
+      if (!lastSale) return;
+      SF.openSheet('<h2>Send a receipt</h2>' +
+        '<div class="sub">Type their WhatsApp number. WhatsApp opens with the receipt typed in, ' +
+          'ready to send. The number is not saved.</div>' +
+        '<div class="field"><label for="rph">Their number</label>' +
+          '<input id="rph" type="tel" inputmode="tel" autocomplete="off" placeholder="082 123 4567"></div>' +
+        '<button class="block" id="rsend" onclick="SFT.sendReceipt()">Open WhatsApp</button>' +
+        '<button class="quiet block" style="margin-top:6px" onclick="SF.closeSheet()">Not now</button>');
+    },
+    sendReceipt: function () {
+      var n = waNumber(SF.el('rph') && SF.el('rph').value);
+      if (!n || !lastSale) { SF.toast('Type a phone number, like 082 123 4567.', true); return; }
+      var shop = (SF.state.boot && SF.state.boot.profile && SF.state.boot.profile.name) || 'Our stall';
+      var d = lastSale.when, pad = function (x) { return (x < 10 ? '0' : '') + x; };
+      var text = shop + ' \u2014 receipt\n' +
+        d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) +
+        (lastSale.market ? ' \u00b7 ' + lastSale.market : '') + '\n\n' +
+        lastSale.lines.map(function (l) { return l.qty + ' \u00d7 ' + l.name + '  ' + money(l.total); }).join('\n') +
+        '\n\nTotal ' + money(lastSale.total) + ' \u00b7 paid by ' + lastSale.methodName + '\nThank you!';
+      window.open('https://wa.me/' + n + '?text=' + encodeURIComponent(text), '_blank', 'noopener');
+      SF.closeSheet();
+    },
+    makeLive: function (id) {
+      SF.write('setActiveMarket', { marketId: id }, function () {
+        var d = SF.state.data.till;
+        if (d) { d.liveId = id; d.marketId = id; }
+        if (SF.state.boot) SF.state.boot.marketId = id;
+      });
+      SF.toast('That is the live market now.');
+      SF.sync().then(function () { SF.load('till'); });
+    },
+
     paintChange: function () {
       var box = SF.el('changeBox');
       if (!box) return;
+      if (method !== 'cash') { SF.el('doSale').disabled = false; return; }
       tendered = Number(SF.el('got').value) || 0;
       var total = dueNow();
       var diff = Math.round((tendered - total) * 100) / 100;
@@ -618,9 +713,9 @@
     recordSale: function () {
       if (payFor) {
         // A pre-order: mark it paid (and handed over, where there is no Collect step).
-        var o = payFor, back = Math.round((tendered - o.total) * 100) / 100;
+        var o = payFor, back = method === 'cash' ? Math.round((tendered - o.total) * 100) / 100 : 0;
         payFor = null;
-        SFT.pay(o.no);
+        SFT.pay(o.no, method);
         SF.closeSheet();
         if (back > 0) {
           SF.openSheet('<div class="give"><i>Give change</i><b>' + money(back) + '</b>' +
@@ -632,7 +727,8 @@
       }
       if (!cart.length) return;
       var t = cartTotals();
-      var change = Math.round((tendered - t.total) * 100) / 100;
+      var change = method === 'cash' ? Math.round((tendered - t.total) * 100) / 100 : 0;
+      var how = method;
       var lines = cart.map(function (l) {
         return { id: l.id, qty: l.qty, options: (l.options || []).map(function (o) {
           return { group: o.group, choice: o.choice }; }) };
@@ -640,7 +736,12 @@
       var snapshot = cart.slice();
       cart = [];
       var till = SF.state.data.till || {};
-      SF.write('sell', { lines: lines, marketId: sellAt() || till.marketId }, function () {
+      var at = SF.find(till.markets || [], sellAt() || till.marketId);
+      lastSale = { total: t.total, method: how, when: new Date(),
+                   methodName: { cash: 'cash', card: 'card', eft: 'EFT' }[how],
+                   market: at && at.id !== 'HOME' ? at.name : '',
+                   lines: snapshot.map(function (l) { return { name: l.name, qty: l.qty, unit: l.unit, total: l.total }; }) };
+      SF.write('sell', { lines: lines, marketId: sellAt() || till.marketId, paid: how }, function () {
         var till = SF.state.data.till, stock = SF.state.data.stock;
         snapshot.forEach(function (l) {
           [till, stock].forEach(function (d) {
@@ -675,9 +776,9 @@
       }
     },
 
-    pay: function (no) {
+    pay: function (no, how) {
       var handOver = !SF.collectOn();
-      SF.write('markPaid', { orderNo: no }, function () {
+      SF.write('markPaid', { orderNo: no, paid: how || 'cash' }, function () {
         var till = SF.state.data.till, q = SF.state.data.collect;
         if (till) {
           for (var i = 0; i < till.unpaid.length; i++) {
@@ -1038,6 +1139,18 @@
     ];
     if (pots) tabs.splice(3, 0, ['other', 'Other']);
     var tb = SF.tabs('stock', tabs), on = tb.on;
+    // Stock with no cost makes profit look better than it is: say so, once, at the top.
+    var free = (s.products || []).filter(function (p) {
+      return p.active && p.type !== 'made' && p.onHand > 0 && !(p.cost > 0);
+    });
+    var nudge = free.length && on !== 'count'
+      ? '<div class="card stale"><b>' + free.length + (free.length === 1 ? ' product has' : ' products have') +
+          ' no cost yet</b>: ' + free.slice(0, 4).map(function (p) { return esc(p.name); }).join(', ') +
+          (free.length > 4 ? ' and ' + (free.length - 4) + ' more' : '') + '. Until each has a batch with what ' +
+          'it cost, profit counts them as free and a stocktake loss as nothing.' +
+          (on !== 'cook' ? '<button class="block" style="margin-top:10px" onclick="SF.pickTab(\'stock\',\'cook\')">' +
+            esc(tabs[0][1]) + '</button>' : '') + '</div>'
+      : '';
     var body = on === 'cook' ? (pots ? '<div class="card" id="cookbox"></div>' : runCard(s, v))
       : on === 'other' ? '<div class="sub" style="margin:4px 2px 10px">Biscuits, crochet, anything ' +
           'that is not a pot of jam.</div>' + runCard(s, v)
@@ -1045,7 +1158,7 @@
       : on === 'cupboard' ? pantryCard(s)
       : on === 'count' ? (window.SFCount ? SFCount.render() : '')
       : runHistory(s, v);
-    return tb.html + body;
+    return nudge + tb.html + body;
   }
 
   function pantryCard(s) {
