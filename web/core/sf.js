@@ -699,7 +699,7 @@ window.SF = (function () {
       var on = (t.id === S.view) || (t.id === 'more' && TABS.indexOf(S.view) === -1);
       return '<a href="#' + t.id + '" class="' + (on ? 'on' : '') + '">' +
         '<svg viewBox="0 0 24 24" aria-hidden="true">' + t.icon + '</svg>' +
-        esc(t.title) + '</a>';
+        '<span>' + esc(t.title) + '</span></a>';
     }).join('');
   }
 

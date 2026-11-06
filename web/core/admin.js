@@ -268,6 +268,22 @@
   var lookDraft = null;         // changes not saved yet, shown in the preview as they are made
 
   /** The look every label is drawn with: the stall's, or what is being tried out. */
+  var shareReady = null;          // labels made for the share sheet, waiting for a tap
+  function sendLabels(files, d, late) {
+    navigator.share({ files: files, title: d.profile.name + ' labels' }).then(function () {
+      shareReady = null;
+      var b = SF.el('sharebtn'); if (b) b.textContent = 'Send to printer app';
+    }, function (e) {
+      if (e && e.name === 'AbortError') return;            // they closed the share sheet
+      if (late && e && e.name === 'NotAllowedError') {
+        var b = SF.el('sharebtn'); if (b) b.textContent = 'Labels ready \u2014 tap to send';
+        SF.toast('Labels ready. Tap Send again.');
+        return;
+      }
+      shareReady = null;
+      SF.toast('Sharing did not work here. Use Download instead.', true);
+    });
+  }
   function labelLook() {
     var d = SF.state.data.labels || {}, l = lookDraft || d.look || {};
     return { style: l.style || 'classic', contact: l.contact || '', logo: l.logo || '', price: !!l.price,
@@ -372,7 +388,7 @@
       '<div class="lprev"><img id="lprev" alt="How a downloaded label looks"><span id="lprevcap" class="muted small"></span></div>' +
       '<div class="row" style="margin-top:10px">' +
         '<button class="ghost" onclick="SFA.downloadTicked()">Download ticked (.zip)</button>' +
-        (SFL.canShare() ? '<button class="ghost" onclick="SFA.shareTicked()">Send to printer app</button>' : '') +
+        (SFL.canShare() ? '<button class="ghost" id="sharebtn" onclick="SFA.shareTicked()">Send to printer app</button>' : '') +
       '</div><div class="muted small" style="margin-top:6px">Or tap <b>PNG</b> next to a product for just that one.</div></div>';
   }
 
@@ -971,20 +987,27 @@
         SF.toast('Saved ' + files.length + ' label' + (files.length === 1 ? '' : 's') + ' in one .zip');
       }, function () { SF.toast('Could not make the labels.', true); });
     },
+    /* An iPhone opens the share sheet only straight from a tap, and making many
+       labels can take longer than that allows. Then the labels are kept, the
+       button says they are ready, and the next tap sends them at once. */
     shareTicked: function () {
       var d = SF.state.data.labels, list = tickedProducts(), key = labelSize();
       if (!list.length) { SF.toast('Tick at least one product.', true); return; }
-      var look = labelLook();
+      var look = labelLook(), btn = SF.el('sharebtn');
+      var sig = key + '|' + list.map(function (p) { return p.id; }).join(',') + '|' +
+        look.style + look.price + look.contact + String(look.logo || '').length;
+      if (shareReady && shareReady.sig === sig) { sendLabels(shareReady.files, d, false); return; }
+      shareReady = null;
+      if (btn) btn.textContent = 'Send to printer app';
+      SF.toast('Making ' + list.length + ' label' + (list.length === 1 ? '' : 's') + '…');
       SFL.useLogo(look.logo).then(function () { return Promise.all(list.map(function (p) {
         return SFL.png(p, key, d.profile.name, look).then(function (b) {
           return new File([b], SFL.fileName(p, key), { type: 'image/png' });
         });
       })); }).then(function (files) {
-        return navigator.share({ files: files, title: d.profile.name + ' labels' });
-      }).catch(function (e) {
-        if (e && e.name === 'AbortError') return;            // they closed the share sheet
-        SF.toast('Sharing did not work here. Use Download instead.', true);
-      });
+        shareReady = { sig: sig, files: files };
+        sendLabels(files, d, true);
+      }, function () { SF.toast('Could not make the labels.', true); });
     },
     labelMode: function (m) {
       labelMode = m;
