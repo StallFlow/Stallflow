@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Duxie\'s Till</string>
+    <!-- With assetlinks.json at https://stallflow.github.io/.well-known/ the app has no address bar. -->
+    <string name="asset_statements">[{\"relation\": [\"delegate_permission/common.handle_all_urls\"], \"target\": {\"namespace\": \"web\", \"site\": \"https://stallflow.github.io\"}}]</string>
+</resources>

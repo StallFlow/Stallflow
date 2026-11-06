@@ -1,0 +1,37 @@
+name: Android app (test build)
+
+# Builds the APK without publishing it, so a change under android/ can be
+# checked before it reaches main. The published APK is built by pages.yml.
+
+on:
+  push:
+    branches-ignore: [main]
+    paths: ['android/**', '.github/workflows/android.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Build
+        env:
+          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: android/build-apk.sh duxies-till.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: duxies-till-apk
+          path: duxies-till.apk

@@ -1,0 +1,38 @@
+// The Android app is the staff app itself, opened in Chrome full screen (a
+// Trusted Web Activity): Google sign-in, the camera, offline and updates all
+// work exactly as on the website, because it IS the website.
+plugins { id 'com.android.application' }
+
+def stallUrl = project.findProperty('stallUrl') ?: 'https://stallflow.github.io/Stallflow/duxies/app/'
+
+android {
+    namespace 'io.github.stallflow.till'
+    compileSdk 34
+    defaultConfig {
+        applicationId 'io.github.stallflow.duxies'
+        minSdk 21
+        targetSdk 34
+        versionCode((project.findProperty('versionCode') ?: '1') as int)
+        versionName project.findProperty('versionName') ?: '1.0'
+        manifestPlaceholders = [defaultUrl: stallUrl]
+    }
+    signingConfigs {
+        release {
+            storeFile file(System.getenv('KEYSTORE') ?: 'release.keystore')
+            storePassword System.getenv('KEYSTORE_PASSWORD') ?: ''
+            keyAlias 'stallflow'
+            keyPassword System.getenv('KEYSTORE_PASSWORD') ?: ''
+        }
+    }
+    buildTypes {
+        release { minifyEnabled false; signingConfig signingConfigs.release }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    implementation 'com.google.androidbrowserhelper:androidbrowserhelper:2.5.0'
+}
