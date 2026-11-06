@@ -232,6 +232,14 @@ h2 .for{font-weight:600;color:var(--muted);font-size:.8em}
 .pick .dl{flex:none;min-height:36px;padding:0 10px;font-size:12px}
 @media print{.labelfiles,.pick .dl{display:none!important}}
 
+/* ---- stocktake (stocktake.js) ------------------------------------------ */
+.countsum{font-size:15px;margin:6px 0 12px}
+.countsum b{font-size:26px;font-family:var(--mono);margin-right:6px}
+.countrow{gap:10px}
+.countrow.has{background:color-mix(in srgb, var(--ok) 8%, transparent)}
+.countrow .qn{min-width:54px}
+tr.flash td{background:color-mix(in srgb, var(--brand) 14%, transparent);transition:background .4s}
+
 /* ---- filter bars (filters.js) ------------------------------------------ */
 .fbar{display:grid;gap:8px;margin:12px 0 10px}
 .fbar .fq{width:100%;padding-left:38px;background-repeat:no-repeat;background-position:12px 50%;

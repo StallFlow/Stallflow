@@ -505,7 +505,11 @@
           '<div class="field"><label for="st">Tagline</label>' +
             '<input id="st" value="' + esc(p.tagline || '') + '"></div>' +
           '<div class="field"><label for="sw">WhatsApp</label>' +
-            '<input id="sw" value="' + esc(p.whatsapp || '') + '"></div>' +
+            '<input id="sw" type="tel" inputmode="tel" placeholder="066 123 4567" value="' + esc(p.whatsapp || '') + '"></div>' +
+          '<div class="field"><label for="so">Your first name, as customers see it</label>' +
+            '<input id="so" maxlength="30" placeholder="Marian" value="' + esc(p.ownerName || '') + '">' +
+            '<div class="muted small">Customers get a button to send their order to you on WhatsApp, ' +
+            'so you can confirm it and send your banking details.</div></div>' +
           '<div class="field"><label for="sc">Colour</label>' +
             '<input id="sc" type="color" value="' + esc(p.colour) + '" style="height:52px"></div>' +
           '<button class="block" onclick="SFA.saveProfile()">Save</button></div>' +
@@ -1061,7 +1065,8 @@
 
     saveProfile: function () {
       SF.write('saveProfile', { name: SF.el('sn').value, tagline: SF.el('st').value,
-                                whatsapp: SF.el('sw').value, colour: SF.el('sc').value });
+                                whatsapp: SF.el('sw').value, ownerName: SF.el('so').value,
+                                colour: SF.el('sc').value });
       SF.state.boot.profile.name = SF.el('sn').value;
       SF.state.boot.profile.colour = SF.el('sc').value;
       document.documentElement.style.setProperty('--brand', SF.el('sc').value);

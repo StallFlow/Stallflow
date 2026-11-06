@@ -403,7 +403,7 @@ SF.action('catalogue', null, 'read', function (p) {
 
   return {
     profile: {
-      name: pr.name, tagline: pr.tagline, whatsapp: pr.whatsapp,
+      name: pr.name, tagline: pr.tagline, whatsapp: pr.whatsapp, ownerName: pr.ownerName || '',
       colour: pr.colour, ink: pr.ink, paper: pr.paper, vocab: pr.vocab
     },
     open: SF.takesOrders(market),
@@ -465,7 +465,7 @@ SF.action('placeOrder', null, 'write', function (p, ctx) {
   SF.emit('order.placed', { orderNo: no, total: built.total, lines: built.lines }, ctx);
 
   return { ok: true, orderNo: no, total: built.total, units: built.units, name: name,
-           market: SF.publicMarket(m) };
+           note: String(p.note || '').slice(0, 140), market: SF.publicMarket(m) };
 });
 
 /* =========================================================================
@@ -1119,7 +1119,7 @@ SF.action('saveProfile', 'reports', 'write', function (p, ctx) {
     return { ok: false, message: 'Only an owner or manager can change the shop details.' };
   }
   var stored = SF.json(SF.get('profile', '{}'), {});
-  ['name', 'tagline', 'whatsapp', 'colour', 'ink', 'paper'].forEach(function (k) {
+  ['name', 'tagline', 'whatsapp', 'ownerName', 'colour', 'ink', 'paper'].forEach(function (k) {
     if (p[k] !== undefined) stored[k] = String(p[k]).slice(0, 120);
   });
   if (p.vocab) stored.vocab = p.vocab;
@@ -1290,4 +1290,208 @@ SF.action('reportIssue', 'report', 'write', function (p, ctx) {
   SF.setCell('issues', row, 'Status', gh.ok ? 'sent' : 'saved (' + gh.why + ')');
   if (gh.ok) SF.setCell('issues', row, 'Link', gh.url);
   return { ok: true, id: id, sent: gh.ok };
+});
+
+/* =========================================================================
+   10. STOCKTAKE — everyone counts, the owner approves
+   =========================================================================
+   One person (owner or manager) starts it; the stock on hand at that moment
+   is kept as the snapshot. Anyone signed in picks a location and counts what
+   is there; each "done" is a new submission and the latest per location
+   counts. The owner reviews counted against expected and approves: the
+   difference goes into the stock ledger as 'stocktake' movements (never a
+   count written over the stock), and the loss is recorded at cost. */
+
+SF.DEFAULT_COUNT_LOCATIONS = ['Stall table', 'Storeroom', 'Car'];
+
+SF.countLocations = function () {
+  var l = SF.json(SF.get('countLocations', ''), null);
+  return Array.isArray(l) && l.length ? l.map(String) : SF.DEFAULT_COUNT_LOCATIONS.slice();
+};
+
+SF.openCount = function () {
+  var open = null;
+  SF.rows('stockcounts').forEach(function (r) { if (String(r.Status) === 'open') open = r; });
+  return open;
+};
+
+/** Per location: who is on it, and the latest submission (product → qty). */
+SF.countProgress = function (countId) {
+  var locs = {};
+  SF.rows('countlines').forEach(function (r) {
+    if (String(r.CountId) !== countId) return;
+    var name = String(r.Location), sub = String(r.Submission);
+    var l = locs[name] || (locs[name] = { claim: null, sub: null, subAt: 0, lines: {} });
+    var at = r.When && r.When.getTime ? r.When.getTime() : 0;
+    if (sub.indexOf('claim-') === 0) {
+      if (!l.claim || at >= l.claim.at) l.claim = { by: String(r.By), at: at };
+      return;
+    }
+    if (sub !== l.sub) {
+      if (at < l.subAt) return;                 // an older submission: superseded
+      l.sub = sub; l.subAt = at; l.lines = {}; l.by = String(r.By);
+    }
+    if (r.ProductId) l.lines[String(r.ProductId)] = (l.lines[String(r.ProductId)] || 0) + SF.num(r.Qty);
+  });
+  return locs;
+};
+
+SF.countReview = function (row) {
+  var snap = SF.json(row.Snapshot, {}), progress = SF.countProgress(String(row.CountId));
+  var counted = {};
+  Object.keys(progress).forEach(function (loc) {
+    if (!progress[loc].sub) return;
+    var lines = progress[loc].lines;
+    Object.keys(lines).forEach(function (id) { counted[id] = (counted[id] || 0) + lines[id]; });
+  });
+  var cost = SF.costPerUnit();
+  return SF.products({ all: true }).filter(function (p) { return p.type !== 'made'; }).map(function (p) {
+    var expected = SF.num(snap[p.id]), c = counted[p.id];
+    return { id: p.id, name: p.name, variant: p.variant, unit: p.unit, expected: expected,
+             counted: c === undefined ? null : Math.round(c * 1000) / 1000,
+             diff: c === undefined ? null : Math.round((c - expected) * 1000) / 1000,
+             cost: cost[p.id] || 0 };
+  });
+};
+
+SF.action('countState', 'count', 'read', function (p, ctx) {
+  var open = SF.openCount(), locations = SF.countLocations(), out = {
+    locations: locations,
+    canStart: SF.can(ctx.role, 'stock'), canManage: SF.can(ctx.role, 'stock'),
+    canApprove: ctx.role === 'owner',
+    products: SF.products({ all: true }).filter(function (x) { return x.type !== 'made'; }).map(function (x) {
+      return { id: x.id, name: x.name, variant: x.variant, category: x.category, unit: x.unit,
+               weighed: x.weighed, active: x.active };
+    }),
+    open: null,
+    history: SF.rows('stockcounts').filter(function (r) { return String(r.Status) !== 'open'; })
+      .slice(-10).reverse().map(function (r) {
+        return { id: String(r.CountId), status: String(r.Status), by: String(r.ClosedBy || ''),
+                 when: r.ClosedAt && r.ClosedAt.getTime ? Utilities.formatDate(r.ClosedAt, SF.TZ, 'yyyy-MM-dd HH:mm') : '',
+                 result: SF.json(r.Result, {}) };
+      })
+  };
+  if (open) {
+    var progress = SF.countProgress(String(open.CountId));
+    out.open = {
+      id: String(open.CountId), startedBy: String(open.StartedBy),
+      startedAt: open.StartedAt && open.StartedAt.getTime ? Utilities.formatDate(open.StartedAt, SF.TZ, 'yyyy-MM-dd HH:mm') : '',
+      locations: locations.map(function (name) {
+        var l = progress[name] || {};
+        var items = 0;
+        Object.keys(l.lines || {}).forEach(function (k) { items += l.lines[k]; });
+        var counting = l.claim && (!l.sub || l.claim.at > l.subAt);
+        return { name: name, status: counting ? 'counting' : l.sub ? 'done' : 'todo',
+                 by: counting ? l.claim.by : l.sub ? l.by : '', items: Math.round(items * 1000) / 1000 };
+      })
+    };
+    if (out.canApprove) out.open.review = SF.countReview(open);
+  }
+  return out;
+});
+
+SF.action('countStart', 'stock', 'write', function (p, ctx) {
+  if (SF.openCount()) return { ok: false, message: 'A stocktake is already going. Finish or cancel it first.' };
+  var hand = SF.onHand(), snap = {};
+  SF.products({ all: true }).forEach(function (x) { if (x.type !== 'made') snap[x.id] = hand[x.id] || 0; });
+  var id = 'ST' + ('00' + (SF.rows('stockcounts').length + 1)).slice(-3);
+  SF.append('stockcounts', { CountId: id, StartedAt: new Date(), StartedBy: ctx.user || ctx.role,
+                             Status: 'open', Snapshot: JSON.stringify(snap) });
+  return { ok: true, id: id };
+});
+
+SF.countCheck = function (p) {
+  var open = SF.openCount();
+  if (!open || String(open.CountId) !== String(p.countId || '')) {
+    return { ok: false, message: 'That stocktake is no longer open.' };
+  }
+  if (SF.countLocations().indexOf(String(p.location || '')) === -1) {
+    return { ok: false, message: 'That location is not on the list any more.' };
+  }
+  return null;
+};
+
+/** "I am counting here": others see it, so two people do not count the same shelf. */
+SF.action('countClaim', 'count', 'write', function (p, ctx) {
+  var bad = SF.countCheck(p);
+  if (bad) return bad;
+  SF.append('countlines', { CountId: String(p.countId), Location: String(p.location),
+    Submission: 'claim-' + String(p.opId || Date.now()).slice(0, 40), ProductId: '', Qty: '',
+    By: ctx.user || ctx.role, When: new Date() });
+  return { ok: true };
+});
+
+SF.action('countSave', 'count', 'write', function (p, ctx) {
+  var bad = SF.countCheck(p);
+  if (bad) return bad;
+  var known = {};
+  SF.products({ all: true }).forEach(function (x) { known[x.id] = x; });
+  var lines = Array.isArray(p.lines) ? p.lines.slice(0, 500) : [];
+  var clean = [];
+  for (var i = 0; i < lines.length; i++) {
+    var id = String(lines[i] && lines[i].id || ''), q = Number(lines[i] && lines[i].qty);
+    if (!known[id] || known[id].type === 'made') continue;
+    if (!(q >= 0) || q > 100000) return { ok: false, message: 'A count of ' + lines[i].qty + ' does not look right.' };
+    if (q > 0) clean.push({ id: id, qty: Math.round(q * 1000) / 1000 });
+  }
+  var sub = 'S' + String(p.opId || Date.now()).slice(0, 40), now = new Date(), by = ctx.user || ctx.role;
+  if (!clean.length) {
+    SF.append('countlines', { CountId: String(p.countId), Location: String(p.location), Submission: sub,
+                              ProductId: '', Qty: 0, By: by, When: now });
+  }
+  clean.forEach(function (l) {
+    SF.append('countlines', { CountId: String(p.countId), Location: String(p.location), Submission: sub,
+                              ProductId: l.id, Qty: l.qty, By: by, When: now });
+  });
+  return { ok: true, items: clean.length };
+});
+
+SF.action('countApprove', 'stock', 'write', function (p, ctx) {
+  if (ctx.role !== 'owner') return { ok: false, message: 'Only the owner can approve a stocktake.' };
+  var open = SF.openCount();
+  if (!open || String(open.CountId) !== String(p.countId || '')) return { ok: false, message: 'That stocktake is no longer open.' };
+  var zero = p.uncounted === 'zero', ref = 'Stocktake ' + open.CountId;
+  var res = { moved: 0, lossUnits: 0, lossValue: 0, foundUnits: 0, foundValue: 0, uncounted: 0 };
+  SF.countReview(open).forEach(function (r) {
+    var diff = r.diff;
+    if (diff === null) {
+      if (!zero || !r.expected) { if (r.expected) res.uncounted++; return; }
+      diff = -r.expected;                       // nobody counted it, and the owner said: none left
+    }
+    if (!diff) return;
+    SF.move(r.id, diff, 'stocktake', ref);
+    res.moved++;
+    if (diff < 0) { res.lossUnits += -diff; res.lossValue += -diff * r.cost; }
+    else { res.foundUnits += diff; res.foundValue += diff * r.cost; }
+  });
+  res.lossValue = Math.round(res.lossValue * 100) / 100;
+  res.foundValue = Math.round(res.foundValue * 100) / 100;
+  SF.setCell('stockcounts', open._row, 'Status', 'approved');
+  SF.setCell('stockcounts', open._row, 'ClosedAt', new Date());
+  SF.setCell('stockcounts', open._row, 'ClosedBy', ctx.user || ctx.role);
+  SF.setCell('stockcounts', open._row, 'Result', JSON.stringify(res));
+  return { ok: true, result: res };
+});
+
+SF.action('countCancel', 'stock', 'write', function (p, ctx) {
+  if (ctx.role !== 'owner' && ctx.role !== 'manager') return { ok: false, message: 'Only an owner or manager can cancel it.' };
+  var open = SF.openCount();
+  if (!open) return { ok: true };
+  SF.setCell('stockcounts', open._row, 'Status', 'cancelled');
+  SF.setCell('stockcounts', open._row, 'ClosedAt', new Date());
+  SF.setCell('stockcounts', open._row, 'ClosedBy', ctx.user || ctx.role);
+  return { ok: true };
+});
+
+SF.action('countLocationsSave', 'stock', 'write', function (p) {
+  var seen = {}, list = (Array.isArray(p.locations) ? p.locations : []).map(function (x) {
+    return String(x || '').replace(/\s+/g, ' ').trim().slice(0, 30);
+  }).filter(function (x) {
+    var k = x.toLowerCase();
+    if (!x || seen[k]) return false;
+    seen[k] = true; return true;
+  }).slice(0, 30);
+  if (!list.length) return { ok: false, message: 'Keep at least one location.' };
+  SF.set('countLocations', JSON.stringify(list));
+  return { ok: true, locations: list };
 });

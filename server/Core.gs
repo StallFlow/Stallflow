@@ -18,7 +18,7 @@
 var SF = SF || {};
 
 SF.VERSION = '2.0.0';
-SF.SCHEMA = 8;                        // bump when SHEETS changes; see MIGRATIONS
+SF.SCHEMA = 9;                        // bump when SHEETS changes; see MIGRATIONS
 SF.TZ = 'Africa/Johannesburg';
 
 /* =========================================================================
@@ -41,7 +41,12 @@ SF.SHEETS = {
   recipes:   ['Name', 'Makes', 'Lines', 'UpdatedAt', 'UpdatedBy'],
   audit:     ['When', 'Actor', 'Role', 'Device', 'Action', 'Target', 'Detail', 'Outcome'],
   issues:    ['IssueId', 'When', 'Reporter', 'Role', 'Screen', 'Message', 'Context',
-              'Status', 'Link']
+              'Status', 'Link'],
+  // Stocktakes: one row each. Snapshot is what the stock said when it started.
+  stockcounts: ['CountId', 'StartedAt', 'StartedBy', 'Status', 'Snapshot', 'ClosedAt',
+                'ClosedBy', 'Result'],
+  // Every count submitted, never edited: the latest submission per location counts.
+  countlines: ['CountId', 'Location', 'Submission', 'ProductId', 'Qty', 'By', 'When']
 };
 
 SF.sheet = function (key) {
@@ -163,9 +168,9 @@ SF.profile = function () {
 
 SF.ROLES = {
   owner:   ['*'],
-  manager: ['sell', 'orders', 'stock', 'price', 'labels', 'reports', 'expenses', 'report'],
-  cashier: ['sell', 'orders', 'labels', 'report'],
-  viewer:  ['reports', 'report']
+  manager: ['sell', 'orders', 'stock', 'price', 'labels', 'reports', 'expenses', 'report', 'count'],
+  cashier: ['sell', 'orders', 'labels', 'report', 'count'],
+  viewer:  ['reports', 'report', 'count']
 };
 
 SF.secret = function () {
@@ -526,6 +531,9 @@ SF.MIGRATIONS = [
     } },
   { to: 8, what: 'Add the Issues tab for problems reported from the app', run: function () {
       SF.sheet('issues');
+    } },
+  { to: 9, what: 'Add the Stockcounts and Countlines tabs for stocktakes', run: function () {
+      SF.sheet('stockcounts'); SF.sheet('countlines');
     } }
 ];
 

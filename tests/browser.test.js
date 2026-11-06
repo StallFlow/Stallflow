@@ -127,6 +127,8 @@ const MAPS_STUB = (mode) => `(function () {
 
 let failures = 0;
 async function test(name, fn) {
+  // SF_ONLY=stocktake node tests/browser.test.js runs just the tests whose names contain it.
+  if (process.env.SF_ONLY && name.indexOf(process.env.SF_ONLY) === -1) return;
   try { await fn(); console.log('ok   ' + name); }
   catch (e) { failures++; console.log('FAIL ' + name + '\n     ' + String(e.message).split('\n')[0]); }
 }
@@ -175,6 +177,7 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
                                 : '\ndelete window.STALLFLOW.mapsKey;') });
     });
     page.on('pageerror', (e) => { env.pageErrors = (env.pageErrors || []).concat(String(e)); });
+    if (process.env.SF_DEBUG) page.on('console', (m) => { if (m.type() === 'error') console.log('console:', m.text().slice(0, 300)); });
     await ctx.route('https://script.google.com/**', async (route) => {
       const req = route.request();
       // The order page reads with GET (?action=catalogue&market=…); the staff app always POSTs.
@@ -1220,12 +1223,14 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
   const iphoneCamera = () => {
     delete window.BarcodeDetector;
     window.__fakeText = 'SF:P01';
+    if (!navigator.mediaDevices) return;                 // a blank page has no camera to fake
     navigator.mediaDevices.getUserMedia = async () => {
       if (window.__denyCamera) { const e = new Error('denied'); e.name = 'NotAllowedError'; throw e; }
       const c = document.createElement('canvas'); c.width = 640; c.height = 480;
       const x = c.getContext('2d');
       const paint = () => {
         x.fillStyle = '#fff'; x.fillRect(0, 0, 640, 480);
+        if (!window.__fakeText) return;                 // between jars: nothing in view
         const q = window.QR.make(window.__fakeText, 'M'), cell = Math.floor(300 / (q.size + 4));
         x.fillStyle = '#000';
         for (let r = 0; r < q.size; r++) for (let k = 0; k < q.size; k++)
@@ -1284,6 +1289,130 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
     await page.waitForFunction(() => document.querySelector('.basketbtn .cnt'), null, { timeout: 10000 });
     await openBasket(page);
     assert.ok(/Strawberry Jam/.test(await page.textContent('#basketbody')));
+    await env.ctx.close();
+  });
+
+  /* ---------- the order goes to Marian on WhatsApp ---------- */
+  await test('after ordering, the customer can send the whole order to Marian on WhatsApp', async () => {
+    const env = await phone({ hash: '#till', seed: (SF) => {
+      shop10(SF);
+      SF.append('markets', { MarketId: 'M02', Name: 'Spring Fair', Date: day(3), Status: 'planned' });
+      SF.set('profile', JSON.stringify({ name: "Duxie's Homemade", ownerName: 'Marian', whatsapp: '066 000 0000' }));
+    } });
+    const page = await customer(env, '?m=M02');
+    await page.click('.item:has-text("Strawberry Jam") button[aria-label^="More"]');
+    await page.click('.item:has-text("Strawberry Jam") button[aria-label^="More"]');
+    await page.fill('#nm', 'Anna Bester'); await page.fill('#ph', '082 555 0101');
+    await page.fill('#nt', 'After 11 please');
+    await page.check('#cs'); await page.click('#go');
+    await page.waitForSelector('#sendwa');
+    assert.ok(/Send my order to Marian on WhatsApp/.test(await page.textContent('#sendwa')));
+    const href = await page.getAttribute('#sendwa', 'href');
+    assert.ok(href.startsWith('https://wa.me/27660000000?text='), href.slice(0, 50));
+    const text = decodeURIComponent(href.split('text=')[1]);
+    const no = env.sheets.Orders.rows.find((r) => r[4] === 'Anna Bester')[0];
+    for (const want of ['Hi Marian', 'Order ' + no, 'Anna Bester', 'Spring Fair', '2 × Strawberry Jam',
+                        'Total: R 100.00', 'Note: After 11 please', 'banking details']) {
+      assert.ok(text.indexOf(want) !== -1, 'message has "' + want + '":\n' + text);
+    }
+    await env.ctx.close();
+  });
+
+  /* ---------- stocktake ---------- */
+  const show = (page, code) => page.evaluate((c) => { window.__fakeText = c; }, code);
+
+  await test('stocktake: start, count a location by scanning jar by jar, approve, and the stock follows', async () => {
+    const env = await phone({ hash: '#stock', seed: shop10, init: iphoneCamera });
+    const page = env.page;
+    await page.waitForFunction(() => SF.state.data.stock);
+    await page.evaluate(() => { SF.ls.set('sf.tab.stock', 'count'); SF.render(); });
+    await page.waitForTimeout(1500);
+    if (process.env.SF_DEBUG) console.log('DEBUG countbox:', await page.evaluate(() => (document.getElementById('countbox') || {}).innerHTML || document.getElementById('view').innerHTML.slice(0, 400)), JSON.stringify(env.pageErrors || []));
+    await page.waitForSelector('#ctstart');
+    await page.click('#ctstart');
+    await page.waitForSelector('button[data-loc="Storeroom"]');
+    await page.click('button[data-loc="Storeroom"]');
+    await page.waitForSelector('#ctdone');
+    // Scan: Apricot Jam, away, Apricot Jam again (a second jar), away, Marmalade.
+    await show(page, ''); await page.click('button:has-text("Scan jars")');
+    await page.waitForSelector('#sfcam');
+    await show(page, 'SF:P01'); await page.waitForFunction(() => /Apricot Jam · 1/.test(document.getElementById('scanhint').textContent));
+    await page.waitForTimeout(700);
+    const stillOne = await page.evaluate(() => document.getElementById('scanhint').textContent);
+    assert.ok(/Apricot Jam · 1/.test(stillOne), 'the same jar left in view counts once: ' + stillOne);
+    await show(page, ''); await page.waitForTimeout(700);
+    await show(page, site + '?p=P01'); await page.waitForFunction(() => /Apricot Jam · 2/.test(document.getElementById('scanhint').textContent));
+    await show(page, ''); await page.waitForTimeout(700);
+    await show(page, 'SF:P02'); await page.waitForFunction(() => /Marmalade · 1/.test(document.getElementById('scanhint').textContent));
+    await page.click('#scan .x');
+    // Type a number for one more product.
+    await page.click('button[aria-label="How many Strawberry Jam"]');
+    await page.fill('#ctq', '2'); await page.keyboard.press('Enter');
+    assert.ok(/^5/.test((await page.textContent('#cttotal')).trim()), 'five counted here');
+    await page.click('#ctdone');
+    await page.waitForFunction(() => !SF.outbox.pending().length);
+    await page.waitForSelector('#ctapprove');
+    const row = async (name) => page.$eval('tr:has-text("' + name + '")', (tr) => Array.from(tr.querySelectorAll('td')).map((td) => td.textContent.trim()));
+    assert.deepStrictEqual((await row('Apricot Jam')).slice(1, 4), ['10', '2', '-8']);
+    assert.deepStrictEqual((await row('Strawberry Jam')).slice(1, 4), ['3', '2', '-1']);
+    if (process.env.SF_SHOT) await page.locator('.card:has(#ctapprove)').screenshot({ path: path.join(process.env.SF_SHOT, 'stocktake-review.png') });
+    await page.click('#ctapprove');
+    await page.waitForFunction(() => !SF.outbox.pending().length);
+    await page.waitForFunction(() => /Earlier stocktakes/.test(document.getElementById('countbox').textContent));
+    const hand = env.SF.onHand();
+    assert.strictEqual(hand.P01, 2); assert.strictEqual(hand.P02, 1); assert.strictEqual(hand.P03, 2);
+    assert.strictEqual(hand.P05, 9, 'not counted anywhere: left as it was');
+    assert.ok(/approved/.test(await page.textContent('#countbox')));
+    await env.ctx.close();
+  });
+
+  await test('stocktake: a cashier counts from More, but cannot start or approve', async () => {
+    const env = await phone({ hash: '#till', seed: (SF) => { shop10(SF); SF.setPin('cashier', '1111'); } });
+    const page = env.page;
+    const owner = env.SF.dispatch('signIn', { pin: '4321', device: 'o' }).data.token;
+    env.SF.dispatch('countStart', { token: owner, opId: 'st1' });
+    const tok = env.SF.dispatch('signIn', { pin: '1111', device: 'c' }).data.token;
+    await page.evaluate((t) => SF.ls.set('sf.auth', { token: t, role: 'cashier', user: '' }), tok);
+    await page.goto('about:blank'); await page.goto(base + '#till');
+    await page.waitForFunction(() => window.SF && SF.state.ready);
+    await page.evaluate(() => SF.openMore());
+    await page.click('.sheet button:has-text("Stocktake")');
+    await page.waitForSelector('button[data-loc="Car"]');
+    assert.strictEqual(await page.locator('#ctapprove').count(), 0);
+    assert.strictEqual(await page.locator('#ctstart').count(), 0);
+    await page.click('button[data-loc="Car"]');
+    await page.click('button[aria-label="One more Fig Jam"]');
+    // Close the app half way: the count is still there when it opens again.
+    await page.goto('about:blank'); await page.goto(base + '#stocktake');
+    await page.waitForSelector('#ctdone');
+    assert.strictEqual((await page.textContent('button[aria-label="How many Fig Jam"]')).trim(), '1');
+    await page.click('#ctdone');
+    await page.waitForFunction(() => !SF.outbox.pending().length);
+    const lines = env.sheets.Countlines.rows.filter((r) => r[1] === 'Car' && r[3] === 'P04');
+    assert.strictEqual(lines.length, 1); assert.strictEqual(lines[0][4], 1);
+    await env.ctx.close();
+  });
+
+  await test('Stock: scan a jar to see how many are in stock', async () => {
+    const env = await phone({ hash: '#stock', seed: shop10, init: iphoneCamera });
+    const page = env.page;
+    await openShelf(page);
+    await show(page, site + '?p=P06');
+    await page.click('button:has-text("Scan a jar")');
+    await page.waitForFunction(() => /Apricot Preserve: 7 in stock/.test(document.getElementById('toast').textContent), null, { timeout: 10000 });
+    assert.strictEqual(await page.isVisible('#scan'), false);
+    await env.ctx.close();
+  });
+
+  await test('each part of the app keeps its own name (no two scripts share one)', async () => {
+    const env = await phone({ hash: '#till' });
+    const kinds = await env.page.evaluate(() => ({
+      cashup: typeof (window.SFC && window.SFC.save), kitchen: typeof (window.SFK && window.SFK.load),
+      stocktake: typeof (window.SFCount && window.SFCount.render), till: typeof (window.SFT && window.SFT.tap),
+      admin: typeof (window.SFA && window.SFA.drawLabels), labels: typeof (window.SFL && window.SFL.canvas),
+      places: typeof (window.SFP && window.SFP.typed), filters: typeof (window.SF && SF.filters && SF.filters.bar)
+    }));
+    Object.keys(kinds).forEach((k) => assert.strictEqual(kinds[k], 'function', k + ' was overwritten'));
     await env.ctx.close();
   });
 

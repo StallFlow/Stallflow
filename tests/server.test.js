@@ -580,6 +580,16 @@ test('with the Collect step switched on, Paid waits for the hand-over', () => {
 
 /* ---------- the label look ---------- */
 
+test('the order page knows the owner name and WhatsApp number, and the reply carries the note', () => {
+  const { SF, tok } = markets3();
+  SF.dispatch('saveProfile', { token: tok, opId: 'pf', ownerName: 'Marian', whatsapp: '066 000 0000' });
+  const prof = SF.dispatch('catalogue', {}).data.profile;
+  assert.strictEqual(prof.ownerName, 'Marian');
+  assert.strictEqual(prof.whatsapp, '066 000 0000');
+  const r = order(SF, { market: 'M01', note: 'After 11 please' });
+  assert.strictEqual(r.note, 'After 11 please');
+});
+
 test('the label look is kept: style, contact lines, a small logo, price on or off', () => {
   const { SF, tok } = markets3();
   let look = SF.dispatch('labels', { token: tok }).data.look;
@@ -607,6 +617,98 @@ test('only an owner or manager can change the label look', () => {
   SF.setPin('cashier', '1111');
   const t = SF.dispatch('signIn', { pin: '1111', device: 'c' }).data.token;
   assert.strictEqual(SF.dispatch('saveLabelLook', { token: t, opId: 'x', contact: 'hi' }).ok, false);
+});
+
+/* ---------- stocktake ---------- */
+
+function counting() {
+  const env = markets3();                         // owner signed in; P01 Apricot Jam, 10 on hand
+  const SF = env.SF;
+  SF.append('products', { ProductId: 'P02', Name: 'Fig Jam', Type: 'stocked', Unit: 'each', Price: 80, Active: 'Yes', Sort: 20 });
+  SF.move('P02', 6, 'adjust', 'test');
+  SF.append('batches', { BatchId: 'B1', When: new Date(), ProductId: 'P01', Made: 10, CostLines: '[]', TotalCost: 200, CostPerUnit: 20 });
+  SF.setPin('cashier', '1111'); SF.setPin('manager', '2222');
+  env.cashier = SF.dispatch('signIn', { pin: '1111', device: 'c' }).data.token;
+  env.manager = SF.dispatch('signIn', { pin: '2222', device: 'm' }).data.token;
+  return env;
+}
+let cop = 0;
+const act = (SF, action, token, extra) => SF.dispatch(action, Object.assign({ token, opId: 'k' + (cop++) }, extra || {}));
+
+test('stocktake: a manager starts it, a cashier cannot', () => {
+  const { SF, cashier, manager } = counting();
+  assert.strictEqual(act(SF, 'countStart', cashier).ok, false);
+  const r = act(SF, 'countStart', manager);
+  assert.strictEqual(r.ok, true, r.message);
+  assert.strictEqual(act(SF, 'countStart', manager).ok, false, 'only one at a time');
+  const st = SF.dispatch('countState', { token: cashier }).data;
+  assert.strictEqual(st.open.id, r.id);
+  assert.strictEqual(st.canApprove, false);
+  assert.strictEqual(st.open.review, undefined, 'only the owner sees the review');
+  assert.strictEqual(JSON.stringify(st.open.locations.map((l) => l.status)), '["todo","todo","todo"]');
+});
+
+test('stocktake: anyone counts a location; counting it again replaces the first count', () => {
+  const { SF, tok, cashier, manager } = counting();
+  const id = act(SF, 'countStart', manager).id;
+  act(SF, 'countClaim', cashier, { countId: id, location: 'Storeroom' });
+  let loc = SF.dispatch('countState', { token: cashier }).data.open.locations.find((l) => l.name === 'Storeroom');
+  assert.strictEqual(loc.status, 'counting');
+  assert.ok(act(SF, 'countSave', cashier, { countId: id, location: 'Storeroom', lines: [{ id: 'P01', qty: 9 }] }).ok);
+  act(SF, 'countSave', cashier, { countId: id, location: 'Storeroom', lines: [{ id: 'P01', qty: 7 }, { id: 'P02', qty: 2 }] });
+  act(SF, 'countSave', manager, { countId: id, location: 'Car', lines: [{ id: 'P02', qty: 3 }] });
+  loc = SF.dispatch('countState', { token: cashier }).data.open.locations.find((l) => l.name === 'Storeroom');
+  assert.strictEqual(loc.status, 'done'); assert.strictEqual(loc.items, 9);
+  const review = SF.dispatch('countState', { token: tok }).data.open.review;
+  const p1 = review.find((r) => r.id === 'P01'), p2 = review.find((r) => r.id === 'P02');
+  assert.strictEqual(JSON.stringify([p1.expected, p1.counted, p1.diff]), '[10,7,-3]', 'the later Storeroom count wins');
+  assert.strictEqual(JSON.stringify([p2.expected, p2.counted, p2.diff]), '[6,5,-1]', 'two locations add up');
+  assert.strictEqual(act(SF, 'countSave', cashier, { countId: id, location: 'Garden shed', lines: [] }).ok, false);
+  assert.strictEqual(act(SF, 'countSave', cashier, { countId: id, location: 'Car', lines: [{ id: 'P01', qty: -2 }] }).ok, false);
+});
+
+test('stocktake: the owner approves; stock follows the count and the loss is recorded at cost', () => {
+  const { SF, sheets, tok, cashier, manager } = counting();
+  const id = act(SF, 'countStart', manager).id;
+  act(SF, 'countSave', cashier, { countId: id, location: 'Storeroom', lines: [{ id: 'P01', qty: 7 }, { id: 'P02', qty: 8 }] });
+  assert.strictEqual(act(SF, 'countApprove', manager, { countId: id }).ok, false, 'Marian approves, not a manager');
+  const r = act(SF, 'countApprove', tok, { countId: id });
+  assert.strictEqual(r.ok, true, r.message);
+  assert.strictEqual(r.result.lossUnits, 3);
+  assert.strictEqual(r.result.lossValue, 60, '3 Apricot Jam at R20 each');
+  assert.strictEqual(r.result.foundUnits, 2);
+  const hand = SF.onHand();
+  assert.strictEqual(hand.P01, 7); assert.strictEqual(hand.P02, 8);
+  const moves = sheets.Movements.rows.filter((m) => m[3] === 'stocktake');
+  assert.strictEqual(moves.length, 2, 'two ledger lines, nothing overwritten');
+  assert.ok(moves.every((m) => m[4] === 'Stocktake ' + id));
+  const st = SF.dispatch('countState', { token: tok }).data;
+  assert.strictEqual(st.open, null);
+  assert.strictEqual(st.history[0].status, 'approved');
+  assert.strictEqual(st.history[0].result.lossValue, 60);
+});
+
+test('stocktake: what nobody counted is left alone, unless the owner says there are none', () => {
+  const { SF, tok, cashier } = counting();
+  let id = act(SF, 'countStart', tok).id;
+  act(SF, 'countSave', cashier, { countId: id, location: 'Car', lines: [{ id: 'P01', qty: 10 }] });
+  let r = act(SF, 'countApprove', tok, { countId: id });
+  assert.strictEqual(r.result.uncounted, 1);
+  assert.strictEqual(SF.onHand().P02, 6, 'Fig Jam kept');
+  id = act(SF, 'countStart', tok).id;
+  act(SF, 'countSave', cashier, { countId: id, location: 'Car', lines: [{ id: 'P01', qty: 10 }] });
+  r = act(SF, 'countApprove', tok, { countId: id, uncounted: 'zero' });
+  assert.strictEqual(SF.onHand().P02, 0, 'none left');
+  assert.strictEqual(r.result.lossUnits, 6);
+});
+
+test('stocktake: managers edit the locations; the list stays tidy', () => {
+  const { SF, cashier, manager } = counting();
+  assert.strictEqual(act(SF, 'countLocationsSave', cashier, { locations: ['X'] }).ok, false);
+  const r = act(SF, 'countLocationsSave', manager, { locations: [' Storeroom ', 'storeroom', 'Car  boot', '', 'Kitchen'] });
+  assert.strictEqual(JSON.stringify(r.locations), '["Storeroom","Car boot","Kitchen"]');
+  assert.strictEqual(act(SF, 'countLocationsSave', manager, { locations: [] }).ok, false);
+  assert.strictEqual(SF.dispatch('countState', { token: cashier }).data.locations.length, 3);
 });
 
 /* ---------- reporting a problem ---------- */

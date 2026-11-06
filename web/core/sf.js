@@ -277,9 +277,9 @@ window.SF = (function () {
 
   var CAPS = {
     owner: ['*'],
-    manager: ['sell', 'orders', 'stock', 'price', 'labels', 'reports', 'expenses', 'report'],
-    cashier: ['sell', 'orders', 'labels', 'report'],
-    viewer: ['reports', 'report']
+    manager: ['sell', 'orders', 'stock', 'price', 'labels', 'reports', 'expenses', 'report', 'count'],
+    cashier: ['sell', 'orders', 'labels', 'report', 'count'],
+    viewer: ['reports', 'report', 'count']
   };
 
   function can(cap) {
@@ -837,7 +837,7 @@ window.SF = (function () {
     var extra = registry.screens.filter(function (sc) {
       return pluginOn(sc.plugin) && can(sc.cap);
     });
-    var core = ['labels', 'people', 'settings', 'health', 'report'].filter(function (id) {
+    var core = ['stocktake', 'labels', 'people', 'settings', 'health', 'report'].filter(function (id) {
       return screens[id] && can(screens[id].cap);
     }).map(function (id) { return screens[id]; });
 

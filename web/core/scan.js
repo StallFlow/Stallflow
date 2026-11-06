@@ -13,6 +13,10 @@
   'use strict';
 
   var stream = null, running = false, warned = false;
+  // What a scan is for: the till (add to the sale), a stocktake (count every jar,
+  // keep going), or a quick look at the stock (show one product).
+  var mode = {};
+  var lastId = null, lastSeen = 0, armed = true;
 
   function overlay() {
     var box = SF.el('scan');
@@ -78,7 +82,15 @@
     return nativeReader().then(function (r) { return r || loadJsQR().then(jsqrReader); });
   }
 
-  SF.scan = function () {
+  /**
+   * SF.scan()                     till: add the product to the sale, then close.
+   * SF.scan({ each: fn(id) })     count: call fn for every jar, keep scanning.
+   *                               fn returns the line to show, e.g. "Fig Jam · 3".
+   * SF.scan({ once: fn(id) })     look: call fn for one product, then close.
+   */
+  SF.scan = function (opts) {
+    mode = opts || {};
+    lastId = null; lastSeen = 0; armed = true;
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       SF.toast('This browser cannot use the camera. Tap the product instead.', true);
       return;
@@ -100,11 +112,18 @@
       running = true;
       var played = video.play();
       if (played && played.catch) played.catch(function () {});
+      var close = box.querySelector('.x');
+      if (close) close.textContent = mode.each ? 'Done' : 'Close';
+      var h0 = SF.el('scanhint');
+      if (h0) h0.textContent = mode.each ? 'Scan each jar. One beep, one jar.' : 'Point at the label';
       return ready.then(function (read) {
         (function tick() {
           if (!running) return;
           read(video).then(function (value) {
             if (value) hit(value);
+            // The same jar stays in view for a moment: count it again only after the
+            // code has left the camera, so one jar is one count.
+            else if (Date.now() - lastSeen > 450) armed = true;
           }).catch(function () {}).then(function () {
             if (running) setTimeout(tick, 180);
           });
@@ -147,8 +166,20 @@
     return null;
   }
 
+  function say(text) { var h = SF.el('scanhint'); if (h) h.textContent = text; }
+
   function hit(value) {
     var id = productOf(value);
+    if (id && (mode.each || mode.once)) {
+      var now = Date.now();
+      if (id === lastId && !armed) { lastSeen = now; return; }
+      lastId = id; lastSeen = now; armed = false;
+      if (mode.once) { SF.stopScan(); mode.once(id); return; }
+      var line = mode.each(id);
+      say(line || 'That label is for a product that is not on this list.');
+      if (line && navigator.vibrate) { try { navigator.vibrate(60); } catch (e) {} }
+      return;
+    }
     var m = id ? [null, id] : null;
     if (!m) {
       // A QR code, but not one of ours (the order poster, a payment code…).
