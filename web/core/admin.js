@@ -236,8 +236,10 @@
                        { name: String(h.name).toLowerCase(), date: h.date || '0000', profit: h.profit,
                          taken: h.revenue, units: h.units, costs: h.expenses }) + '>' +
         '<td><b>' + esc(h.name) + '</b>' +
-        (h.location ? '<div class="muted small">' + esc(h.location) + '</div>' : '') + '</td>' +
-        '<td>' + esc(h.date || '—') + '</td><td class="r">' + qty(h.units, 'each') + '</td>' +
+        (h.location ? '<div class="muted small">' + esc(h.location) + '</div>' : '') +
+        (when === 'past' ? '' : '<button class="quiet" style="padding:4px 0;min-height:36px;text-decoration:underline" ' +
+          'data-id="' + esc(h.id) + '" onclick="SFA.shareMarket(this.getAttribute(\'data-id\'))">Share the order form</button>') +
+        '</td><td>' + esc(h.date || '—') + '</td><td class="r">' + qty(h.units, 'each') + '</td>' +
         '<td class="r">' + money(h.revenue) + '</td><td class="r">' + money(h.expenses) + '</td>' +
         '<td class="r"><b style="color:' + (h.profit >= 0 ? 'var(--ok)' : 'var(--bad)') + '">' +
         money(h.profit) + '</b></td></tr>';
@@ -883,6 +885,29 @@
       });
       SF.toast(open ? 'Orders between markets are on' : 'Orders between markets are off');
     },
+    /** Everything for sending one market's order form out: WhatsApp, the picture, the poster. */
+    shareMarket: function (id) {
+      var d = SF.state.data.numbers, m = null;
+      ((d && d.history) || []).concat((d && d.markets) || []).forEach(function (x) { if (String(x.id) === String(id)) m = x; });
+      if (!m) { SF.toast('That market is not on this phone yet. Try again in a moment.', true); return; }
+      var pr = (SF.state.boot && SF.state.boot.profile) || {}, home = String(id).toUpperCase() === 'HOME';
+      var info = { shop: pr.name || 'Our stall', tagline: pr.tagline || '', home: home, title: m.name,
+        when: m.date ? prettyDate(m.date) : '', where: m.location || '', link: orderLink(id),
+        colour: pr.colour, ink: pr.ink, paper: pr.paper };
+      preparePoster(info);
+      var did = esc(id);
+      SF.openSheet('<h2>' + (home ? 'Between markets' : esc(m.name)) + '</h2>' +
+        '<div class="sub">The order form for this market: ' + esc(orderLink(id)) + '</div>' +
+        '<button class="ok block" data-id="' + did + '" onclick="SFA.waShare(this.getAttribute(\'data-id\'))">Send on WhatsApp</button>' +
+        '<div class="adbtns">' +
+          (window.SFL && SFL.canShare() ? '<button class="ghost" onclick="SFA.sharePoster()">Share the picture</button>' : '') +
+          '<button class="ghost" onclick="SFA.downloadPoster(\'feed\')">Download for Facebook and Instagram</button>' +
+          '<button class="ghost" onclick="SFA.downloadPoster(\'story\')">Download for WhatsApp Status</button>' +
+          '<button class="ghost" data-id="' + did + '" onclick="SF.closeSheet();SFA.openPoster(this.getAttribute(\'data-id\'))">Open the printable poster</button>' +
+        '</div>' +
+        '<button class="quiet block" style="margin-top:8px" onclick="SF.closeSheet()">Done</button>');
+    },
+
     /** The order link, ready typed in WhatsApp: pick who gets it there. */
     waShare: function (id) {
       var d = SF.state.data.numbers || SF.state.data.labels, link = orderLink(id), m = null;
@@ -980,6 +1005,18 @@
       });
       SF.el('mn').value = ''; SF.el('md').value = ''; SF.el('ml').value = '';
       SF.toast('Market added. Its order page and poster are ready.');
+      // Once it has reached the sheet (so it has its real id), offer to send the order form out.
+      var wantName = String(n).trim(), tries = 0;
+      (function offer() {
+        if (++tries > 14 || !SF.state.online) return;
+        if (SF.outbox.pending().length) { setTimeout(offer, 800); return; }
+        SF.load('numbers').then(function () {
+          var list = (SF.state.data.numbers && SF.state.data.numbers.history) || [], found = null;
+          list.forEach(function (h) { if (h.name === wantName && (h.date || '') === (date || '')) found = h; });
+          if (found && SF.state.view === 'numbers') SFA.shareMarket(found.id);
+          else if (!found) setTimeout(offer, 800);
+        });
+      })();
     },
 
     lookSet: function () {

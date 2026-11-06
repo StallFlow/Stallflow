@@ -2110,6 +2110,47 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
     await env.ctx.close();
   });
 
+  await test('Market list: each market that can still take orders has Share the order form, and past ones do not', async () => {
+    const env = await phone({ hash: '#numbers', seed: (SF) => {
+      adSeed(SF);
+      SF.append('markets', { MarketId: 'M09', Name: 'Old Fair', Date: day(-20), Status: 'planned' });
+    }, init: () => { window.open = (u) => { window.__opened = u; return null; };
+      navigator.canShare = () => true;
+      navigator.share = (d) => { window.__shared = d.files.map((f) => f.name + ':' + f.type); return Promise.resolve(); }; } });
+    const page = env.page;
+    await page.evaluate(() => { SF.ls.set('sf.tab.numbers', 'all'); SF.render(); });
+    await page.waitForSelector('[data-frow="markets"]');
+    assert.strictEqual(await page.locator('[data-frow="markets"]:has-text("Monument Primary Market") button:has-text("Share the order form")').count(), 1);
+    assert.strictEqual(await page.locator('[data-frow="markets"]:has-text("Old Fair") button:has-text("Share the order form")').count(), 0, 'a market that is over has nothing to share');
+    await page.click('[data-frow="markets"]:has-text("Monument Primary Market") button:has-text("Share the order form")');
+    await page.waitForSelector('.sheet .adbtns');
+    assert.ok(/Monument Primary Market/.test(await page.textContent('.sheet h2')));
+    await page.waitForTimeout(800);
+    const [dl] = await Promise.all([page.waitForEvent('download'), page.click('.sheet button:has-text("Download for WhatsApp Status")')]);
+    assert.ok(/-status-1080x1920\.png$/.test(dl.suggestedFilename()), dl.suggestedFilename());
+    await page.click('.sheet button:has-text("Share the picture")');
+    await page.waitForFunction(() => window.__shared);
+    assert.ok(/post-1080x1350\.png:image\/png/.test(await page.evaluate(() => window.__shared[0])));
+    await page.click('.sheet button:has-text("Send on WhatsApp")');
+    const url = decodeURIComponent((await page.evaluate(() => window.__opened)).split('text=')[1]);
+    assert.ok(url.indexOf('Pre-order for Monument Primary Market') !== -1 && url.indexOf('?m=M02') !== -1, url);
+    await env.ctx.close();
+  });
+
+  await test('Adding a market offers to send its order form out straight away', async () => {
+    const env = await phone({ hash: '#numbers', init: () => { window.open = (u) => { window.__opened = u; return null; }; } });
+    const page = env.page;
+    await openNewMarket(page);
+    await page.fill('#mn', 'Voortrekker Craft Day'); await page.fill('#md', day(6)); await page.fill('#ml', 'Church hall');
+    await page.click('text=Add market');
+    await page.waitForSelector('.sheet .adbtns', { timeout: 15000 });
+    assert.ok(/Voortrekker Craft Day/.test(await page.textContent('.sheet h2')));
+    const id = env.sheets.Markets.rows.find((r) => r[1] === 'Voortrekker Craft Day')[0];
+    await page.click('.sheet button:has-text("Send on WhatsApp")');
+    assert.ok(decodeURIComponent((await page.evaluate(() => window.__opened)).split('text=')[1]).indexOf('?m=' + id) !== -1);
+    await env.ctx.close();
+  });
+
   await test('How-to videos: anyone signed in finds them in More, and every video is published', async () => {
     const env = await phone({ hash: '#till', seed: (SF) => SF.setPin('cashier', '1111') });
     const page = env.page;
