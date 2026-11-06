@@ -406,7 +406,21 @@ window.SF = (function () {
           // Removing it here would lose a sale silently, which is the one
           // outcome this whole design exists to prevent.
           if (!res || typeof res.ok === 'undefined') throw new Error('unreadable');
-          if (res.ok === false) {
+          if (res.ok === false && res.retry) {
+            // The server was busy and did nothing: the same request will do next time.
+            throw new Error('busy');
+          }
+          if (res.ok === false && /^Unknown action/.test(String(res.message || ''))) {
+            // The app has updated before the server did (or the other way round). Nothing
+            // ran, so keep the change and send it again later, once the server knows it.
+            var l = Outbox.all();
+            l.forEach(function (o) {
+              if (o.opId !== op.opId) return;
+              o.tries = (o.tries || 0) + 1;
+              if (o.tries > 40) { o.failed = true; o.message = res.message; }
+            });
+            Outbox.save(l);
+          } else if (res.ok === false) {
             // The server refused on its own terms — not a signal problem.
             // Keep it and show why, rather than dropping it quietly.
             Outbox.fail(op.opId, res.message || 'The server would not accept this.');
@@ -426,6 +440,12 @@ window.SF = (function () {
         S.syncing = false;
         syncAgain = false;
         if (err && err.message === 'auth') { signOut(true); return; }
+        if (err && err.message === 'busy') {
+          // Still online, just a moment too busy: everything stays queued and goes again shortly.
+          render(true);
+          setTimeout(function () { if (Outbox.pending().length) sync(); }, 6000);
+          return;
+        }
         S.online = false;               // out of signal: the rest stays queued, in order
         render(true);
       });

@@ -219,6 +219,12 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
         : JSON.parse(req.postData() || '{}');
       if (env.offline) return route.abort('internetdisconnected');
       if (opts.delay) await new Promise((r) => setTimeout(r, opts.delay));
+      // What a server in the middle of an update can do to a write (anything with an opId).
+      const json = (o) => route.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify(o) });
+      if (body.opId && env.mode === 'busy') return json({ ok: false, retry: true, message: 'Busy for a moment — please try again.' });
+      if (body.opId && env.mode === 'unknown') return json({ ok: false, message: 'Unknown action: ' + body.action });
+      if (body.opId && env.mode === 'html') return route.fulfill({ status: 200, contentType: 'text/html', headers: { 'access-control-allow-origin': '*' }, body: '<html><body>Sorry, unable to open the file at this time.</body></html>' });
+      if (body.opId && env.mode === 'lostreply') { SF.dispatch(body.action, body); return route.abort('connectionreset'); }
       const out = SF.dispatch(body.action, body);
       await route.fulfill({ status: 200, contentType: 'application/json',
         headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify(out) });
@@ -2051,6 +2057,56 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
       await page.waitForFunction(() => !SF.outbox.pending().length);
       if (process.env.SF_SHOT) await page.screenshot({ path: path.join(process.env.SF_SHOT, 'landscape-' + w + '.png') });
     }
+    await env.ctx.close();
+  });
+
+  await test('an update day: a busy server, an error page, a server that does not know the action yet, a lost reply and a reload, and every sale still arrives exactly once', async () => {
+    const env = await phone({ hash: '#till' });
+    const page = env.page;
+    await page.waitForFunction(() => SF.state.data.till);
+    const sells = [['busy', 'P01'], ['unknown', 'P02'], ['html', 'P01'], ['lostreply', 'P02']];
+    for (const [mode, id] of sells) {
+      env.mode = mode;
+      await sellOne(page, id, 'card');
+      await page.evaluate(() => SF.sync());
+      await page.waitForTimeout(500);
+      assert.strictEqual(await page.evaluate(() => SF.outbox.failed().length), 0, mode + ': nothing was given up on');
+    }
+    // the lost-reply sale really did reach the server once already, and the retry must not add a second
+    assert.strictEqual(env.SF.orders().length, 1, 'only the lost-reply sale had reached the sheet');
+    assert.strictEqual(await page.evaluate(() => SF.outbox.pending().length), 4, 'all four are still waiting on the phone');
+    // the phone is closed and opened again, the server still in the middle of its update
+    env.mode = 'html';
+    await page.reload();
+    await page.waitForFunction(() => window.SF && SF.state.ready);
+    await page.waitForTimeout(1200);
+    assert.strictEqual(await page.evaluate(() => SF.outbox.pending().length), 4, 'they survived the reload');
+    env.mode = 'ok';
+    await page.evaluate(() => SF.sync());
+    await page.waitForFunction(() => !SF.outbox.pending().length, null, { timeout: 15000 });
+    await page.evaluate(() => SF.sync());
+    const sales = env.SF.orders().filter((o) => o.channel === 'till');
+    assert.strictEqual(sales.length, 4, 'four sales, none lost, none doubled');
+    assert.strictEqual(JSON.stringify(sales.map((o) => o.paid)), JSON.stringify(['card', 'card', 'card', 'card']));
+    const hand = env.SF.onHand();
+    assert.strictEqual(hand.P01, 8); assert.strictEqual(hand.P02, 8);
+    assert.strictEqual(await page.evaluate(() => SF.outbox.failed().length), 0);
+    await env.ctx.close();
+  });
+
+  await test('a busy server is retried by itself, with no tap, and the sale is not marked as failed', async () => {
+    const env = await phone({ hash: '#till' });
+    const page = env.page;
+    await page.waitForFunction(() => SF.state.data.till);
+    env.mode = 'busy';
+    await sellOne(page, 'P01', 'card');
+    await page.waitForTimeout(800);
+    assert.strictEqual(await page.evaluate(() => SF.outbox.pending().length), 1);
+    assert.strictEqual(await page.evaluate(() => SF.outbox.failed().length), 0);
+    assert.strictEqual(await page.evaluate(() => SF.state.online), true, 'a busy server is not the same as no signal');
+    env.mode = 'ok';
+    await page.waitForFunction(() => !SF.outbox.pending().length, null, { timeout: 15000 });
+    assert.strictEqual(env.SF.orders().filter((o) => o.channel === 'till').length, 1);
     await env.ctx.close();
   });
 

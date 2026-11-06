@@ -104,7 +104,7 @@ function load(googleTokens) {
         return f.replace(/yyyy|MMM|MM|dd|d|HH|mm/g, (k) => parts[k]);
       }
     },
-    LockService: { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) },
+    LockService: { getScriptLock: () => ({ waitLock() { if (ctx.__busy) throw new Error('could not get the lock'); }, releaseLock() {} }) },
     UrlFetchApp: {
       fetch: (url, opts) => {
         if (url.indexOf('api.github.com') !== -1 && opts && opts.method === 'get') {
@@ -989,6 +989,32 @@ test('Health lists recent sign-in problems for the owner', () => {
   assert.strictEqual(h.signInProblems.length, 1);
   assert.strictEqual(h.signInProblems[0].stage, 'network');
   assert.ok(/unreachable/.test(h.signInProblems[0].detail));
+});
+
+
+/* ---------- updates must never cost a sale ---------- */
+test('a server too busy to take a sale says "send it again" (retry), and does nothing', () => {
+  const env = shop(day(3));
+  const { SF } = env;
+  const tok = ownerTok(SF);
+  env.ctx.__busy = true;
+  const r = SF.dispatch('sell', { token: tok, opId: 'busy1', marketId: 'M01', lines: [{ id: 'P01', qty: 1 }] });
+  assert.strictEqual(r.ok, false); assert.strictEqual(r.retry, true);
+  assert.strictEqual(SF.orders().length, 0, 'nothing was sold');
+  env.ctx.__busy = false;
+  const again = SF.dispatch('sell', { token: tok, opId: 'busy1', marketId: 'M01', lines: [{ id: 'P01', qty: 1 }] });
+  assert.strictEqual(again.ok, true);
+  assert.strictEqual(SF.orders().length, 1, 'sent again, sold once');
+});
+
+test('the same sale sent twice (the first reply was lost) is sold once', () => {
+  const { SF } = shop(day(3));
+  const tok = ownerTok(SF);
+  const sale = () => SF.dispatch('sell', { token: tok, opId: 'same1', marketId: 'M01', paid: 'card', lines: [{ id: 'P01', qty: 2 }] });
+  const a = sale(), b = sale();
+  assert.strictEqual(a.ok, true); assert.strictEqual(b.ok, true); assert.strictEqual(b.replayed, true);
+  assert.strictEqual(SF.orders().length, 1);
+  assert.strictEqual(SF.onHand().P01, 8, 'the stock went down once');
 });
 
 console.log(failures ? '\n' + failures + ' failed' : '\nall passed');
