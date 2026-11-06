@@ -2151,6 +2151,22 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
     await env.ctx.close();
   });
 
+  await test('An installed app asks Android to rotate freely, so an old portrait-only install still goes landscape', async () => {
+    const env = await phone({ hash: '#till', init: () => {
+      window.__locks = [];
+      const mm = window.matchMedia.bind(window);
+      window.matchMedia = (q) => /display-mode/.test(q) ? { matches: true, media: q, addListener() {}, removeListener() {}, addEventListener() {}, removeEventListener() {} } : mm(q);
+      try { Object.defineProperty(screen, 'orientation', { value: { lock: (t) => { window.__locks.push(t); return Promise.reject(new Error('not allowed')); }, unlock() {} }, configurable: true }); } catch (e) {}
+    } });
+    // asked when the app opens, and again each time it comes back to the screen
+    await env.page.evaluate(() => { window.__locks.length = 0; });
+    await leaveAndReturn(env.page);
+    await env.page.waitForFunction(() => window.__locks && window.__locks.length > 0, null, { timeout: 8000 });
+    assert.strictEqual(await env.page.evaluate(() => window.__locks[0]), 'any');
+    assert.ok(!(env.pageErrors || []).some((e) => /not allowed/.test(e)), 'a refused lock is not an error: ' + (env.pageErrors || []).join(' | '));
+    await env.ctx.close();
+  });
+
   await test('How-to videos: anyone signed in finds them in More, and every video is published', async () => {
     const env = await phone({ hash: '#till', seed: (SF) => SF.setPin('cashier', '1111') });
     const page = env.page;
