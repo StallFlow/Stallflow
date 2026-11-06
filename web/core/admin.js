@@ -1184,6 +1184,14 @@
                   return '• ' + esc(x); }).join('<br>') + '</div>'
               : '<div class="notice" style="background:var(--ok-bg);color:var(--ok);' +
                 'border-radius:10px;margin-bottom:12px">No problems found.</div>') +
+            (h.signInProblems && h.signInProblems.length
+              ? '<h3 style="margin-bottom:8px">Sign-in problems</h3>' +
+                '<div class="muted small" style="margin-bottom:6px">What phones reported when Google sign-in did not work ' +
+                '(no names, emails or tokens).</div>' +
+                h.signInProblems.map(function (x) {
+                  return '<div class="rowitem"><div class="who"><b>' + esc(x.stage) + '</b>' +
+                    '<span>' + esc(x.detail) + '</span></div><span class="muted small">' + esc(x.when) + '</span></div>';
+                }).join('') + '<div style="height:14px"></div>' : '') +
             '<h3 style="margin-bottom:8px">Backup</h3>' +
             '<div class="muted small" style="margin-bottom:8px">' + (h.backup
               ? 'Last copy of the sheet: ' + esc(String(h.backup.at).slice(0, 16).replace('T', ' ')) +

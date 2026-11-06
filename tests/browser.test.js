@@ -77,7 +77,14 @@ function server() {
     Utilities: {
       getUuid: () => crypto.randomUUID(),
       computeHmacSha256Signature: (v, key) => Array.from(crypto.createHmac('sha256', key).update(v).digest()).map((b) => (b > 127 ? b - 256 : b)),
-      formatDate: (d, tz, f) => (f === 'yyyy-MM-dd' ? d.toISOString().slice(0, 10) : d.toISOString())
+      formatDate: (d, tz, f) => {
+        // Like Apps Script in South Africa (UTC+2), for the patterns the server uses.
+        const z = new Date(new Date(d).getTime() + 2 * 3600e3), p = (n) => String(n).padStart(2, '0');
+        const M = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        const parts = { yyyy: z.getUTCFullYear(), MMM: M[z.getUTCMonth()], MM: p(z.getUTCMonth() + 1),
+          dd: p(z.getUTCDate()), d: z.getUTCDate(), HH: p(z.getUTCHours()), mm: p(z.getUTCMinutes()) };
+        return f.replace(/yyyy|MMM|MM|dd|d|HH|mm/g, (k) => parts[k]);
+      }
     },
     LockService: { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) },
     UrlFetchApp: { fetch: (url, opts) => {
@@ -1786,6 +1793,78 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
     assert.strictEqual(JSON.stringify(sales.map((o) => o.paid)), JSON.stringify(['cash', 'card', 'cash', 'eft', 'card']));
     const hand = env.SF.onHand();
     assert.strictEqual(hand.P01, 7); assert.strictEqual(hand.P02, 8);
+    await env.ctx.close();
+  });
+
+  /* ---------- Google sign-in trouble ---------- */
+  const gsiStub = (button) => `(function () {
+    var g = window.__gsi = window.__gsi || { loads: 0, cancels: 0, inits: 0 }; g.loads++;
+    window.google = window.google || {};
+    window.google.accounts = { id: {
+      initialize: function (o) { g.inits++; g.cb = o.callback; },
+      renderButton: function (el) { ${button ? "var f = document.createElement('iframe'); f.title = 'Sign in with Google'; el.appendChild(f);" : ''} },
+      cancel: function () { g.cancels++; }, disableAutoSelect: function () {} } };
+  })();`;
+  const signedOutWithGoogle = async (script) => {
+    const env = await phone({ google: true });
+    env.gsi = { blocked: script === 'blocked' };
+    await env.ctx.route('https://accounts.google.com/**', (r) => env.gsi.blocked ? r.abort()
+      : r.fulfill({ status: 200, contentType: 'text/javascript', body: gsiStub(script !== 'nobutton') }));
+    await env.page.evaluate(() => SF.forceSignOut());
+    return env;
+  };
+  const authLog = (env) => env.sheets.Audit.rows.filter((r) => r[4] === 'authError').map((r) => r[5] + ' ' + r[6]);
+
+  await test('Google sign-in: if Google\'s script is blocked, say so, then Try again starts fresh and works', async () => {
+    const env = await signedOutWithGoogle('blocked');
+    const page = env.page;
+    await page.waitForSelector('#gsitrouble .notice');
+    assert.ok(/could not load/.test(await page.textContent('#gsitrouble')), await page.textContent('#gsitrouble'));
+    await page.waitForFunction(() => !SF.outbox.pending().length);
+    await page.waitForTimeout(600);
+    assert.ok(authLog(env).some((l) => /^load blocked/.test(l)), authLog(env).join(' | '));
+    env.gsi.blocked = false;
+    await page.click('#gsiretry');
+    await page.waitForSelector('#gsi iframe');
+    assert.strictEqual(await page.locator('#gsitrouble .notice').count(), 0, 'the message is gone');
+    assert.strictEqual(await page.evaluate(() => window.__gsi.loads), 1, 'Google\'s script was loaded afresh');
+    assert.strictEqual(await page.evaluate(() => window.__gsi.inits), 1);
+    await page.click('#gsiretry');                       // and again: the old request is cancelled first
+    await page.waitForFunction(() => window.__gsi.loads === 2);
+    assert.strictEqual(await page.evaluate(() => window.__gsi.cancels), 1, 'the old request was cancelled');
+    assert.strictEqual(await page.evaluate(() => window.__gsi.inits), 2);
+    await env.ctx.close();
+  });
+
+  await test('Google sign-in: a button that never appears is explained, with Try again', async () => {
+    const env = await signedOutWithGoogle('nobutton');
+    const page = env.page;
+    await page.waitForSelector('#gsitrouble .notice', { timeout: 15000 });
+    assert.ok(/button did not appear/.test(await page.textContent('#gsitrouble')));
+    assert.strictEqual(await page.isVisible('#gsiretry'), true);
+    await env.ctx.close();
+  });
+
+  await test('Google sign-in: a refused token shows a plain message, is logged without the token, and Try again is there', async () => {
+    const env = await signedOutWithGoogle('ok');
+    const page = env.page;
+    await page.waitForSelector('#gsi iframe');
+    await page.evaluate(() => window.__gsi.cb({ credential: 'eyJhbGciOi.SECRET-TOKEN-VALUE.sig' }));
+    await page.waitForFunction(() => /Tap Try again/.test(document.getElementById('view').textContent));
+    assert.strictEqual(await page.isVisible('#gsiretry'), true);
+    assert.ok(authLog(env).some((l) => /^refused token-not-accepted/.test(l)), authLog(env).join(' | '));
+    assert.ok(JSON.stringify(env.sheets.Audit.rows).indexOf('SECRET-TOKEN') === -1, 'the token is never stored');
+    await env.ctx.close();
+  });
+
+  await test('Google sign-in: inside another app\'s browser, it says to open Chrome', async () => {
+    const env = await phone({ google: true, init: () => {
+      Object.defineProperty(navigator, 'userAgent', { get: () => 'Mozilla/5.0 (Linux; Android 13; SM-S918B; wv) AppleWebKit/537.36 Version/4.0 Chrome/120 Mobile Safari/537.36 Instagram 300' });
+    } });
+    await env.ctx.route('https://accounts.google.com/**', (r) => r.fulfill({ status: 200, contentType: 'text/javascript', body: gsiStub(true) }));
+    await env.page.evaluate(() => SF.forceSignOut());
+    await env.page.waitForSelector('.notice.warn');
+    assert.ok(/Open this address in Chrome/.test(await env.page.textContent('.notice.warn')));
     await env.ctx.close();
   });
 

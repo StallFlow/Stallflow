@@ -620,6 +620,7 @@ SF.action('health', 'reports', 'read', function () {
     google: SF.googleOn(),
     reports: SF.reportsConnected(),
     backup: SF.lastBackup ? SF.lastBackup() : null,
+    signInProblems: SF.recentAuthProblems ? SF.recentAuthProblems() : [],
     problems: problems,
     checkedAt: Date.now()
   };

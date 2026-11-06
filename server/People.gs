@@ -63,11 +63,62 @@ SF.action('authConfig', null, 'read', function () {
 });
 
 // Public: the Google ID token is the credential.
+/* ---- sign-in problems, for support ---------------------------------------
+   A phone that cannot sign in reports what stage failed and a short code, so
+   the owner can see the pattern (Health check). Never a token, an email or free
+   text: stage and code come from fixed lists, and at most 40 reports an hour
+   are kept, so nobody can fill the Audit tab by calling this. */
+SF.AUTH_STAGES = ['load', 'render', 'init', 'network', 'refused', 'webview', 'offline', 'retry'];
+SF.AUTH_CODES = ['blocked', 'timeout', 'no-button', 'init-threw', 'unreachable', 'token-not-accepted',
+                 'embedded', 'offline', 'tapped'];
+SF.AUTH_BROWSERS = ['chrome', 'chrome-android', 'chrome-ios', 'safari', 'safari-ios', 'firefox', 'samsung', 'webview', 'other'];
+
+SF.authLogAllowed = function () {
+  var hour = Utilities.formatDate(new Date(), SF.TZ, 'yyyyMMddHH');
+  var cur = String(SF.get('authLogHour', '')).split(':');
+  var n = cur[0] === hour ? Number(cur[1]) || 0 : 0;
+  if (n >= 40) return false;
+  SF.set('authLogHour', hour + ':' + (n + 1));
+  return true;
+};
+
+SF.logAuthProblem = function (stage, code, browser, device) {
+  if (!SF.authLogAllowed()) return false;
+  SF.audit({ role: 'anon', device: String(device || '-').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 24) || '-' },
+           'authError', stage, String(code) + (browser ? ' · ' + browser : ''), 'failed');
+  return true;
+};
+
+// Public, like signIn: there is no token to check before somebody has signed in.
+SF.action('authError', null, 'read', function (p) {
+  var stage = String(p.stage || '');
+  if (SF.AUTH_STAGES.indexOf(stage) === -1) return { ok: false };
+  // Fixed lists only: anything else is filed as 'other', so free text can never get in.
+  var code = String(p.code || '');
+  if (SF.AUTH_CODES.indexOf(code) === -1) code = 'other';
+  var browser = String(p.browser || '').replace(/-app$/, '');
+  if (SF.AUTH_BROWSERS.indexOf(browser) === -1) browser = 'other';
+  if (/-app$/.test(String(p.browser || ''))) browser += '-app';
+  return { ok: true, logged: SF.logAuthProblem(stage, code, browser, p.device) };
+});
+
+SF.recentAuthProblems = function () {
+  return SF.rows('audit').filter(function (r) { return String(r.Action) === 'authError'; })
+    .slice(-8).reverse().map(function (r) {
+      return { when: r.When instanceof Date ? Utilities.formatDate(r.When, SF.TZ, 'd MMM HH:mm') : '',
+               stage: String(r.Target), detail: String(r.Detail) };
+    });
+};
+
 SF.action('signInGoogle', null, 'read', function (p) {
   if (!SF.googleOn()) return { ok: false, message: 'Google sign-in is not switched on yet.' };
   var device = String(p.device || '').slice(0, 60) || 'unknown';
   var who = SF.verifyGoogle(String(p.credential || ''));
-  if (!who) return { ok: false, message: 'Google could not confirm who you are. Try again.' };
+  if (!who) {
+    // Google's check failed (an old or wrong token): note it, without the token.
+    SF.logAuthProblem('refused', 'token-not-accepted', '', device);
+    return { ok: false, message: 'Google could not confirm who you are. Tap Try again.' };
+  }
 
   var role = SF.roleOf(who.email);
   if (!role) {

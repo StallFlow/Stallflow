@@ -95,7 +95,14 @@ function load(googleTokens) {
       getUuid: () => crypto.randomUUID(),
       computeHmacSha256Signature: (v, key) =>
         Array.from(crypto.createHmac('sha256', key).update(v).digest()).map((b) => (b > 127 ? b - 256 : b)),
-      formatDate: (d, tz, f) => (f === 'yyyy-MM-dd' ? d.toISOString().slice(0, 10) : d.toISOString())
+      formatDate: (d, tz, f) => {
+        // Like Apps Script in South Africa (UTC+2), for the patterns the server uses.
+        const z = new Date(new Date(d).getTime() + 2 * 3600e3), p = (n) => String(n).padStart(2, '0');
+        const M = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        const parts = { yyyy: z.getUTCFullYear(), MMM: M[z.getUTCMonth()], MM: p(z.getUTCMonth() + 1),
+          dd: p(z.getUTCDate()), d: z.getUTCDate(), HH: p(z.getUTCHours()), mm: p(z.getUTCMinutes()) };
+        return f.replace(/yyyy|MMM|MM|dd|d|HH|mm/g, (k) => parts[k]);
+      }
     },
     LockService: { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) },
     UrlFetchApp: {
@@ -951,6 +958,37 @@ test('the weekly backup runs once a week, and only for an owner or manager', () 
   SF.setPin('cashier', '1111');
   const c = SF.dispatch('signIn', { pin: '1111', device: 'c' }).data.token;
   assert.strictEqual(SF.dispatch('backupNow', { token: c }).code, 'forbidden');
+});
+
+
+/* ---------- sign-in problems: what phones report, and what is never kept ---------- */
+test('a sign-in problem report keeps only a stage and a short code, never anything else', () => {
+  const { SF, sheets } = shop(day(3));
+  const r = SF.dispatch('authError', { stage: 'render', code: 'no-button <script>alert(1)</script> jane@x.com', browser: 'Chrome-Android!!', device: 'abc 123' });
+  assert.strictEqual(r.data.ok, true);
+  SF.dispatch('authError', { stage: 'load', code: 'blocked', browser: 'chrome-android-app', device: 'abc 123' });
+  assert.strictEqual(SF.dispatch('authError', { stage: 'hack', code: 'x' }).data.ok, false, 'an unknown stage is refused');
+  const rows = sheets.Audit.rows.filter((x) => x[4] === 'authError');
+  assert.strictEqual(rows.length, 2);
+  assert.strictEqual(rows[0][6], 'other · other', 'free text is filed as other: ' + rows[0][6]);
+  assert.strictEqual(rows[1][6], 'blocked · chrome-android-app');
+  assert.ok(!/jane|@|<|script/.test(rows.map((x) => x[5] + ' ' + x[6]).join(' | ')), 'stage and detail are clean');
+});
+
+test('no more than 40 sign-in problem reports are kept in an hour', () => {
+  const { SF, sheets } = shop(day(3));
+  for (let i = 0; i < 60; i++) SF.dispatch('authError', { stage: 'load', code: 'blocked' });
+  assert.strictEqual(sheets.Audit.rows.filter((x) => x[4] === 'authError').length, 40);
+});
+
+test('Health lists recent sign-in problems for the owner', () => {
+  const { SF } = shop(day(3));
+  const tok = ownerTok(SF);
+  SF.dispatch('authError', { stage: 'network', code: 'unreachable', browser: 'safari-ios' });
+  const h = SF.dispatch('health', { token: tok }).data;
+  assert.strictEqual(h.signInProblems.length, 1);
+  assert.strictEqual(h.signInProblems[0].stage, 'network');
+  assert.ok(/unreachable/.test(h.signInProblems[0].detail));
 });
 
 console.log(failures ? '\n' + failures + ' failed' : '\nall passed');
