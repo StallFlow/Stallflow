@@ -1146,12 +1146,30 @@ window.SF = (function () {
     render(true);
   }
 
+  /**
+   * An app installed from Chrome keeps the orientation it was installed with
+   * (older installs say portrait) until Chrome refreshes its copy, which can
+   * take days. Asking to rotate freely overrides that, so a phone turned on its
+   * side goes landscape straight away. Harmless where it is not allowed.
+   */
+  function allowRotation() {
+    try {
+      if (window.matchMedia && matchMedia('(display-mode: standalone), (display-mode: fullscreen)').matches &&
+          window.screen.orientation && window.screen.orientation.lock) {
+        // window.screen: in this file `screen` is the screen registry above.
+        var p = window.screen.orientation.lock('any');
+        if (p && p.catch) p.catch(function () {});
+      }
+    } catch (e) { /* not available here */ }
+  }
+
   function begin() {
     S.vocab = S.boot.profile.vocab ? cleanVocab(S.boot.profile.vocab) : S.vocab;
     S.marketId = S.boot.marketId || '';
     paintTheme(S.boot.profile);
     document.title = S.boot.profile.name + ' — StallFlow';
     S.ready = true;
+    allowRotation();
     route();
     sync().then(warm);
     // The weekly copy of the sheet. The server does nothing unless a week has
@@ -1184,7 +1202,7 @@ window.SF = (function () {
     });
     window.addEventListener('offline', function () { S.online = false; render(true); });
     document.addEventListener('visibilitychange', function () {
-      if (!document.hidden && S.ready) { sync(); load(S.view); }
+      if (!document.hidden && S.ready) { allowRotation(); sync(); load(S.view); }
     });
     setInterval(function () { if (Outbox.pending().length) sync(); }, 30000);
   }
