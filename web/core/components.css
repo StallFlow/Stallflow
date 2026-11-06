@@ -265,7 +265,8 @@ tr.flash td{background:color-mix(in srgb, var(--brand) 14%, transparent);transit
 .fbar{display:grid;gap:8px;margin:12px 0 10px}
 .fbar .fq{width:100%;padding-left:38px;background-repeat:no-repeat;background-position:12px 50%;
   background-size:18px;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%239B928A' stroke-width='2' stroke-linecap='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E")}
-.fsels{display:flex;gap:8px;flex-wrap:wrap}
+.fsels{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+@media(max-width:300px){.fsels{grid-template-columns:minmax(0,1fr)}}
 .fsel{flex:1 1 130px;min-width:0;display:flex;flex-direction:column;gap:3px;margin:0;
   font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
 .fsel select{width:100%;text-transform:none;letter-spacing:0;font-weight:600}
@@ -378,3 +379,66 @@ details.card summary{cursor:pointer;padding:6px 0;font-size:16px}
   margin:0 0 10px;padding:8px 12px;border-radius:12px;background:var(--surface-2);font-size:14.5px}
 /* Something to put right: the live market is over, products with no cost */
 .card.stale{border:2px solid var(--warn);overflow-wrap:break-word}
+
+/* People: the email stays whole unless it truly cannot fit; role and buttons get a full line each */
+.who-email{flex:1 1 220px;min-width:0;overflow-wrap:anywhere;font-size:15.5px}
+.peoplebtns{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+
+/* Poster: share and download buttons, one per line on a phone */
+.adbtns{display:grid;gap:8px;margin-top:8px}
+.adbtns button{min-height:48px}
+
+/* Landscape on a phone: the screen is short, so the bars slim down and sheets scroll inside it */
+@media (orientation:landscape) and (max-height:520px){
+  :root{--tabbar:48px}
+  .tabs a{flex-direction:row;gap:7px;font-size:12.5px;padding:4px 2px}
+  .tabs svg{width:20px;height:20px}
+  .rail .line{padding-top:5px;padding-bottom:5px}
+  .rail .shop{font-size:14px}
+  .sheet{align-items:center}
+  .sheet .panel{max-height:calc(100vh - 10px);max-height:calc(100dvh - 10px);border-radius:16px;
+    width:min(100%,560px);margin:0 auto;padding-top:12px}
+  .sheet .basketlist{max-height:none}
+  #scan .hint{bottom:calc(10px + env(safe-area-inset-bottom))}
+  .poster{max-width:420px;margin-left:auto;margin-right:auto}
+  .wrap{padding-top:8px;padding-bottom:8px}
+  .snap{gap:6px;margin-bottom:8px}
+  .snap .figure{padding:6px 10px}
+  .snap .figure .n{display:none}
+  .snap .figure .k{font-size:10px}
+  .snap .figure .v{font-size:18px;margin-top:1px}
+  .card.stale{padding:8px 12px;font-size:14px}
+  .stabs{padding:0;margin-bottom:8px}
+  .stabs button{min-height:40px}
+  .card{padding:12px 14px}
+}
+
+/* Stock › Shelf & prices: one card per product, the selling price first and biggest */
+.plist{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,300px),1fr));gap:10px;margin-top:10px}
+.pcard{border:1.5px solid var(--rule);border-radius:14px;padding:12px 14px;background:var(--surface);min-width:0}
+.pcard.off{opacity:.62}
+.pcard.flash{background:color-mix(in srgb, var(--brand) 14%, var(--surface));transition:background .4s}
+.ptop{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}
+.pname{min-width:0;overflow-wrap:anywhere;font-size:17px;line-height:1.25}
+.pprice{margin-top:10px}
+.pprice > label{margin:0 0 4px}
+.pprice{container-type:inline-size}
+/* Narrow (or large text): the price box on its own line, −5 and +5 under it. Room to spare: all in a row. */
+.pinput{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.pinput input.pricebox{grid-column:1/-1;order:-1;width:100%;min-width:0;font-size:26px;font-weight:800;
+  text-align:center;min-height:56px;padding:6px 8px}
+.pinput .step{min-height:48px;padding:0 10px;border-radius:14px;font-size:18px;
+  background:var(--surface-2);color:var(--ink);border:1.5px solid var(--rule)}
+@container (min-width:205px){
+  .pinput{grid-template-columns:54px minmax(0,1fr) 54px}
+  .pinput input.pricebox{grid-column:auto;order:0}
+  .pinput .step{min-height:56px;padding:0}
+}
+.saved{min-height:18px;margin-top:2px;font-size:13.5px;font-weight:700;color:var(--ok);opacity:0;transition:opacity .3s}
+.saved.on{opacity:1}
+.pmeta{margin-top:4px;font-size:13.5px;color:var(--muted)}
+.pmeta b{color:var(--ink)}
+.pacts{display:flex;gap:4px;margin-top:2px}
+.pacts .quiet{padding:4px 8px;min-height:36px}
+.card.stale.slim{padding:8px 12px;font-size:14px;margin-bottom:10px}
+.card.stale.slim .quiet{padding:2px 6px;text-decoration:underline}

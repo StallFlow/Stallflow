@@ -406,7 +406,21 @@ window.SF = (function () {
           // Removing it here would lose a sale silently, which is the one
           // outcome this whole design exists to prevent.
           if (!res || typeof res.ok === 'undefined') throw new Error('unreadable');
-          if (res.ok === false) {
+          if (res.ok === false && res.retry) {
+            // The server was busy and did nothing: the same request will do next time.
+            throw new Error('busy');
+          }
+          if (res.ok === false && /^Unknown action/.test(String(res.message || ''))) {
+            // The app has updated before the server did (or the other way round). Nothing
+            // ran, so keep the change and send it again later, once the server knows it.
+            var l = Outbox.all();
+            l.forEach(function (o) {
+              if (o.opId !== op.opId) return;
+              o.tries = (o.tries || 0) + 1;
+              if (o.tries > 40) { o.failed = true; o.message = res.message; }
+            });
+            Outbox.save(l);
+          } else if (res.ok === false) {
             // The server refused on its own terms — not a signal problem.
             // Keep it and show why, rather than dropping it quietly.
             Outbox.fail(op.opId, res.message || 'The server would not accept this.');
@@ -426,6 +440,12 @@ window.SF = (function () {
         S.syncing = false;
         syncAgain = false;
         if (err && err.message === 'auth') { signOut(true); return; }
+        if (err && err.message === 'busy') {
+          // Still online, just a moment too busy: everything stays queued and goes again shortly.
+          render(true);
+          setTimeout(function () { if (Outbox.pending().length) sync(); }, 6000);
+          return;
+        }
         S.online = false;               // out of signal: the rest stays queued, in order
         render(true);
       });
@@ -466,8 +486,9 @@ window.SF = (function () {
       var s = document.createElement('script');
       s.src = 'https://accounts.google.com/gsi/client';
       s.async = true;
-      s.onload = resolve;
-      s.onerror = function () { gsi = null; reject(new Error('gsi')); };
+      var late = setTimeout(function () { gsi = null; reject(new Error('timeout')); }, 10000);
+      s.onload = function () { clearTimeout(late); resolve(); };
+      s.onerror = function () { clearTimeout(late); gsi = null; reject(new Error('gsi')); };
       document.head.appendChild(s);
     });
     return gsi;
@@ -930,7 +951,63 @@ window.SF = (function () {
     drawPinSignIn(message);
   }
 
-  function drawGoogleSignIn(cfg, message) {
+  /* ---- Google sign-in, and what to do when it goes wrong ----------------
+     Google shows its own error page when something between the phone and Google
+     is off (a blocked popup, an old tab, a stale request). We cannot see inside
+     that page, so the screen always offers Try again, which cancels the old
+     request, loads Google's script afresh and starts a new one. When we CAN tell
+     what failed (script blocked, no button, no signal, the server refusing) we
+     say so in plain words and report the stage, never a token or an email. */
+  var authSeen = {};
+  function browserFamily() {
+    var ua = navigator.userAgent || '', mm = window.matchMedia && matchMedia('(display-mode: standalone)').matches;
+    var f = /; wv\)|FBAN|FBAV|Instagram|MicroMessenger|Snapchat|TikTok|Line\//i.test(ua) ? 'webview'
+      : /SamsungBrowser/i.test(ua) ? 'samsung' : /Firefox|FxiOS/i.test(ua) ? 'firefox'
+      : /CriOS|Chrome/i.test(ua) ? (/Android/i.test(ua) ? 'chrome-android' : /iPhone|iPad/i.test(ua) ? 'chrome-ios' : 'chrome')
+      : /Safari/i.test(ua) ? (/iPhone|iPad/i.test(ua) ? 'safari-ios' : 'safari') : 'other';
+    return f + (mm ? '-app' : '');
+  }
+  function reportAuthError(stage, code) {
+    var key = stage + '|' + code;
+    if (authSeen[key]) return;
+    authSeen[key] = 1;
+    try { get('authError', { stage: stage, code: code, browser: browserFamily(), device: device() }).catch(function () {}); }
+    catch (e) { /* reporting is best effort */ }
+  }
+
+  /** Forget the old Google request completely, so the next one starts clean. */
+  function freshGoogle() {
+    try {
+      if (window.google && google.accounts && google.accounts.id) {
+        google.accounts.id.cancel();
+        google.accounts.id.disableAutoSelect();
+      }
+    } catch (e) { /* nothing to cancel */ }
+    Array.prototype.forEach.call(document.querySelectorAll('script[src^="https://accounts.google.com/gsi/"]'),
+      function (n) { n.parentNode.removeChild(n); });
+    gsi = null;
+    if (window.google) window.google.accounts = undefined;   // leave google.maps alone
+  }
+
+  var TROUBLE = {
+    load: 'Google sign-in could not load. Check your signal, then tap Try again.',
+    render: 'The Google button did not appear. Tap Try again.',
+    init: 'Google sign-in could not start. Tap Try again.',
+    network: 'Could not reach the shop. Check your signal, then tap Try again.',
+    offline: 'There is no signal. Signing in needs signal the first time. Tap Try again once you are back on.',
+    webview: 'Google does not let you sign in from inside this app. Open this address in Chrome instead.'
+  };
+
+  function showTrouble(stage, code, text) {
+    reportAuthError(stage, code);
+    var box = el('gsitrouble');
+    if (!box) return;
+    box.innerHTML = '<div class="notice bad" style="border-radius:10px;margin:12px 0 0;display:block;' +
+      'text-align:left">' + esc(text || TROUBLE[stage] || 'Sign-in did not work. Tap Try again.') + '</div>';
+  }
+
+  function drawGoogleSignIn(cfg, message, trouble) {
+    var embedded = browserFamily().indexOf('webview') === 0;
     el('view').innerHTML =
       '<div class="wrap" style="max-width:420px;padding-top:40px">' +
         '<div class="card">' +
@@ -938,42 +1015,76 @@ window.SF = (function () {
           '<div class="sub">Use the Google account the owner added to this stall.</div>' +
           (message ? '<div class="notice bad" style="border-radius:10px;margin-bottom:12px">' +
             esc(message) + '</div>' : '') +
+          (embedded ? '<div class="notice warn" style="border-radius:10px;margin-bottom:12px;display:block;' +
+            'text-align:left">' + esc(TROUBLE.webview) + '</div>' : '') +
           '<div id="gsi" style="display:flex;justify-content:center;min-height:44px">' +
             '<div class="loading">Loading Google sign-in…</div></div>' +
+          '<div id="gsitrouble"></div>' +
+          '<div style="text-align:center;margin-top:14px">' +
+            '<button class="ghost sm" id="gsiretry" onclick="SF.retryGoogle()">Google showing an error? Try again</button></div>' +
           '<p class="muted small" style="margin-top:12px;text-align:center">' +
             'Not on the list yet? Ask the owner to add your email address under ' +
             'More &rsaquo; People.</p>' +
         '</div>' +
       '</div>';
 
+    if (embedded) reportAuthError('webview', 'embedded');
+    if (trouble) showTrouble(trouble[0], trouble[1]);
+    else if (navigator.onLine === false) showTrouble('offline', 'offline');
+
+    var shown = false;
     loadGoogle().then(function () {
       var box = el('gsi');
       if (!box) return;
       box.innerHTML = '';
-      google.accounts.id.initialize({
-        client_id: cfg.clientId,
-        callback: function (r) {
-          box.innerHTML = '<div class="loading">Checking…</div>';
-          signInWith('signInGoogle', { credential: r.credential }).then(function (res) {
-            if (!res.ok) { drawGoogleSignIn(cfg, res.message); return; }
-            start();
-          }).catch(function () {
-            drawGoogleSignIn(cfg, 'Could not reach the shop. Check your signal and try again.');
-          });
-        }
-      });
-      var dark = document.documentElement.getAttribute('data-theme') === 'dark' ||
-        (!document.documentElement.getAttribute('data-theme') &&
-         window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches);
-      google.accounts.id.renderButton(box, {
-        theme: dark ? 'filled_black' : 'outline', size: 'large', shape: 'pill',
-        text: 'signin_with', width: Math.min(340, box.clientWidth || 340)
-      });
-    }).catch(function () {
-      var box = el('gsi');
-      if (box) box.innerHTML = '<div class="notice bad" style="border-radius:10px">' +
-        'Google sign-in did not load. Check your signal and refresh.</div>';
+      try {
+        google.accounts.id.initialize({
+          client_id: cfg.clientId,
+          callback: function (r) {
+            var b = el('gsi');
+            if (b) b.innerHTML = '<div class="loading">Checking…</div>';
+            signInWith('signInGoogle', { credential: r.credential }).then(function (res) {
+              if (!res.ok) { drawGoogleSignIn(cfg, res.message); return; }
+              start();
+            }).catch(function () {
+              drawGoogleSignIn(cfg, '', ['network', 'unreachable']);
+            });
+          }
+        });
+        var dark = document.documentElement.getAttribute('data-theme') === 'dark' ||
+          (!document.documentElement.getAttribute('data-theme') &&
+           window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches);
+        google.accounts.id.renderButton(box, {
+          theme: dark ? 'filled_black' : 'outline', size: 'large', shape: 'pill',
+          text: 'signin_with', width: Math.min(340, box.clientWidth || 340)
+        });
+      } catch (e) {
+        showTrouble('init', 'init-threw');
+        return;
+      }
+      // Google draws its button in an iframe. If none turns up, say so.
+      var tries = 0;
+      (function watch() {
+        var b = el('gsi');
+        if (!b || shown) return;
+        if (b.querySelector('iframe, div[role="button"]')) { shown = true; return; }
+        if (++tries > 16) { showTrouble('render', 'no-button'); return; }
+        setTimeout(watch, 500);
+      })();
+    }).catch(function (e) {
+      var b = el('gsi');
+      if (b) b.innerHTML = '';
+      showTrouble('load', e && e.message === 'timeout' ? 'timeout' : 'blocked');
     });
+  }
+
+  /** Try again: forget the old request, then draw the screen anew. */
+  function retryGoogle() {
+    var cfg = LS.get('sf.authcfg', null);
+    if (!cfg || !cfg.google) { paintSignIn(); return; }
+    reportAuthError('retry', 'tapped');
+    freshGoogle();
+    drawGoogleSignIn(cfg, '');
   }
 
   function drawPinSignIn(message) {
@@ -1083,7 +1194,7 @@ window.SF = (function () {
     init: init, start: start, render: render, load: load, go: go, route: route,
     signOut: signOut, forceSignOut: forceSignOut, toggleTheme: toggleTheme,
     // data
-    state: S, write: write, sync: sync, get: get, post: post,
+    state: S, write: write, sync: sync, get: get, post: post, retryGoogle: retryGoogle,
     cache: Cache, outbox: Outbox, site: SITE, ls: LS,
     // extension
     plugin: plugin, screen: screen, screens: screens, allScreens: allScreens,

@@ -138,6 +138,20 @@ go through `SF.once` so a retried request never runs twice.
   customers' names and phone numbers left out. Only the spreadsheets
   permission is used: adding another Google service (Drive, triggers)
   would need the owner to re-authorise before the live app works again.
+- **Updates must never cost a sale.** A sale lives in the phone's outbox
+  (`sf.outbox`) until the server answers `ok`. Only an explicit `ok: true`
+  removes it; an unreadable reply (error page, lost connection), a busy server
+  (`retry: true`, from `SF.lock`) and an `Unknown action` from a server that
+  has not updated yet all keep it queued and retried. Every write carries an
+  `opId`, so sending one twice (the first reply was lost) sells once. Only a
+  real refusal (`ok: false` without `retry`) moves it to "Did not go through".
+  Never turn a "nothing ran" answer into a failure, and never `retry: true` an
+  answer after something already ran.
+- **Google sign-in problems** (`authError`, public) log only a fixed stage and
+  code from allowlists (`SF.AUTH_STAGES`, `SF.AUTH_CODES`), at most 40 an hour;
+  never a token, an email or free text. Health shows the recent ones.
+- **The staff app is not locked to portrait** (manifest `orientation: any`);
+  short landscape screens have their own rules at the end of components.css.
 - **Uncooked stock** (the `Pantry` tab) is a plain count list, not a ledger:
   nothing is sold from it, so `savePantry` overwrites the amount.
 - Server code is plain Apps Script (V8, no modules). Every `.gs` shares one

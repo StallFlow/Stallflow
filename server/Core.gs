@@ -448,7 +448,8 @@ SF.once = function (opId, action, ctx, fn) {
 SF.lock = function (fn) {
   var lock = LockService.getScriptLock();
   try { lock.waitLock(25000); }
-  catch (e) { return { ok: false, message: 'Busy for a moment — please try again.' }; }
+  // Nothing has run: the phone may safely send the same thing again (retry), and does, by itself.
+  catch (e) { return { ok: false, retry: true, message: 'Busy for a moment — please try again.' }; }
   try { return fn(); } finally { lock.releaseLock(); }
 };
 
@@ -620,6 +621,7 @@ SF.action('health', 'reports', 'read', function () {
     google: SF.googleOn(),
     reports: SF.reportsConnected(),
     backup: SF.lastBackup ? SF.lastBackup() : null,
+    signInProblems: SF.recentAuthProblems ? SF.recentAuthProblems() : [],
     problems: problems,
     checkedAt: Date.now()
   };

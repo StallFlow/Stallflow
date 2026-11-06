@@ -79,6 +79,22 @@
     return SF.site + (id ? '?m=' + encodeURIComponent(id.toUpperCase() === 'HOME' ? 'home' : id) : '');
   }
 
+  /** The words that go with the order link when it is sent out. */
+  function adMessage(m, link) {
+    var shop = (SF.state.boot && SF.state.boot.profile.name) || 'Our stall';
+    var what = !m || m.id === 'HOME' || m.home ? 'Order any time'
+      : 'Pre-order for ' + m.name + (m.date ? ' (' + prettyDate(m.date) + ')' : '');
+    return shop + '\n' + what + '\nReserve now, pay at the stall. No app, no account:\n' + link;
+  }
+
+  /** What the poster picture is made from. */
+  function posterInfo(d, pick) {
+    var pr = d.profile || {};
+    return { shop: pr.name || 'Our stall', tagline: pr.tagline || '', home: !!pick.home,
+      title: pick.name, when: pick.date ? prettyDate(pick.date) : '', where: pick.location || '',
+      link: orderLink(pick.id), colour: pr.colour, ink: pr.ink, paper: pr.paper };
+  }
+
   /** 2026-11-06 → Fri 6 Nov. */
   function prettyDate(iso) {
     var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || ''));
@@ -101,7 +117,9 @@
     return '<div class="card"><h2>' + (home ? 'Order page between markets' : 'Order page for this market') +
       '</h2><div class="sub">' + state + '</div>' +
       '<div class="linkbox" id="olink">' + esc(orderLink(d.marketId)) + '</div>' +
-      '<div class="row" style="margin-top:10px">' +
+      '<button class="ok block" style="margin-top:10px" onclick="SFA.waShare(\'' + id + '\')">' +
+        'Send on WhatsApp</button>' +
+      '<div class="row" style="margin-top:8px">' +
         '<button class="ghost" onclick="SFA.shareLink(\'' + id + '\')">Share</button>' +
         '<button class="ghost" onclick="SFA.copyLink(\'' + id + '\')">Copy link</button>' +
         '<button class="ghost" onclick="SFA.openPoster(\'' + id + '\')">Poster</button>' +
@@ -218,8 +236,10 @@
                        { name: String(h.name).toLowerCase(), date: h.date || '0000', profit: h.profit,
                          taken: h.revenue, units: h.units, costs: h.expenses }) + '>' +
         '<td><b>' + esc(h.name) + '</b>' +
-        (h.location ? '<div class="muted small">' + esc(h.location) + '</div>' : '') + '</td>' +
-        '<td>' + esc(h.date || '—') + '</td><td class="r">' + qty(h.units, 'each') + '</td>' +
+        (h.location ? '<div class="muted small">' + esc(h.location) + '</div>' : '') +
+        (when === 'past' ? '' : '<button class="quiet" style="padding:4px 0;min-height:36px;text-decoration:underline" ' +
+          'data-id="' + esc(h.id) + '" onclick="SFA.shareMarket(this.getAttribute(\'data-id\'))">Share the order form</button>') +
+        '</td><td>' + esc(h.date || '—') + '</td><td class="r">' + qty(h.units, 'each') + '</td>' +
         '<td class="r">' + money(h.revenue) + '</td><td class="r">' + money(h.expenses) + '</td>' +
         '<td class="r"><b style="color:' + (h.profit >= 0 ? 'var(--ok)' : 'var(--bad)') + '">' +
         money(h.profit) + '</b></td></tr>';
@@ -422,6 +442,27 @@
     });
   }
 
+  /* The picture is drawn as soon as the poster shows, so Share is answered at once.
+     (An iPhone only opens the share sheet straight from a tap.) */
+  var adPics = { key: '', feed: null, story: null };
+  function preparePoster(info) {
+    if (!window.SFL) return;
+    var key = JSON.stringify(info);
+    if (adPics.key === key && adPics.feed) return;
+    adPics = { key: key, feed: null, story: null, info: info };
+    ['feed', 'story'].forEach(function (kind) {
+      SFL.posterBlob(info, kind).then(function (b) {
+        if (adPics.key === key) adPics[kind] = b;
+      }).catch(function () {});
+    });
+  }
+  function adFileName(kind) {
+    var shop = String((adPics.info && adPics.info.shop) || 'poster').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    var what = String((adPics.info && (adPics.info.home ? 'order-any-time' : adPics.info.title)) || '')
+      .toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 30);
+    return shop + '-' + what + '-' + (kind === 'story' ? 'status-1080x1920' : 'post-1080x1350') + '.png';
+  }
+
   /** Which market's poster: remembered on this phone, else the soonest. */
   function posterChoice(d) {
     var list = d.markets || [], want = SF.ls.get('sf.posterFor', ''), pick = null;
@@ -611,7 +652,7 @@
   function roleSelect(id, current) {
     return '<select id="' + id + '">' + ['owner', 'manager', 'cashier', 'viewer'].map(function (r) {
       return '<option value="' + r + '"' + (r === current ? ' selected' : '') + '>' +
-        (r === 'owner' ? 'owner (admin)' : r) + '</option>';
+        r.charAt(0).toUpperCase() + r.slice(1) + '</option>';
     }).join('') + '</select>';
   }
 
@@ -624,20 +665,18 @@
                                    show: p.active ? 'on' : 'off' },
                        { name: String(p.email).toLowerCase(), seen: p.lastSeen || '' }) + '>' +
         '<div style="display:flex;gap:10px;align-items:baseline;flex-wrap:wrap">' +
-          '<b style="flex:1;min-width:0;word-break:break-all">' + esc(p.email) + '</b>' +
+          '<b class="who-email">' + esc(p.email) + '</b>' +
           '<span class="tag' + (p.active ? ' ok' : '') + '">' + (p.active ? 'can sign in' : 'off') +
           '</span></div>' +
         '<div class="muted small" style="margin:2px 0 10px">' + esc(p.name || '') +
           (p.lastSeen ? ' · last in ' + esc(p.lastSeen) : ' · not signed in yet') + '</div>' +
         (self ? '<div class="muted small">This is you.</div>' :
-          '<div class="row" style="align-items:flex-end">' +
-            '<div class="field" style="margin:0"><label for="pr-' + i + '">Role</label>' +
-              roleSelect('pr-' + i, p.role) + '</div>' +
-            '<div style="flex:none"><button class="ghost" onclick="SFA.savePerson(' + i +
-              ', true)">Save</button></div>' +
-            '<div style="flex:none"><button class="' + (p.active ? 'bad' : 'ok') +
-              ' sm" onclick="SFA.savePerson(' + i + ', ' + (p.active ? 'false' : 'true') + ')">' +
-              (p.active ? 'Switch off' : 'Switch on') + '</button></div>' +
+          '<div class="field" style="margin:0 0 10px"><label for="pr-' + i + '">Role</label>' +
+            roleSelect('pr-' + i, p.role) + '</div>' +
+          '<div class="peoplebtns">' +
+            '<button class="ghost" onclick="SFA.savePerson(' + i + ', true)">Save role</button>' +
+            '<button class="' + (p.active ? 'bad' : 'ok') + '" onclick="SFA.savePerson(' + i + ', ' +
+              (p.active ? 'false' : 'true') + ')">' + (p.active ? 'Switch off' : 'Switch on') + '</button>' +
           '</div>') +
         '</div>';
     }).join('');
@@ -846,6 +885,55 @@
       });
       SF.toast(open ? 'Orders between markets are on' : 'Orders between markets are off');
     },
+    /** Everything for sending one market's order form out: WhatsApp, the picture, the poster. */
+    shareMarket: function (id) {
+      var d = SF.state.data.numbers, m = null;
+      ((d && d.history) || []).concat((d && d.markets) || []).forEach(function (x) { if (String(x.id) === String(id)) m = x; });
+      if (!m) { SF.toast('That market is not on this phone yet. Try again in a moment.', true); return; }
+      var pr = (SF.state.boot && SF.state.boot.profile) || {}, home = String(id).toUpperCase() === 'HOME';
+      var info = { shop: pr.name || 'Our stall', tagline: pr.tagline || '', home: home, title: m.name,
+        when: m.date ? prettyDate(m.date) : '', where: m.location || '', link: orderLink(id),
+        colour: pr.colour, ink: pr.ink, paper: pr.paper };
+      preparePoster(info);
+      var did = esc(id);
+      SF.openSheet('<h2>' + (home ? 'Between markets' : esc(m.name)) + '</h2>' +
+        '<div class="sub">The order form for this market: ' + esc(orderLink(id)) + '</div>' +
+        '<button class="ok block" data-id="' + did + '" onclick="SFA.waShare(this.getAttribute(\'data-id\'))">Send on WhatsApp</button>' +
+        '<div class="adbtns">' +
+          (window.SFL && SFL.canShare() ? '<button class="ghost" onclick="SFA.sharePoster()">Share the picture</button>' : '') +
+          '<button class="ghost" onclick="SFA.downloadPoster(\'feed\')">Download for Facebook and Instagram</button>' +
+          '<button class="ghost" onclick="SFA.downloadPoster(\'story\')">Download for WhatsApp Status</button>' +
+          '<button class="ghost" data-id="' + did + '" onclick="SF.closeSheet();SFA.openPoster(this.getAttribute(\'data-id\'))">Open the printable poster</button>' +
+        '</div>' +
+        '<button class="quiet block" style="margin-top:8px" onclick="SF.closeSheet()">Done</button>');
+    },
+
+    /** The order link, ready typed in WhatsApp: pick who gets it there. */
+    waShare: function (id) {
+      var d = SF.state.data.numbers || SF.state.data.labels, link = orderLink(id), m = null;
+      ((d && d.markets) || []).forEach(function (x) { if (String(x.id) === String(id) || (x.home && /^home$/i.test(id))) m = x; });
+      if (!m && /^home$/i.test(id)) m = { id: 'HOME', home: true };
+      window.open('https://wa.me/?text=' + encodeURIComponent(adMessage(m, link)), '_blank', 'noopener');
+    },
+    downloadPoster: function (kind) {
+      var b = adPics[kind];
+      if (!b) { SF.toast('One moment, the picture is being made. Tap again.'); return; }
+      SFL.save(b, adFileName(kind));
+      SF.toast('Saved. Post it from your gallery.');
+    },
+    /** The picture itself into WhatsApp, Facebook and the rest, from the phone's share sheet. */
+    sharePoster: function () {
+      var b = adPics.feed;
+      if (!b) { SF.toast('One moment, the picture is being made. Tap again.'); return; }
+      var file = new File([b], adFileName('feed'), { type: 'image/png' });
+      var link = adPics.info && adPics.info.link;
+      navigator.share({ files: [file], text: adMessage(adPics.info && { home: adPics.info.home, name: adPics.info.title,
+        date: '' }, link), title: (adPics.info && adPics.info.shop) || '' })
+        .catch(function (e) {
+          if (e && e.name === 'AbortError') return;
+          SF.toast('Sharing did not work here. Use Download instead.', true);
+        });
+    },
     shareLink: function (id) {
       var url = orderLink(id), name = (SF.state.boot && SF.state.boot.profile.name) || 'our stall';
       if (navigator.share) {
@@ -917,6 +1005,18 @@
       });
       SF.el('mn').value = ''; SF.el('md').value = ''; SF.el('ml').value = '';
       SF.toast('Market added. Its order page and poster are ready.');
+      // Once it has reached the sheet (so it has its real id), offer to send the order form out.
+      var wantName = String(n).trim(), tries = 0;
+      (function offer() {
+        if (++tries > 14 || !SF.state.online) return;
+        if (SF.outbox.pending().length) { setTimeout(offer, 800); return; }
+        SF.load('numbers').then(function () {
+          var list = (SF.state.data.numbers && SF.state.data.numbers.history) || [], found = null;
+          list.forEach(function (h) { if (h.name === wantName && (h.date || '') === (date || '')) found = h; });
+          if (found && SF.state.view === 'numbers') SFA.shareMarket(found.id);
+          else if (!found) setTimeout(offer, 800);
+        });
+      })();
     },
 
     lookSet: function () {
@@ -1048,10 +1148,18 @@
           return;
         }
         var link = orderLink(pick.id);
-        out.innerHTML = '<div class="card noprint" style="padding:12px"><b>' +
+        preparePoster(posterInfo(d, pick));
+        out.innerHTML = '<div class="card noprint"><b>' +
           (pick.home ? 'The between-markets poster' : 'The poster for ' + esc(pick.name)) + '</b> ' +
-          '<span class="muted small">— the QR opens this market\'s own order page. Put it at ' +
-          'the entrance, or share it the week before.</span></div>' +
+          '<span class="muted small">— the QR opens this market\'s own order page. Print it for the ' +
+          'entrance, or send it out the week before.</span>' +
+          '<button class="ok block" style="margin-top:12px" data-id="' + esc(pick.id) + '" ' +
+            'onclick="SFA.waShare(this.getAttribute(\'data-id\'))">Send the link on WhatsApp</button>' +
+          '<div class="adbtns">' +
+            (window.SFL && SFL.canShare() ? '<button class="ghost" id="adshare" onclick="SFA.sharePoster()">Share the picture</button>' : '') +
+            '<button class="ghost" onclick="SFA.downloadPoster(\'feed\')">Download for Facebook and Instagram</button>' +
+            '<button class="ghost" onclick="SFA.downloadPoster(\'story\')">Download for WhatsApp Status</button>' +
+          '</div></div>' +
           '<div class="poster"><h1>' + esc(d.profile.name) + '</h1>' +
           '<div class="tag2">' + esc(d.profile.tagline || '') + '</div>' +
           '<div class="mkt">' + (pick.home
@@ -1186,6 +1294,14 @@
                   return '• ' + esc(x); }).join('<br>') + '</div>'
               : '<div class="notice" style="background:var(--ok-bg);color:var(--ok);' +
                 'border-radius:10px;margin-bottom:12px">No problems found.</div>') +
+            (h.signInProblems && h.signInProblems.length
+              ? '<h3 style="margin-bottom:8px">Sign-in problems</h3>' +
+                '<div class="muted small" style="margin-bottom:6px">What phones reported when Google sign-in did not work ' +
+                '(no names, emails or tokens).</div>' +
+                h.signInProblems.map(function (x) {
+                  return '<div class="rowitem"><div class="who"><b>' + esc(x.stage) + '</b>' +
+                    '<span>' + esc(x.detail) + '</span></div><span class="muted small">' + esc(x.when) + '</span></div>';
+                }).join('') + '<div style="height:14px"></div>' : '') +
             '<h3 style="margin-bottom:8px">Backup</h3>' +
             '<div class="muted small" style="margin-bottom:8px">' + (h.backup
               ? 'Last copy of the sheet: ' + esc(String(h.backup.at).slice(0, 16).replace('T', ' ')) +

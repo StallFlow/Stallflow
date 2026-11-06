@@ -77,7 +77,14 @@ function server() {
     Utilities: {
       getUuid: () => crypto.randomUUID(),
       computeHmacSha256Signature: (v, key) => Array.from(crypto.createHmac('sha256', key).update(v).digest()).map((b) => (b > 127 ? b - 256 : b)),
-      formatDate: (d, tz, f) => (f === 'yyyy-MM-dd' ? d.toISOString().slice(0, 10) : d.toISOString())
+      formatDate: (d, tz, f) => {
+        // Like Apps Script in South Africa (UTC+2), for the patterns the server uses.
+        const z = new Date(new Date(d).getTime() + 2 * 3600e3), p = (n) => String(n).padStart(2, '0');
+        const M = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        const parts = { yyyy: z.getUTCFullYear(), MMM: M[z.getUTCMonth()], MM: p(z.getUTCMonth() + 1),
+          dd: p(z.getUTCDate()), d: z.getUTCDate(), HH: p(z.getUTCHours()), mm: p(z.getUTCMinutes()) };
+        return f.replace(/yyyy|MMM|MM|dd|d|HH|mm/g, (k) => parts[k]);
+      }
     },
     LockService: { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) },
     UrlFetchApp: { fetch: (url, opts) => {
@@ -212,6 +219,12 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
         : JSON.parse(req.postData() || '{}');
       if (env.offline) return route.abort('internetdisconnected');
       if (opts.delay) await new Promise((r) => setTimeout(r, opts.delay));
+      // What a server in the middle of an update can do to a write (anything with an opId).
+      const json = (o) => route.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify(o) });
+      if (body.opId && env.mode === 'busy') return json({ ok: false, retry: true, message: 'Busy for a moment — please try again.' });
+      if (body.opId && env.mode === 'unknown') return json({ ok: false, message: 'Unknown action: ' + body.action });
+      if (body.opId && env.mode === 'html') return route.fulfill({ status: 200, contentType: 'text/html', headers: { 'access-control-allow-origin': '*' }, body: '<html><body>Sorry, unable to open the file at this time.</body></html>' });
+      if (body.opId && env.mode === 'lostreply') { SF.dispatch(body.action, body); return route.abort('connectionreset'); }
       const out = SF.dispatch(body.action, body);
       await route.fulfill({ status: 200, contentType: 'application/json',
         headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify(out) });
@@ -414,6 +427,34 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
     const after = await page.evaluate(() => Math.round(window.pageYOffset));
     assert.ok(Math.abs(after - before) < 5, 'scrolled to ' + before + ', back at ' + after);
     assert.strictEqual(blanks.length, 0, 'the list blanked to "Fetching…"');
+    await env.ctx.close();
+  });
+
+  await test('People: the role box shows its whole word and a long email stays whole, even with large text', async () => {
+    const env = await phone({ google: true, hash: '#people' });
+    const page = env.page;
+    env.SF.append('users', { Email: 'duxies.homemade@gmail.com', Name: '', Role: 'owner', Active: 'yes' });
+    env.SF.append('users', { Email: 'roxane.ceronio-duxbury@example.co.za', Name: 'Roxane', Role: 'manager', Active: 'yes' });
+    await page.setViewportSize({ width: 360, height: 640 });
+    await page.goto('about:blank'); await page.goto(base + '#people');
+    await page.waitForSelector('#pr-0');
+    for (const zoom of ['1', '1.6']) {
+      await page.evaluate((z) => { document.documentElement.style.zoom = z; }, zoom);
+      await page.waitForTimeout(300);
+      const r = await page.evaluate(() => {
+        const sel = document.getElementById('pr-0'), opt = sel.options[sel.selectedIndex];
+        const email = document.querySelector('.who-email'), btns = Array.from(document.querySelectorAll('.peoplebtns button'));
+        const W = document.documentElement.clientWidth;
+        return { label: opt.textContent, selW: sel.getBoundingClientRect().width,
+          clipped: sel.scrollWidth > sel.clientWidth + 1,
+          lines: Math.round(email.getBoundingClientRect().height / parseFloat(getComputedStyle(email).lineHeight || 20)),
+          btnsOk: btns.length === 4 && btns.every((b) => b.getBoundingClientRect().right <= W && b.getBoundingClientRect().width > 80),
+          wide: document.documentElement.scrollWidth > W + 1 };
+      });
+      assert.strictEqual(r.label, 'Owner');
+      assert.ok(r.selW > (360 / Number(zoom)) * 0.7, 'the role box is the full width: ' + r.selW);
+      assert.ok(!r.clipped && r.btnsOk && !r.wide, JSON.stringify(r) + ' at ' + zoom + 'x');
+    }
     await env.ctx.close();
   });
 
@@ -701,34 +742,30 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
     // "doll" also finds Sock monkey: the search covers the category (Dolls) too.
     const dolls = ['Topsy-turvy doll', 'Rag doll', 'Sock monkey'];
     assert.deepStrictEqual(await shownNames(page, 'shelf'), dolls, 'after coming back');
-    await page.click('tr:has-text("Topsy-turvy doll") button:has-text("hide")');
+    await page.click('.pcard:has-text("Topsy-turvy doll") button:has-text("hide")');
     await settle(page, 600);
     assert.strictEqual(await page.inputValue('#fq-shelf'), 'doll');
     assert.deepStrictEqual(await shownNames(page, 'shelf'), dolls, 'after hiding');
     await env.ctx.close();
   });
 
-  await test('Stock: tapping a column heading sorts by it, then reverses, then goes back', async () => {
+  await test('Stock: the Sort box orders the price cards, and remembers the choice', async () => {
     const env = await phone({ hash: '#stock', seed: shop10 });
     const page = env.page;
     await openShelf(page);
     await page.selectOption('#ff-shelf-cat', 'Resin');
-    await page.click('th[data-field="price"] button');
+    await page.selectOption('#ff-shelf-sort', 'price');
     assert.deepStrictEqual(await shownNames(page, 'shelf'), ['Resin coaster', 'Resin bookmark', 'Resin keyring']);
-    assert.strictEqual(await page.getAttribute('th[data-field="price"]', 'aria-sort'), 'ascending');
-    assert.strictEqual(await page.inputValue('#ff-shelf-sort'), 'price', 'the Sort dropdown agrees');
-    await page.click('th[data-field="price"] button');
+    await page.selectOption('#ff-shelf-sort', '-price');
     assert.deepStrictEqual(await shownNames(page, 'shelf'), ['Resin keyring', 'Resin bookmark', 'Resin coaster']);
-    assert.strictEqual(await page.getAttribute('th[data-field="price"]', 'aria-sort'), 'descending');
-    assert.ok(/▼/.test(await page.textContent('th[data-field="price"]')));
-    await page.click('th[data-field="price"] button');
-    assert.strictEqual(await page.inputValue('#ff-shelf-sort'), '', 'back to shelf order');
-    await page.click('th[data-field="left"] button');
+    await page.selectOption('#ff-shelf-sort', '');
+    await page.selectOption('#ff-shelf-sort', 'left');
     assert.deepStrictEqual(await shownNames(page, 'shelf'), ['Resin bookmark', 'Resin keyring', 'Resin coaster']);
     await page.goto('about:blank'); await page.goto(base + '#stock'); await openShelf(page);
-    assert.strictEqual(await page.getAttribute('th[data-field="left"]', 'aria-sort'), 'ascending', 'remembered');
+    assert.strictEqual(await page.inputValue('#ff-shelf-sort'), 'left', 'remembered');
     await env.ctx.close();
   });
+
 
   await test('Till: a sale of ten different things — all added, all visible, all changeable', async () => {
     const env = await phone({ hash: '#till', seed: shop10 });
@@ -851,6 +888,71 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
       if (w) wide.push('order page at ' + width + 'px ' + zoom + '×: ' + w);
     }
     assert.deepStrictEqual(wide, [], 'screens wider than the phone:\n  ' + wide.join('\n  '));
+    await env.ctx.close();
+  });
+
+  await test('Prices: type a price, or tap +5 and −5; it saves by itself, says so under the box, and the till follows', async () => {
+    const env = await phone({ hash: '#stock', seed: shop10 });
+    const page = env.page;
+    await openShelf(page);
+    const priceOf = (id) => env.SF.products({ all: true }).find((p) => p.id === id).price;
+    // the selling price comes first and is the biggest thing on the card
+    const order = await page.$eval('#shelf-P01', (c) => ({
+      price: c.querySelector('.pricebox').getBoundingClientRect().top, meta: c.querySelector('.pmeta').getBoundingClientRect().top,
+      size: parseFloat(getComputedStyle(c.querySelector('.pricebox')).fontSize) }));
+    assert.ok(order.price < order.meta && order.size >= 24, JSON.stringify(order));
+    // typing
+    await page.fill('#pp-P01', '75'); await page.keyboard.press('Tab');
+    await page.waitForFunction(() => !SF.outbox.pending().length);
+    assert.strictEqual(priceOf('P01'), 75);
+    assert.ok(/Saved/.test(await page.textContent('#ps-P01')), await page.textContent('#ps-P01'));
+    assert.strictEqual(await page.inputValue('#pp-P01'), '75.00');
+    // +5 three times and −5 once, quickly: one save, for the final amount
+    const before = env.sheets.Ops ? env.sheets.Ops.rows.length : 0;
+    for (const d of ['5', '5', '5', '-5']) await page.click('#shelf-P01 .step[data-d="' + d + '"]');
+    assert.strictEqual(await page.inputValue('#pp-P01'), '85.00');
+    await page.waitForTimeout(1000);                      // the save follows once the taps stop
+    await page.waitForFunction(() => !SF.outbox.pending().length, null, { timeout: 8000 });
+    assert.strictEqual(priceOf('P01'), 85);
+    assert.strictEqual((env.sheets.Ops ? env.sheets.Ops.rows.length : 0) - before, 1, 'the quick taps made one change, not four');
+    // a price cannot go below nothing
+    await page.fill('#pp-P01', '3'); await page.keyboard.press('Tab');
+    for (let i = 0; i < 2; i++) await page.click('#shelf-P01 .step[data-d="-5"]');
+    assert.strictEqual(await page.inputValue('#pp-P01'), '0.00');
+    // the till shows the new price
+    await page.waitForFunction(() => !SF.outbox.pending().length);
+    await page.fill('#pp-P01', '90'); await page.keyboard.press('Tab');
+    await page.waitForFunction(() => !SF.outbox.pending().length);
+    await page.evaluate(() => { location.hash = 'till'; });
+    await page.waitForFunction(() => SF.state.data.till && SF.find(SF.state.data.till.products, 'P01').price === 90, null, { timeout: 8000 });
+    await page.evaluate(() => SFT.tap('P01'));
+    assert.ok(/R 90\.00/.test(await page.textContent('.cart .takebtn')), 'the till sells it at the new price');
+    await env.ctx.close();
+  });
+
+  await test('Prices: every card fits the smallest phone, even with large text, and a long name wraps', async () => {
+    const env = await phone({ hash: '#stock', seed: (SF) => {
+      shop10(SF);
+      SF.append('products', { ProductId: 'P40', Name: 'Handmade-knitted-topsy-turvy-doll-with-matching-bonnet', Variant: 'extra large, made to order', Category: 'Dolls', Type: 'stocked', Unit: 'each', Price: 1250, Active: 'Yes', Sort: 400 });
+      SF.move('P40', 2, 'adjust', 't');
+    } });
+    const page = env.page;
+    await openShelf(page);
+    for (const [w, zoom] of [[320, '1'], [360, '1.6']]) {
+      await page.setViewportSize({ width: w, height: 640 });
+      await page.evaluate((z) => { document.documentElement.style.zoom = z; }, zoom);
+      await page.waitForTimeout(300);
+      const wide = await tooWide(page);
+      assert.ok(!wide, 'price cards at ' + w + 'px ' + zoom + '×: ' + wide);
+      const ok = await page.evaluate(() => {
+        const W = document.documentElement.clientWidth;
+        return Array.from(document.querySelectorAll('.pcard')).every((c) => {
+          const b = c.querySelector('.pricebox').getBoundingClientRect();
+          return b.width > 60 && b.right <= W && c.getBoundingClientRect().right <= W + 1;
+        });
+      });
+      assert.ok(ok, 'the price box is usable on every card at ' + w + 'px ' + zoom + '×');
+    }
     await env.ctx.close();
   });
 
@@ -1758,6 +1860,294 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
     assert.strictEqual(JSON.stringify(sales.map((o) => o.paid)), JSON.stringify(['cash', 'card', 'cash', 'eft', 'card']));
     const hand = env.SF.onHand();
     assert.strictEqual(hand.P01, 7); assert.strictEqual(hand.P02, 8);
+    await env.ctx.close();
+  });
+
+  /* ---------- Google sign-in trouble ---------- */
+  const gsiStub = (button) => `(function () {
+    var g = window.__gsi = window.__gsi || { loads: 0, cancels: 0, inits: 0 }; g.loads++;
+    window.google = window.google || {};
+    window.google.accounts = { id: {
+      initialize: function (o) { g.inits++; g.cb = o.callback; },
+      renderButton: function (el) { ${button ? "var f = document.createElement('iframe'); f.title = 'Sign in with Google'; el.appendChild(f);" : ''} },
+      cancel: function () { g.cancels++; }, disableAutoSelect: function () {} } };
+  })();`;
+  const signedOutWithGoogle = async (script) => {
+    const env = await phone({ google: true });
+    env.gsi = { blocked: script === 'blocked' };
+    await env.ctx.route('https://accounts.google.com/**', (r) => env.gsi.blocked ? r.abort()
+      : r.fulfill({ status: 200, contentType: 'text/javascript', body: gsiStub(script !== 'nobutton') }));
+    await env.page.evaluate(() => SF.forceSignOut());
+    return env;
+  };
+  const authLog = (env) => env.sheets.Audit.rows.filter((r) => r[4] === 'authError').map((r) => r[5] + ' ' + r[6]);
+
+  await test('Google sign-in: if Google\'s script is blocked, say so, then Try again starts fresh and works', async () => {
+    const env = await signedOutWithGoogle('blocked');
+    const page = env.page;
+    await page.waitForSelector('#gsitrouble .notice');
+    assert.ok(/could not load/.test(await page.textContent('#gsitrouble')), await page.textContent('#gsitrouble'));
+    await page.waitForFunction(() => !SF.outbox.pending().length);
+    await page.waitForTimeout(600);
+    assert.ok(authLog(env).some((l) => /^load blocked/.test(l)), authLog(env).join(' | '));
+    env.gsi.blocked = false;
+    await page.click('#gsiretry');
+    await page.waitForSelector('#gsi iframe');
+    assert.strictEqual(await page.locator('#gsitrouble .notice').count(), 0, 'the message is gone');
+    assert.strictEqual(await page.evaluate(() => window.__gsi.loads), 1, 'Google\'s script was loaded afresh');
+    assert.strictEqual(await page.evaluate(() => window.__gsi.inits), 1);
+    await page.click('#gsiretry');                       // and again: the old request is cancelled first
+    await page.waitForFunction(() => window.__gsi.loads === 2);
+    assert.strictEqual(await page.evaluate(() => window.__gsi.cancels), 1, 'the old request was cancelled');
+    assert.strictEqual(await page.evaluate(() => window.__gsi.inits), 2);
+    await env.ctx.close();
+  });
+
+  await test('Google sign-in: a button that never appears is explained, with Try again', async () => {
+    const env = await signedOutWithGoogle('nobutton');
+    const page = env.page;
+    await page.waitForSelector('#gsitrouble .notice', { timeout: 15000 });
+    assert.ok(/button did not appear/.test(await page.textContent('#gsitrouble')));
+    assert.strictEqual(await page.isVisible('#gsiretry'), true);
+    await env.ctx.close();
+  });
+
+  await test('Google sign-in: a refused token shows a plain message, is logged without the token, and Try again is there', async () => {
+    const env = await signedOutWithGoogle('ok');
+    const page = env.page;
+    await page.waitForSelector('#gsi iframe');
+    await page.evaluate(() => window.__gsi.cb({ credential: 'eyJhbGciOi.SECRET-TOKEN-VALUE.sig' }));
+    await page.waitForFunction(() => /Tap Try again/.test(document.getElementById('view').textContent));
+    assert.strictEqual(await page.isVisible('#gsiretry'), true);
+    assert.ok(authLog(env).some((l) => /^refused token-not-accepted/.test(l)), authLog(env).join(' | '));
+    assert.ok(JSON.stringify(env.sheets.Audit.rows).indexOf('SECRET-TOKEN') === -1, 'the token is never stored');
+    await env.ctx.close();
+  });
+
+  await test('Google sign-in: inside another app\'s browser, it says to open Chrome', async () => {
+    const env = await phone({ google: true, init: () => {
+      Object.defineProperty(navigator, 'userAgent', { get: () => 'Mozilla/5.0 (Linux; Android 13; SM-S918B; wv) AppleWebKit/537.36 Version/4.0 Chrome/120 Mobile Safari/537.36 Instagram 300' });
+    } });
+    await env.ctx.route('https://accounts.google.com/**', (r) => r.fulfill({ status: 200, contentType: 'text/javascript', body: gsiStub(true) }));
+    await env.page.evaluate(() => SF.forceSignOut());
+    await env.page.waitForSelector('.notice.warn');
+    assert.ok(/Open this address in Chrome/.test(await env.page.textContent('.notice.warn')));
+    await env.ctx.close();
+  });
+
+  /* ---------- sending the order page out, and the poster as a picture for advertising ---------- */
+  const adSeed = (SF) => {
+    SF.append('markets', { MarketId: 'M02', Name: 'Monument Primary Market', Date: day(2), Location: 'School hall · 09:00–14:00', Status: 'planned' });
+    SF.set('activeMarket', 'M02');
+    SF.set('profile', JSON.stringify({ name: "Duxie's Homemade", tagline: 'Jams, knitted things and resin pieces, all made by hand',
+      colour: '#7B2D43', ink: '#221A1C', paper: '#FCF8F4' }));
+  };
+
+  await test('Order page card: Send on WhatsApp opens WhatsApp with the market and its link typed in', async () => {
+    const env = await phone({ hash: '#numbers', seed: adSeed, init: () => { window.open = (u) => { window.__opened = u; return null; }; } });
+    const page = env.page;
+    await page.waitForSelector('#olink');
+    const link = (await page.textContent('#olink')).trim();
+    await page.click('button:has-text("Send on WhatsApp")');
+    const url = await page.evaluate(() => window.__opened);
+    assert.ok(url.startsWith('https://wa.me/?text='), url);
+    const text = decodeURIComponent(url.split('text=')[1]);
+    for (const want of ["Duxie's Homemade", 'Pre-order for Monument Primary Market', 'No app, no account', link]) {
+      assert.ok(text.indexOf(want) !== -1, 'message has "' + want + '":\n' + text);
+    }
+    await env.ctx.close();
+  });
+
+  await test('Poster pictures: both sizes are the right shape, and the QR in each opens the order page', async () => {
+    const env = await phone({ hash: '#till', seed: adSeed });
+    const page = env.page;
+    await page.addScriptTag({ path: path.join(ROOT, 'web', 'core', 'vendor', 'jsQR.js') });
+    const link = site + '?m=M02';
+    const r = await page.evaluate((link) => {
+      const info = { shop: "Duxie's Homemade", tagline: 'Jams, knitted things and resin pieces, all made by hand',
+        title: 'Monument Primary Market', when: 'Sun 8 Nov', where: 'School hall · 09:00–14:00', link: link,
+        colour: '#7B2D43', ink: '#221A1C', paper: '#FCF8F4' };
+      const out = {};
+      [['feed', info], ['story', info], ['home', Object.assign({}, info, { home: true, link: link.replace('M02', 'home') })],
+       ['long', Object.assign({}, info, { shop: 'The Extraordinarily Long Named Homemade Goods Company', title: 'Blairgowrie Church Craft and Food Market Spring Edition', where: 'Church grounds, 12 Long Road, Blairgowrie, Randburg · 08:00–13:00' })]]
+        .forEach(([k, i]) => {
+          const c = SFL.poster(i, k === 'story' ? 'story' : 'feed'), x = c.getContext('2d');
+          const q = window.jsQR(x.getImageData(0, 0, c.width, c.height).data, c.width, c.height);
+          out[k] = { w: c.width, h: c.height, qr: q && q.data };
+        });
+      return out;
+    }, link);
+    assert.deepStrictEqual([r.feed.w, r.feed.h], [1080, 1350]);
+    assert.deepStrictEqual([r.story.w, r.story.h], [1080, 1920]);
+    assert.strictEqual(r.feed.qr, link); assert.strictEqual(r.story.qr, link);
+    assert.strictEqual(r.home.qr, site + '?m=home');
+    assert.strictEqual(r.long.qr, link, 'long names still leave room for a scannable QR');
+    await env.ctx.close();
+  });
+
+  await test('Poster screen: download both pictures, share the picture, send the link on WhatsApp', async () => {
+    const env = await phone({ hash: '#labels', seed: adSeed, init: () => {
+      window.open = (u) => { window.__opened = u; return null; };
+      navigator.canShare = () => true;
+      navigator.share = (d) => { window.__shared = d.files.map((f) => f.name + ':' + f.type + ':' + (f.size > 5000)); return Promise.resolve(); };
+    } });
+    const page = env.page;
+    await page.waitForSelector('#tabP');
+    await page.click('#tabP');
+    await page.waitForSelector('.adbtns');
+    await page.waitForTimeout(800);                       // the pictures are drawn as the poster shows
+    for (const [button, name] of [['Download for Facebook and Instagram', /duxie-s-homemade-monument-primary-market-post-1080x1350\.png$/],
+                                  ['Download for WhatsApp Status', /-status-1080x1920\.png$/]]) {
+      const [dl] = await Promise.all([page.waitForEvent('download'), page.click('button:has-text("' + button + '")')]);
+      assert.ok(name.test(dl.suggestedFilename()), dl.suggestedFilename());
+      const png = fs.readFileSync(await dl.path());
+      assert.strictEqual(png.readUInt32BE(16), 1080, 'a PNG 1080 wide');
+    }
+    await page.click('#adshare');
+    await page.waitForFunction(() => window.__shared);
+    const shared = await page.evaluate(() => window.__shared);
+    assert.ok(/post-1080x1350\.png:image\/png:true/.test(shared[0]), shared.join());
+    await page.click('button:has-text("Send the link on WhatsApp")');
+    assert.ok((await page.evaluate(() => window.__opened)).startsWith('https://wa.me/?text='));
+    if (process.env.SF_SHOT) {
+      const png = await page.evaluate(async () => { const b = await SFL.posterBlob({ shop: "Duxie's Homemade", tagline: 'Jams, knitted things and resin pieces, all made by hand', title: 'Monument Primary Market', when: 'Sun 8 Nov', where: 'School hall · 09:00–14:00', link: SF.site + '?m=M02', colour: '#7B2D43', ink: '#221A1C', paper: '#FCF8F4' }, 'feed'); return Array.from(new Uint8Array(await b.arrayBuffer())); });
+      fs.writeFileSync(path.join(process.env.SF_SHOT, 'poster-feed.png'), Buffer.from(png));
+    }
+    await env.ctx.close();
+  });
+
+  await test('Order page: Tell a friend on WhatsApp links to this page without the scanned product', async () => {
+    const env = await phone({ hash: '#till', seed: adSeed });
+    const page = await customer(env, '?m=M02&p=P01');
+    const href = await page.getAttribute('.friend a', 'href');
+    assert.ok(href.startsWith('https://wa.me/?text='), href);
+    const text = decodeURIComponent(href.split('text=')[1]);
+    assert.ok(text.indexOf('?m=M02') !== -1 && text.indexOf('p=P01') === -1, text);
+    await env.ctx.close();
+  });
+
+  /* ---------- landscape ---------- */
+  await test('the app may be turned sideways: the manifest allows it, and the till, payment and basket still work on a short screen', async () => {
+    const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'web', 'app', 'manifest.webmanifest'), 'utf8'));
+    assert.strictEqual(manifest.orientation, 'any', 'not locked to portrait');
+    const env = await phone({ hash: '#till', seed: shop10 });
+    const page = env.page;
+    await page.waitForFunction(() => SF.state.data.till);
+    for (const [w, h] of [[844, 390], [667, 375], [915, 412]]) {
+      await page.setViewportSize({ width: w, height: h });
+      await page.evaluate(() => { SF.closeSheet(); window.scrollTo(0, 0); });
+      await page.waitForTimeout(300);
+      const wide = await tooWide(page);
+      assert.ok(!wide, 'till at ' + w + '×' + h + ': ' + wide);
+      await page.evaluate(() => { SFT.tap('P03'); SFT.tap('P05'); });
+      // the products and the bars: the tab bar is slim, and a product can be tapped without the bars covering it
+      const bars = await page.evaluate(() => ({
+        tabs: document.querySelector('.tabs').getBoundingClientRect().height,
+        cart: document.querySelector('.cart').getBoundingClientRect().height, vh: innerHeight }));
+      assert.ok(bars.tabs <= 56, 'the tab bar is slim in landscape: ' + bars.tabs);
+      assert.ok(bars.tabs + bars.cart < bars.vh * 0.36, 'the bars leave room for products: ' + JSON.stringify(bars));
+      await page.click('.basketbtn');
+      await page.waitForSelector('#basketbody');
+      const ph = await page.evaluate(() => { const p = document.querySelector('.sheet .panel').getBoundingClientRect(); return [p.top, p.bottom, innerHeight]; });
+      assert.ok(ph[0] >= 0 && ph[1] <= ph[2] + 1, 'the basket fits the screen: ' + ph);
+      await page.click('#basketbody button:has-text("Take payment")');
+      await page.waitForSelector('#doSale');
+      await page.click('#pw-card');
+      await page.click('#doSale');                         // reachable by scrolling inside the sheet
+      await page.waitForFunction(() => !SF.outbox.pending().length);
+      if (process.env.SF_SHOT) await page.screenshot({ path: path.join(process.env.SF_SHOT, 'landscape-' + w + '.png') });
+    }
+    await env.ctx.close();
+  });
+
+  await test('an update day: a busy server, an error page, a server that does not know the action yet, a lost reply and a reload, and every sale still arrives exactly once', async () => {
+    const env = await phone({ hash: '#till' });
+    const page = env.page;
+    await page.waitForFunction(() => SF.state.data.till);
+    const sells = [['busy', 'P01'], ['unknown', 'P02'], ['html', 'P01'], ['lostreply', 'P02']];
+    for (const [mode, id] of sells) {
+      env.mode = mode;
+      await sellOne(page, id, 'card');
+      await page.evaluate(() => SF.sync());
+      await page.waitForTimeout(500);
+      assert.strictEqual(await page.evaluate(() => SF.outbox.failed().length), 0, mode + ': nothing was given up on');
+    }
+    // the lost-reply sale really did reach the server once already, and the retry must not add a second
+    assert.strictEqual(env.SF.orders().length, 1, 'only the lost-reply sale had reached the sheet');
+    assert.strictEqual(await page.evaluate(() => SF.outbox.pending().length), 4, 'all four are still waiting on the phone');
+    // the phone is closed and opened again, the server still in the middle of its update
+    env.mode = 'html';
+    await page.reload();
+    await page.waitForFunction(() => window.SF && SF.state.ready);
+    await page.waitForTimeout(1200);
+    assert.strictEqual(await page.evaluate(() => SF.outbox.pending().length), 4, 'they survived the reload');
+    env.mode = 'ok';
+    await page.evaluate(() => SF.sync());
+    await page.waitForFunction(() => !SF.outbox.pending().length, null, { timeout: 15000 });
+    await page.evaluate(() => SF.sync());
+    const sales = env.SF.orders().filter((o) => o.channel === 'till');
+    assert.strictEqual(sales.length, 4, 'four sales, none lost, none doubled');
+    assert.strictEqual(JSON.stringify(sales.map((o) => o.paid)), JSON.stringify(['card', 'card', 'card', 'card']));
+    const hand = env.SF.onHand();
+    assert.strictEqual(hand.P01, 8); assert.strictEqual(hand.P02, 8);
+    assert.strictEqual(await page.evaluate(() => SF.outbox.failed().length), 0);
+    await env.ctx.close();
+  });
+
+  await test('a busy server is retried by itself, with no tap, and the sale is not marked as failed', async () => {
+    const env = await phone({ hash: '#till' });
+    const page = env.page;
+    await page.waitForFunction(() => SF.state.data.till);
+    env.mode = 'busy';
+    await sellOne(page, 'P01', 'card');
+    await page.waitForTimeout(800);
+    assert.strictEqual(await page.evaluate(() => SF.outbox.pending().length), 1);
+    assert.strictEqual(await page.evaluate(() => SF.outbox.failed().length), 0);
+    assert.strictEqual(await page.evaluate(() => SF.state.online), true, 'a busy server is not the same as no signal');
+    env.mode = 'ok';
+    await page.waitForFunction(() => !SF.outbox.pending().length, null, { timeout: 15000 });
+    assert.strictEqual(env.SF.orders().filter((o) => o.channel === 'till').length, 1);
+    await env.ctx.close();
+  });
+
+  await test('Market list: each market that can still take orders has Share the order form, and past ones do not', async () => {
+    const env = await phone({ hash: '#numbers', seed: (SF) => {
+      adSeed(SF);
+      SF.append('markets', { MarketId: 'M09', Name: 'Old Fair', Date: day(-20), Status: 'planned' });
+    }, init: () => { window.open = (u) => { window.__opened = u; return null; };
+      navigator.canShare = () => true;
+      navigator.share = (d) => { window.__shared = d.files.map((f) => f.name + ':' + f.type); return Promise.resolve(); }; } });
+    const page = env.page;
+    await page.evaluate(() => { SF.ls.set('sf.tab.numbers', 'all'); SF.render(); });
+    await page.waitForSelector('[data-frow="markets"]');
+    assert.strictEqual(await page.locator('[data-frow="markets"]:has-text("Monument Primary Market") button:has-text("Share the order form")').count(), 1);
+    assert.strictEqual(await page.locator('[data-frow="markets"]:has-text("Old Fair") button:has-text("Share the order form")').count(), 0, 'a market that is over has nothing to share');
+    await page.click('[data-frow="markets"]:has-text("Monument Primary Market") button:has-text("Share the order form")');
+    await page.waitForSelector('.sheet .adbtns');
+    assert.ok(/Monument Primary Market/.test(await page.textContent('.sheet h2')));
+    await page.waitForTimeout(800);
+    const [dl] = await Promise.all([page.waitForEvent('download'), page.click('.sheet button:has-text("Download for WhatsApp Status")')]);
+    assert.ok(/-status-1080x1920\.png$/.test(dl.suggestedFilename()), dl.suggestedFilename());
+    await page.click('.sheet button:has-text("Share the picture")');
+    await page.waitForFunction(() => window.__shared);
+    assert.ok(/post-1080x1350\.png:image\/png/.test(await page.evaluate(() => window.__shared[0])));
+    await page.click('.sheet button:has-text("Send on WhatsApp")');
+    const url = decodeURIComponent((await page.evaluate(() => window.__opened)).split('text=')[1]);
+    assert.ok(url.indexOf('Pre-order for Monument Primary Market') !== -1 && url.indexOf('?m=M02') !== -1, url);
+    await env.ctx.close();
+  });
+
+  await test('Adding a market offers to send its order form out straight away', async () => {
+    const env = await phone({ hash: '#numbers', init: () => { window.open = (u) => { window.__opened = u; return null; }; } });
+    const page = env.page;
+    await openNewMarket(page);
+    await page.fill('#mn', 'Voortrekker Craft Day'); await page.fill('#md', day(6)); await page.fill('#ml', 'Church hall');
+    await page.click('text=Add market');
+    await page.waitForSelector('.sheet .adbtns', { timeout: 15000 });
+    assert.ok(/Voortrekker Craft Day/.test(await page.textContent('.sheet h2')));
+    const id = env.sheets.Markets.rows.find((r) => r[1] === 'Voortrekker Craft Day')[0];
+    await page.click('.sheet button:has-text("Send on WhatsApp")');
+    assert.ok(decodeURIComponent((await page.evaluate(() => window.__opened)).split('text=')[1]).indexOf('?m=' + id) !== -1);
     await env.ctx.close();
   });
 

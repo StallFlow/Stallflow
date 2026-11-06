@@ -327,6 +327,12 @@ class Recorder {
       await beat(2200);
       await find('#fq-shelf').fill(''); await page.dispatchEvent('#fq-shelf', 'input');
       await beat(600);
+      await say('To change a price, type the new one, or tap \u22125 / +5. It saves by itself.', 800);
+      await page.evaluate(() => { const c = document.getElementById('shelf-P03'); if (c) { c.scrollIntoView({ behavior: 'smooth', block: 'center' }); } });
+      await beat(1200);
+      await tap('#shelf-P03 .step[data-d="5"]', { after: 500 });
+      await tap('#shelf-P03 .step[data-d="5"]', { after: 2200 });
+      await page.evaluate(() => window.scrollTo(0, 0));
       await say('Scan a jar to see how many are left.', 1200);
       await camera('', '');
       await tap('button:has-text("Scan a jar")', { after: 1000 });
