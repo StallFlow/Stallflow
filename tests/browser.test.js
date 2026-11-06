@@ -798,9 +798,10 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
       shop10(SF);
       SF.append('markets', { MarketId: 'M02', Name: 'Spring Fair', Date: day(3), Status: 'planned' });
       SF.set('activeMarket', 'M02');
+      // A long name with no spaces in it, the hardest thing to fit.
+      SF.append('pantry', { Item: 'Strawberries-frozen-from-the-farm-5kg', Qty: 2, Unit: 'kg', Note: '', UpdatedAt: new Date(), UpdatedBy: 'x' });
     } });
     const page = env.page;
-    await page.setViewportSize({ width: 360, height: 640 });
     await page.evaluate(() => { SFT.tap('P01'); SFT.tap('P02'); });
     const screens = [
       ['till', 'till', 'sell'], ['till', 'till', 'topay'],
@@ -810,7 +811,10 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
       ['numbers', 'numbers', 'all'], ['numbers', 'numbers', 'new'],
       ['labels'], ['stocktake'], ['settings'], ['people'], ['health'], ['report']];
     const wide = [];
-    for (const zoom of ['1', '1.6']) {
+    // The smallest phones in use (320 wide, the first iPhone SE) at normal text,
+    // and an ordinary small phone (360) with large text.
+    for (const [width, zoom] of [[320, '1'], [360, '1.6']]) {
+      await page.setViewportSize({ width: width, height: 640 });
       await page.evaluate((z) => { document.documentElement.style.zoom = z; }, zoom);
       for (const [hash, tab, on] of screens) {
         await page.evaluate(([h, t, o]) => {
@@ -819,24 +823,24 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
         }, [hash, tab, on]);
         await page.waitForTimeout(500);
         const w = await tooWide(page);
-        if (w) wide.push(hash + (on ? ' › ' + on : '') + ' at ' + zoom + '×: ' + w);
+        if (w) wide.push(hash + (on ? ' › ' + on : '') + ' at ' + width + 'px ' + zoom + '×: ' + w);
       }
       await page.evaluate(() => { location.hash = 'till'; });
       await page.waitForTimeout(500);
       await page.click('.basketbtn');
       await page.waitForSelector('#basketbody');
       const w = await tooWide(page);
-      if (w) wide.push('basket at ' + zoom + '×: ' + w);
+      if (w) wide.push('basket at ' + width + 'px ' + zoom + '×: ' + w);
       await page.keyboard.press('Escape');
       await page.evaluate(() => { const s = document.querySelector('.sheetbg,.sheet'); if (s && SF.closeSheet) SF.closeSheet(); });
     }
     const shop = await customer(env, '?m=M02');
-    await shop.setViewportSize({ width: 360, height: 640 });
-    for (const zoom of ['1', '1.6']) {
+    for (const [width, zoom] of [[320, '1'], [360, '1.6']]) {
+      await shop.setViewportSize({ width: width, height: 640 });
       await shop.evaluate((z) => { document.documentElement.style.zoom = z; }, zoom);
       await shop.waitForTimeout(300);
       const w = await tooWide(shop);
-      if (w) wide.push('order page at ' + zoom + '×: ' + w);
+      if (w) wide.push('order page at ' + width + 'px ' + zoom + '×: ' + w);
     }
     assert.deepStrictEqual(wide, [], 'screens wider than the phone:\n  ' + wide.join('\n  '));
     await env.ctx.close();

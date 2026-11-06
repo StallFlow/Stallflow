@@ -142,7 +142,7 @@ main{padding-bottom:calc(var(--tabbar) + var(--dock, 0px) + env(safe-area-inset-
 
 /* ---- cards and figures ------------------------------------------------- */
 .card{background:var(--surface);border:1px solid var(--rule);border-radius:var(--radius);
-  padding:var(--pad);box-shadow:var(--shadow)}
+  padding:var(--pad);box-shadow:var(--shadow);overflow-wrap:break-word}
 .card + .card{margin-top:12px}
 .card h2{margin-bottom:2px}
 .card .sub{color:var(--muted);font-size:13.5px;margin-bottom:12px}
@@ -192,7 +192,10 @@ table{width:100%;border-collapse:collapse;font-size:14.5px}
 th{background:var(--surface-2);color:var(--muted);font-size:10.5px;letter-spacing:.1em;
   text-transform:uppercase;text-align:left;padding:10px;white-space:nowrap;
   border-bottom:1px solid var(--rule)}
-td{padding:11px 10px;border-bottom:1px solid var(--rule);vertical-align:middle}
+/* A long name with no spaces breaks onto the next line instead of making the
+   table, and so the whole page, wider than a small phone. */
+td{padding:11px 10px;border-bottom:1px solid var(--rule);vertical-align:middle;
+  overflow-wrap:break-word;word-break:break-word}
 td.r,th.r{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums}
 tr:last-child td{border-bottom:none}
 
