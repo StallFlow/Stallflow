@@ -417,6 +417,34 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
     await env.ctx.close();
   });
 
+  await test('People: the role box shows its whole word and a long email stays whole, even with large text', async () => {
+    const env = await phone({ google: true, hash: '#people' });
+    const page = env.page;
+    env.SF.append('users', { Email: 'duxies.homemade@gmail.com', Name: '', Role: 'owner', Active: 'yes' });
+    env.SF.append('users', { Email: 'roxane.ceronio-duxbury@example.co.za', Name: 'Roxane', Role: 'manager', Active: 'yes' });
+    await page.setViewportSize({ width: 360, height: 640 });
+    await page.goto('about:blank'); await page.goto(base + '#people');
+    await page.waitForSelector('#pr-0');
+    for (const zoom of ['1', '1.6']) {
+      await page.evaluate((z) => { document.documentElement.style.zoom = z; }, zoom);
+      await page.waitForTimeout(300);
+      const r = await page.evaluate(() => {
+        const sel = document.getElementById('pr-0'), opt = sel.options[sel.selectedIndex];
+        const email = document.querySelector('.who-email'), btns = Array.from(document.querySelectorAll('.peoplebtns button'));
+        const W = document.documentElement.clientWidth;
+        return { label: opt.textContent, selW: sel.getBoundingClientRect().width,
+          clipped: sel.scrollWidth > sel.clientWidth + 1,
+          lines: Math.round(email.getBoundingClientRect().height / parseFloat(getComputedStyle(email).lineHeight || 20)),
+          btnsOk: btns.length === 4 && btns.every((b) => b.getBoundingClientRect().right <= W && b.getBoundingClientRect().width > 80),
+          wide: document.documentElement.scrollWidth > W + 1 };
+      });
+      assert.strictEqual(r.label, 'Owner');
+      assert.ok(r.selW > (360 / Number(zoom)) * 0.7, 'the role box is the full width: ' + r.selW);
+      assert.ok(!r.clipped && r.btnsOk && !r.wide, JSON.stringify(r) + ' at ' + zoom + 'x');
+    }
+    await env.ctx.close();
+  });
+
   await test('an email half typed on the People page survives a refresh', async () => {
     const env = await phone({ google: true, hash: '#people' });
     const page = env.page;

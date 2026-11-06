@@ -611,7 +611,7 @@
   function roleSelect(id, current) {
     return '<select id="' + id + '">' + ['owner', 'manager', 'cashier', 'viewer'].map(function (r) {
       return '<option value="' + r + '"' + (r === current ? ' selected' : '') + '>' +
-        (r === 'owner' ? 'owner (admin)' : r) + '</option>';
+        r.charAt(0).toUpperCase() + r.slice(1) + '</option>';
     }).join('') + '</select>';
   }
 
@@ -624,20 +624,18 @@
                                    show: p.active ? 'on' : 'off' },
                        { name: String(p.email).toLowerCase(), seen: p.lastSeen || '' }) + '>' +
         '<div style="display:flex;gap:10px;align-items:baseline;flex-wrap:wrap">' +
-          '<b style="flex:1;min-width:0;word-break:break-all">' + esc(p.email) + '</b>' +
+          '<b class="who-email">' + esc(p.email) + '</b>' +
           '<span class="tag' + (p.active ? ' ok' : '') + '">' + (p.active ? 'can sign in' : 'off') +
           '</span></div>' +
         '<div class="muted small" style="margin:2px 0 10px">' + esc(p.name || '') +
           (p.lastSeen ? ' · last in ' + esc(p.lastSeen) : ' · not signed in yet') + '</div>' +
         (self ? '<div class="muted small">This is you.</div>' :
-          '<div class="row" style="align-items:flex-end">' +
-            '<div class="field" style="margin:0"><label for="pr-' + i + '">Role</label>' +
-              roleSelect('pr-' + i, p.role) + '</div>' +
-            '<div style="flex:none"><button class="ghost" onclick="SFA.savePerson(' + i +
-              ', true)">Save</button></div>' +
-            '<div style="flex:none"><button class="' + (p.active ? 'bad' : 'ok') +
-              ' sm" onclick="SFA.savePerson(' + i + ', ' + (p.active ? 'false' : 'true') + ')">' +
-              (p.active ? 'Switch off' : 'Switch on') + '</button></div>' +
+          '<div class="field" style="margin:0 0 10px"><label for="pr-' + i + '">Role</label>' +
+            roleSelect('pr-' + i, p.role) + '</div>' +
+          '<div class="peoplebtns">' +
+            '<button class="ghost" onclick="SFA.savePerson(' + i + ', true)">Save role</button>' +
+            '<button class="' + (p.active ? 'bad' : 'ok') + '" onclick="SFA.savePerson(' + i + ', ' +
+              (p.active ? 'false' : 'true') + ')">' + (p.active ? 'Switch off' : 'Switch on') + '</button>' +
           '</div>') +
         '</div>';
     }).join('');
