@@ -364,6 +364,83 @@ var SFL = (function () {
     return p.id + '-' + slug + '-' + key.replace(/^n[bd]-/, 'niimbot-') + '.png';
   }
 
+  /**
+   * The order poster as a picture for advertising: kind 'feed' is 1080 × 1350
+   * (Facebook, Instagram and WhatsApp posts), 'story' is 1080 × 1920 (WhatsApp
+   * Status, Instagram and Facebook stories). In the stall's own colours, with
+   * the QR to this market's order page.
+   * info: { shop, tagline, title, when, where, link, home, colour, ink, paper }
+   */
+  function poster(info, kind) {
+    var W = 1080, H = kind === 'story' ? 1920 : 1350;
+    var cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+    var ctx = cv.getContext('2d');
+    var brand = info.colour || '#7B2D43', ink = info.ink || '#221A1C', paper = info.paper || '#FCF8F4';
+    var pad = 72, tw = W - pad * 2, cx = W / 2, y;
+    ctx.fillStyle = paper; ctx.fillRect(0, 0, W, H);
+    ctx.textBaseline = 'top'; ctx.textAlign = 'center';
+
+    // the stall's name on a band of its colour
+    var bandH = Math.round(H * (kind === 'story' ? 0.17 : 0.17));
+    ctx.fillStyle = brand; ctx.fillRect(0, 0, W, bandH);
+    var nf = fit(ctx, info.shop, tw, 92, 46, 2, '800');
+    var tf = info.tagline ? fit(ctx, info.tagline, tw, 34, 22, 1, '500') : null;
+    var blockH = nf.lines.length * nf.size * 1.08 + (tf ? 14 + tf.lines.length * tf.size * 1.08 : 0);
+    y = Math.max(16, (bandH - blockH) / 2);
+    y = lines(ctx, nf, cx, y, '#fff');
+    if (tf) lines(ctx, tf, cx, y + 14, 'rgba(255,255,255,.88)');
+
+    // what it is for, and when
+    var gap = kind === 'story' ? 90 : 46;
+    y = bandH + gap;
+    var title = info.home ? 'Order any time' : info.title;
+    var tfit = fitBox(ctx, title, tw, kind === 'story' ? 260 : 190, kind === 'story' ? 104 : 88, 48, 2, '800');
+    y = lines(ctx, tfit, cx, y, ink);
+    var sub = info.home ? 'We arrange the collection with you'
+      : [info.when, info.where].filter(Boolean).join('  ·  ');
+    if (sub) {
+      var sf = fit(ctx, sub, tw, 42, 28, 2, '600');
+      ctx.globalAlpha = 0.72; y = lines(ctx, sf, cx, y + 14, ink); ctx.globalAlpha = 1;
+    }
+
+    // the footer is measured first, so the QR gets exactly the room left
+    var cta = info.home ? 'SCAN TO ORDER' : 'SCAN TO ORDER AHEAD';
+    var ctaF = fit(ctx, cta, tw, 66, 40, 1, '800');
+    var subF = fit(ctx, info.home ? 'Reserve now. Pay when you collect. No app, no account.'
+                                  : 'Reserve now. Pay at the stall. No app, no account.', tw, 38, 24, 1, '500');
+    var urlText = String(info.link || '').replace(/^https?:\/\//, '');
+    var urlF = fit(ctx, urlText, tw, 30, 18, 1, '500');
+    var footH = 26 + ctaF.size * 1.08 + 12 + subF.lines.length * subF.size * 1.08 + 22 + urlF.size * 1.08 + 44;
+    var top = y + gap * 0.55, avail = H - footH - top;
+    var side = Math.max(240, Math.min(780, avail - 72));
+    var card = side + 72;
+    var cy = top + Math.max(0, (avail - card) / 2);
+    ctx.fillStyle = '#fff';
+    roundRect(ctx, cx - card / 2, cy, card, card, 36); ctx.fill();
+    ctx.lineWidth = 8; ctx.strokeStyle = brand; ctx.stroke();
+    drawQR(ctx, info.link, Math.round(cx - side / 2), Math.round(cy + 36), side, 'H');
+
+    y = cy + card + 26;
+    y = lines(ctx, ctaF, cx, y, brand);
+    y = lines(ctx, subF, cx, y + 12, ink);
+    ctx.globalAlpha = 0.55; lines(ctx, urlF, cx, y + 22, ink); ctx.globalAlpha = 1;
+    return cv;
+  }
+
+  function roundRect(ctx, x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y); ctx.lineTo(x + w - r, y); ctx.arcTo(x + w, y, x + w, y + r, r);
+    ctx.lineTo(x + w, y + h - r); ctx.arcTo(x + w, y + h, x + w - r, y + h, r);
+    ctx.lineTo(x + r, y + h); ctx.arcTo(x, y + h, x, y + h - r, r);
+    ctx.lineTo(x, y + r); ctx.arcTo(x, y, x + r, y, r); ctx.closePath();
+  }
+
+  function posterBlob(info, kind) {
+    return new Promise(function (ok, fail) {
+      poster(info, kind).toBlob(function (b) { b ? ok(b) : fail(new Error('could not draw the poster')); }, 'image/png');
+    });
+  }
+
   function save(blob, name) {
     var url = URL.createObjectURL(blob), a = document.createElement('a');
     a.href = url; a.download = name; a.rel = 'noopener';
@@ -374,6 +451,7 @@ var SFL = (function () {
 
   return {
     sizes: SIZES, size: size, canvas: canvas, fileName: fileName, save: save, zip: zip,
+    poster: poster, posterBlob: posterBlob,
     useLogo: useLogo,
     png: function (p, key, shop, look) {
       return pngBytes(canvas(p, key, shop, look), size(key)[4]).then(function (b) { return new Blob([b], { type: 'image/png' }); });

@@ -1868,6 +1868,97 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
     await env.ctx.close();
   });
 
+  /* ---------- sending the order page out, and the poster as a picture for advertising ---------- */
+  const adSeed = (SF) => {
+    SF.append('markets', { MarketId: 'M02', Name: 'Monument Primary Market', Date: day(2), Location: 'School hall · 09:00–14:00', Status: 'planned' });
+    SF.set('activeMarket', 'M02');
+    SF.set('profile', JSON.stringify({ name: "Duxie's Homemade", tagline: 'Jams, knitted things and resin pieces, all made by hand',
+      colour: '#7B2D43', ink: '#221A1C', paper: '#FCF8F4' }));
+  };
+
+  await test('Order page card: Send on WhatsApp opens WhatsApp with the market and its link typed in', async () => {
+    const env = await phone({ hash: '#numbers', seed: adSeed, init: () => { window.open = (u) => { window.__opened = u; return null; }; } });
+    const page = env.page;
+    await page.waitForSelector('#olink');
+    const link = (await page.textContent('#olink')).trim();
+    await page.click('button:has-text("Send on WhatsApp")');
+    const url = await page.evaluate(() => window.__opened);
+    assert.ok(url.startsWith('https://wa.me/?text='), url);
+    const text = decodeURIComponent(url.split('text=')[1]);
+    for (const want of ["Duxie's Homemade", 'Pre-order for Monument Primary Market', 'No app, no account', link]) {
+      assert.ok(text.indexOf(want) !== -1, 'message has "' + want + '":\n' + text);
+    }
+    await env.ctx.close();
+  });
+
+  await test('Poster pictures: both sizes are the right shape, and the QR in each opens the order page', async () => {
+    const env = await phone({ hash: '#till', seed: adSeed });
+    const page = env.page;
+    await page.addScriptTag({ path: path.join(ROOT, 'web', 'core', 'vendor', 'jsQR.js') });
+    const link = site + '?m=M02';
+    const r = await page.evaluate((link) => {
+      const info = { shop: "Duxie's Homemade", tagline: 'Jams, knitted things and resin pieces, all made by hand',
+        title: 'Monument Primary Market', when: 'Sun 8 Nov', where: 'School hall · 09:00–14:00', link: link,
+        colour: '#7B2D43', ink: '#221A1C', paper: '#FCF8F4' };
+      const out = {};
+      [['feed', info], ['story', info], ['home', Object.assign({}, info, { home: true, link: link.replace('M02', 'home') })],
+       ['long', Object.assign({}, info, { shop: 'The Extraordinarily Long Named Homemade Goods Company', title: 'Blairgowrie Church Craft and Food Market Spring Edition', where: 'Church grounds, 12 Long Road, Blairgowrie, Randburg · 08:00–13:00' })]]
+        .forEach(([k, i]) => {
+          const c = SFL.poster(i, k === 'story' ? 'story' : 'feed'), x = c.getContext('2d');
+          const q = window.jsQR(x.getImageData(0, 0, c.width, c.height).data, c.width, c.height);
+          out[k] = { w: c.width, h: c.height, qr: q && q.data };
+        });
+      return out;
+    }, link);
+    assert.deepStrictEqual([r.feed.w, r.feed.h], [1080, 1350]);
+    assert.deepStrictEqual([r.story.w, r.story.h], [1080, 1920]);
+    assert.strictEqual(r.feed.qr, link); assert.strictEqual(r.story.qr, link);
+    assert.strictEqual(r.home.qr, site + '?m=home');
+    assert.strictEqual(r.long.qr, link, 'long names still leave room for a scannable QR');
+    await env.ctx.close();
+  });
+
+  await test('Poster screen: download both pictures, share the picture, send the link on WhatsApp', async () => {
+    const env = await phone({ hash: '#labels', seed: adSeed, init: () => {
+      window.open = (u) => { window.__opened = u; return null; };
+      navigator.canShare = () => true;
+      navigator.share = (d) => { window.__shared = d.files.map((f) => f.name + ':' + f.type + ':' + (f.size > 5000)); return Promise.resolve(); };
+    } });
+    const page = env.page;
+    await page.waitForSelector('#tabP');
+    await page.click('#tabP');
+    await page.waitForSelector('.adbtns');
+    await page.waitForTimeout(800);                       // the pictures are drawn as the poster shows
+    for (const [button, name] of [['Download for Facebook and Instagram', /duxie-s-homemade-monument-primary-market-post-1080x1350\.png$/],
+                                  ['Download for WhatsApp Status', /-status-1080x1920\.png$/]]) {
+      const [dl] = await Promise.all([page.waitForEvent('download'), page.click('button:has-text("' + button + '")')]);
+      assert.ok(name.test(dl.suggestedFilename()), dl.suggestedFilename());
+      const png = fs.readFileSync(await dl.path());
+      assert.strictEqual(png.readUInt32BE(16), 1080, 'a PNG 1080 wide');
+    }
+    await page.click('#adshare');
+    await page.waitForFunction(() => window.__shared);
+    const shared = await page.evaluate(() => window.__shared);
+    assert.ok(/post-1080x1350\.png:image\/png:true/.test(shared[0]), shared.join());
+    await page.click('button:has-text("Send the link on WhatsApp")');
+    assert.ok((await page.evaluate(() => window.__opened)).startsWith('https://wa.me/?text='));
+    if (process.env.SF_SHOT) {
+      const png = await page.evaluate(async () => { const b = await SFL.posterBlob({ shop: "Duxie's Homemade", tagline: 'Jams, knitted things and resin pieces, all made by hand', title: 'Monument Primary Market', when: 'Sun 8 Nov', where: 'School hall · 09:00–14:00', link: SF.site + '?m=M02', colour: '#7B2D43', ink: '#221A1C', paper: '#FCF8F4' }, 'feed'); return Array.from(new Uint8Array(await b.arrayBuffer())); });
+      fs.writeFileSync(path.join(process.env.SF_SHOT, 'poster-feed.png'), Buffer.from(png));
+    }
+    await env.ctx.close();
+  });
+
+  await test('Order page: Tell a friend on WhatsApp links to this page without the scanned product', async () => {
+    const env = await phone({ hash: '#till', seed: adSeed });
+    const page = await customer(env, '?m=M02&p=P01');
+    const href = await page.getAttribute('.friend a', 'href');
+    assert.ok(href.startsWith('https://wa.me/?text='), href);
+    const text = decodeURIComponent(href.split('text=')[1]);
+    assert.ok(text.indexOf('?m=M02') !== -1 && text.indexOf('p=P01') === -1, text);
+    await env.ctx.close();
+  });
+
   await test('How-to videos: anyone signed in finds them in More, and every video is published', async () => {
     const env = await phone({ hash: '#till', seed: (SF) => SF.setPin('cashier', '1111') });
     const page = env.page;

@@ -79,6 +79,22 @@
     return SF.site + (id ? '?m=' + encodeURIComponent(id.toUpperCase() === 'HOME' ? 'home' : id) : '');
   }
 
+  /** The words that go with the order link when it is sent out. */
+  function adMessage(m, link) {
+    var shop = (SF.state.boot && SF.state.boot.profile.name) || 'Our stall';
+    var what = !m || m.id === 'HOME' || m.home ? 'Order any time'
+      : 'Pre-order for ' + m.name + (m.date ? ' (' + prettyDate(m.date) + ')' : '');
+    return shop + '\n' + what + '\nReserve now, pay at the stall. No app, no account:\n' + link;
+  }
+
+  /** What the poster picture is made from. */
+  function posterInfo(d, pick) {
+    var pr = d.profile || {};
+    return { shop: pr.name || 'Our stall', tagline: pr.tagline || '', home: !!pick.home,
+      title: pick.name, when: pick.date ? prettyDate(pick.date) : '', where: pick.location || '',
+      link: orderLink(pick.id), colour: pr.colour, ink: pr.ink, paper: pr.paper };
+  }
+
   /** 2026-11-06 → Fri 6 Nov. */
   function prettyDate(iso) {
     var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || ''));
@@ -101,7 +117,9 @@
     return '<div class="card"><h2>' + (home ? 'Order page between markets' : 'Order page for this market') +
       '</h2><div class="sub">' + state + '</div>' +
       '<div class="linkbox" id="olink">' + esc(orderLink(d.marketId)) + '</div>' +
-      '<div class="row" style="margin-top:10px">' +
+      '<button class="ok block" style="margin-top:10px" onclick="SFA.waShare(\'' + id + '\')">' +
+        'Send on WhatsApp</button>' +
+      '<div class="row" style="margin-top:8px">' +
         '<button class="ghost" onclick="SFA.shareLink(\'' + id + '\')">Share</button>' +
         '<button class="ghost" onclick="SFA.copyLink(\'' + id + '\')">Copy link</button>' +
         '<button class="ghost" onclick="SFA.openPoster(\'' + id + '\')">Poster</button>' +
@@ -420,6 +438,27 @@
     return SF.state.data.labels.products.filter(function (p) {
       return !document.querySelector('[data-frow="labels"]') || shown[p.id];
     });
+  }
+
+  /* The picture is drawn as soon as the poster shows, so Share is answered at once.
+     (An iPhone only opens the share sheet straight from a tap.) */
+  var adPics = { key: '', feed: null, story: null };
+  function preparePoster(info) {
+    if (!window.SFL) return;
+    var key = JSON.stringify(info);
+    if (adPics.key === key && adPics.feed) return;
+    adPics = { key: key, feed: null, story: null, info: info };
+    ['feed', 'story'].forEach(function (kind) {
+      SFL.posterBlob(info, kind).then(function (b) {
+        if (adPics.key === key) adPics[kind] = b;
+      }).catch(function () {});
+    });
+  }
+  function adFileName(kind) {
+    var shop = String((adPics.info && adPics.info.shop) || 'poster').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    var what = String((adPics.info && (adPics.info.home ? 'order-any-time' : adPics.info.title)) || '')
+      .toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 30);
+    return shop + '-' + what + '-' + (kind === 'story' ? 'status-1080x1920' : 'post-1080x1350') + '.png';
   }
 
   /** Which market's poster: remembered on this phone, else the soonest. */
@@ -844,6 +883,32 @@
       });
       SF.toast(open ? 'Orders between markets are on' : 'Orders between markets are off');
     },
+    /** The order link, ready typed in WhatsApp: pick who gets it there. */
+    waShare: function (id) {
+      var d = SF.state.data.numbers || SF.state.data.labels, link = orderLink(id), m = null;
+      ((d && d.markets) || []).forEach(function (x) { if (String(x.id) === String(id) || (x.home && /^home$/i.test(id))) m = x; });
+      if (!m && /^home$/i.test(id)) m = { id: 'HOME', home: true };
+      window.open('https://wa.me/?text=' + encodeURIComponent(adMessage(m, link)), '_blank', 'noopener');
+    },
+    downloadPoster: function (kind) {
+      var b = adPics[kind];
+      if (!b) { SF.toast('One moment, the picture is being made. Tap again.'); return; }
+      SFL.save(b, adFileName(kind));
+      SF.toast('Saved. Post it from your gallery.');
+    },
+    /** The picture itself into WhatsApp, Facebook and the rest, from the phone's share sheet. */
+    sharePoster: function () {
+      var b = adPics.feed;
+      if (!b) { SF.toast('One moment, the picture is being made. Tap again.'); return; }
+      var file = new File([b], adFileName('feed'), { type: 'image/png' });
+      var link = adPics.info && adPics.info.link;
+      navigator.share({ files: [file], text: adMessage(adPics.info && { home: adPics.info.home, name: adPics.info.title,
+        date: '' }, link), title: (adPics.info && adPics.info.shop) || '' })
+        .catch(function (e) {
+          if (e && e.name === 'AbortError') return;
+          SF.toast('Sharing did not work here. Use Download instead.', true);
+        });
+    },
     shareLink: function (id) {
       var url = orderLink(id), name = (SF.state.boot && SF.state.boot.profile.name) || 'our stall';
       if (navigator.share) {
@@ -1046,10 +1111,18 @@
           return;
         }
         var link = orderLink(pick.id);
-        out.innerHTML = '<div class="card noprint" style="padding:12px"><b>' +
+        preparePoster(posterInfo(d, pick));
+        out.innerHTML = '<div class="card noprint"><b>' +
           (pick.home ? 'The between-markets poster' : 'The poster for ' + esc(pick.name)) + '</b> ' +
-          '<span class="muted small">— the QR opens this market\'s own order page. Put it at ' +
-          'the entrance, or share it the week before.</span></div>' +
+          '<span class="muted small">— the QR opens this market\'s own order page. Print it for the ' +
+          'entrance, or send it out the week before.</span>' +
+          '<button class="ok block" style="margin-top:12px" data-id="' + esc(pick.id) + '" ' +
+            'onclick="SFA.waShare(this.getAttribute(\'data-id\'))">Send the link on WhatsApp</button>' +
+          '<div class="adbtns">' +
+            (window.SFL && SFL.canShare() ? '<button class="ghost" id="adshare" onclick="SFA.sharePoster()">Share the picture</button>' : '') +
+            '<button class="ghost" onclick="SFA.downloadPoster(\'feed\')">Download for Facebook and Instagram</button>' +
+            '<button class="ghost" onclick="SFA.downloadPoster(\'story\')">Download for WhatsApp Status</button>' +
+          '</div></div>' +
           '<div class="poster"><h1>' + esc(d.profile.name) + '</h1>' +
           '<div class="tag2">' + esc(d.profile.tagline || '') + '</div>' +
           '<div class="mkt">' + (pick.home
