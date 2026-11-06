@@ -578,6 +578,37 @@ test('with the Collect step switched on, Paid waits for the hand-over', () => {
   assert.ok(till.waiting.some((o) => o.no === r.orderNo), 'the till can see it is waiting');
 });
 
+/* ---------- the label look ---------- */
+
+test('the label look is kept: style, contact lines, a small logo, price on or off', () => {
+  const { SF, tok } = markets3();
+  let look = SF.dispatch('labels', { token: tok }).data.look;
+  assert.strictEqual(look.style, 'classic', 'starts in the style of the printed labels');
+  assert.strictEqual(look.price, false, 'no price on the label unless asked');
+  const logo = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAACklEQVR4nGNgAAAAAgABSK+kcQAAAABJRU5ErkJggg==';
+  const r = SF.dispatch('saveLabelLook', { token: tok, opId: 'll1', style: 'classic',
+    contact: 'Marian\r\nMobile 066 000 0000\nthird\nfourth line is dropped', logo, price: true });
+  assert.strictEqual(r.ok, true, r.message);
+  look = SF.dispatch('labels', { token: tok }).data.look;
+  assert.strictEqual(look.contact, 'Marian\nMobile 066 000 0000\nthird');
+  assert.strictEqual(look.logo, logo);
+  assert.strictEqual(look.price, true);
+  assert.strictEqual(SF.dispatch('saveLabelLook', { token: tok, opId: 'll2', logo: 'javascript:alert(1)' }).ok, false);
+  assert.strictEqual(SF.dispatch('saveLabelLook', { token: tok, opId: 'll3',
+    logo: 'data:image/png;base64,' + 'A'.repeat(70000) }).ok, false, 'too big to keep');
+  SF.dispatch('saveLabelLook', { token: tok, opId: 'll4', style: 'simple', contact: '', price: false });
+  look = SF.dispatch('labels', { token: tok }).data.look;
+  assert.strictEqual(look.style, 'simple');
+  assert.strictEqual(look.logo, logo, 'leaving the logo out keeps it');
+});
+
+test('only an owner or manager can change the label look', () => {
+  const { SF } = markets3();
+  SF.setPin('cashier', '1111');
+  const t = SF.dispatch('signIn', { pin: '1111', device: 'c' }).data.token;
+  assert.strictEqual(SF.dispatch('saveLabelLook', { token: t, opId: 'x', contact: 'hi' }).ok, false);
+});
+
 /* ---------- reporting a problem ---------- */
 
 function reporter(role) {

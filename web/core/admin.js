@@ -263,19 +263,112 @@
      Labels as files, for a separate label printer: one PNG per product at
      the printer's label size and 300 dpi. Copies are set in the printer's app.
      ------------------------------------------------------------------ */
-  function labelSize() { return SF.ls.get('sf.labelSize', '50x30'); }
+  function labelSize() { return SF.ls.get('sf.labelSize', 'nb-50x30'); }
+
+  var lookDraft = null;         // changes not saved yet, shown in the preview as they are made
+
+  /** The look every label is drawn with: the stall's, or what is being tried out. */
+  function labelLook() {
+    var d = SF.state.data.labels || {}, l = lookDraft || d.look || {};
+    return { style: l.style || 'classic', contact: l.contact || '', logo: l.logo || '', price: !!l.price,
+             base: SF.site };
+  }
+
+  /**
+   * A logo for a thermal printer: shrink it, make it pure black and white,
+   * and trim the empty edges. Resolves to a small PNG data URL.
+   */
+  function cleanLogo(file) {
+    return new Promise(function (ok, fail) {
+      var url = URL.createObjectURL(file), img = new Image();
+      img.onload = function () {
+        var tries = [420, 320, 240, 180];
+        for (var t = 0; t < tries.length; t++) {
+          var r = Math.min(1, tries[t] / Math.max(img.width, img.height));
+          var w = Math.max(1, Math.round(img.width * r)), h = Math.max(1, Math.round(img.height * r));
+          var c = document.createElement('canvas'); c.width = w; c.height = h;
+          var x = c.getContext('2d');
+          x.fillStyle = '#fff'; x.fillRect(0, 0, w, h); x.drawImage(img, 0, 0, w, h);
+          var px = x.getImageData(0, 0, w, h), d = px.data, minX = w, minY = h, maxX = -1, maxY = -1;
+          for (var i = 0; i < d.length; i += 4) {
+            var dark = (0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]) < 150;
+            d[i] = d[i + 1] = d[i + 2] = dark ? 0 : 255; d[i + 3] = 255;
+            if (dark) {
+              var k = i / 4, xx = k % w, yy = (k - xx) / w;
+              if (xx < minX) minX = xx; if (xx > maxX) maxX = xx; if (yy < minY) minY = yy; if (yy > maxY) maxY = yy;
+            }
+          }
+          if (maxX < 0) { URL.revokeObjectURL(url); fail(new Error('blank')); return; }
+          x.putImageData(px, 0, 0);
+          var tw = maxX - minX + 1, th = maxY - minY + 1, out = document.createElement('canvas');
+          out.width = tw; out.height = th;
+          out.getContext('2d').drawImage(c, minX, minY, tw, th, 0, 0, tw, th);
+          var data = out.toDataURL('image/png');
+          if (data.length < 58000 || t === tries.length - 1) {
+            URL.revokeObjectURL(url);
+            if (data.length >= 58000) { fail(new Error('too big')); return; }
+            ok(data); return;
+          }
+        }
+      };
+      img.onerror = function () { URL.revokeObjectURL(url); fail(new Error('not a picture')); };
+      img.src = url;
+    });
+  }
+
+  function lookEditor() {
+    if (!SF.can('reports')) return '';
+    var l = labelLook();
+    return '<details class="lookedit"' + (lookDraft ? ' open' : '') + '><summary>Change how the labels look</summary>' +
+      '<div class="field"><label for="lkstyle">Style</label><select id="lkstyle" onchange="SFA.lookSet()">' +
+        '<option value="classic"' + (l.style === 'classic' ? ' selected' : '') + '>Like printed jar labels: name curved on top, logo, QR bottom right</option>' +
+        '<option value="simple"' + (l.style === 'simple' ? ' selected' : '') + '>Simple: QR on the left, name and price</option></select></div>' +
+      '<div class="field"><label for="lkcontact">Contact lines on the label</label>' +
+        '<textarea id="lkcontact" rows="3" maxlength="130" placeholder="Your name&#10;Mobile 0xx xxx xxxx" ' +
+        'oninput="SFA.lookSet()">' + esc(l.contact) + '</textarea></div>' +
+      '<div class="field"><label>Logo</label><div class="logorow">' +
+        (l.logo ? '<img id="lklogo" src="' + l.logo + '" alt="The logo">' : '<span class="muted small">No logo yet.</span>') +
+        '<label class="ghost sm filebtn">Choose a picture<input id="lkfile" type="file" accept="image/*" ' +
+          'onchange="SFA.lookLogo(this)"></label>' +
+        (l.logo ? '<button class="quiet" onclick="SFA.lookLogo(null)">remove</button>' : '') +
+      '</div><div class="muted small">A clear picture of the logo on white works best. It is turned ' +
+        'black and white for the printer.</div></div>' +
+      '<label class="check"><input type="checkbox" id="lkprice"' + (l.price ? ' checked' : '') +
+        ' onchange="SFA.lookSet()"> Print the price on the label</label>' +
+      '<div class="row" style="margin-top:10px"><button onclick="SFA.lookSave()">Save the look</button>' +
+        (lookDraft ? '<button class="ghost" onclick="SFA.lookCancel()">Undo changes</button>' : '') + '</div>' +
+      '</details>';
+  }
+
+  /** How to print the downloaded picture from the NIIMBOT app, step by step. */
+  function niimbotSteps() {
+    var iphone = /iPhone|iPad|iPod/.test(navigator.userAgent || '');
+    return '<ol class="steps">' +
+      (iphone ? '<li>Tap <b>Send to printer app</b> below, then <b>Save Image</b>, so the label is in Photos.</li>'
+              : '<li>Tap <b>PNG</b> next to a product (or Download ticked). It saves to your phone.</li>') +
+      '<li>Open the <b>NIIMBOT</b> app and start a new label the same size as your roll.</li>' +
+      '<li>Add a <b>Picture</b> (Image) and choose the label you saved.</li>' +
+      '<li>Stretch it to fill the whole label, then <b>Print</b>. Set how many copies there.</li>' +
+      '</ol>';
+  }
 
   function labelFiles() {
     if (!window.SFL) return '';
-    var key = labelSize();
+    var key = labelSize(), groups = [];
+    SFL.sizes.forEach(function (z) { if (groups.indexOf(z[5]) === -1) groups.push(z[5]); });
     return '<div class="card flat labelfiles"><h3>For a label printer</h3>' +
-      '<div class="sub">Download each label as a picture at your label size, then print it from ' +
-        'the printer\'s own app (Brother, Dymo, Niimbot…). Set how many copies there.</div>' +
-      '<div class="field"><label for="lsize">Label size</label><select id="lsize" ' +
+      '<div class="sub">Download each label as a picture at your printer\'s label size, then print ' +
+        'it from the printer\'s own app. Set how many copies there.</div>' +
+      '<div class="field"><label for="lsize">Printer and label size</label><select id="lsize" ' +
         'onchange="SF.ls.set(\'sf.labelSize\', this.value);SFA.labelPreview()">' +
-        SFL.sizes.map(function (z) {
-          return '<option value="' + z[0] + '"' + (z[0] === key ? ' selected' : '') + '>' + esc(z[1]) + '</option>';
+        groups.map(function (g) {
+          return '<optgroup label="' + esc(g) + '">' + SFL.sizes.filter(function (z) { return z[5] === g; })
+            .map(function (z) {
+              return '<option value="' + z[0] + '"' + (z[0] === key ? ' selected' : '') + '>' + esc(z[1]) + '</option>';
+            }).join('') + '</optgroup>';
         }).join('') + '</select></div>' +
+      '<div id="lsteps"' + (/^n[bd]-/.test(key) ? '' : ' style="display:none"') + '>' + niimbotSteps() + '</div>' +
+      '<div id="lookbox">' + lookEditor() + '</div>' +
       '<div class="lprev"><img id="lprev" alt="How a downloaded label looks"><span id="lprevcap" class="muted small"></span></div>' +
       '<div class="row" style="margin-top:10px">' +
         '<button class="ghost" onclick="SFA.downloadTicked()">Download ticked (.zip)</button>' +
@@ -585,6 +678,7 @@
     savePerson: 'A change to who has access',
     setActiveMarket: 'Changing the live market', setPreordersOpen: 'Opening or closing pre-orders',
     setHomeOrders: 'Orders between markets', setCollectStep: 'The Collect screen',
+    saveLabelLook: 'The label look',
     'cashup.record': 'A cash-up'
   };
 
@@ -798,20 +892,62 @@
       SF.toast('Market added. Its order page and poster are ready.');
     },
 
+    lookSet: function () {
+      var l = labelLook();
+      lookDraft = { style: SF.el('lkstyle').value, contact: SF.el('lkcontact').value,
+                    logo: l.logo, price: SF.el('lkprice').checked };
+      SFA.labelPreview();
+    },
+    lookLogo: function (input) {
+      var l = labelLook();
+      var keep = function (logo) {
+        lookDraft = { style: l.style, contact: SF.el('lkcontact').value, logo: logo, price: SF.el('lkprice').checked };
+        var box = SF.el('lookbox'); if (box) box.innerHTML = lookEditor();
+        SFA.labelPreview();
+      };
+      if (!input) { keep(''); return; }
+      var f = input.files && input.files[0];
+      if (!f) return;
+      cleanLogo(f).then(keep, function (e) {
+        SF.toast(e && e.message === 'too big' ? 'That picture is too detailed. Try a simpler one.'
+                 : e && e.message === 'blank' ? 'Nothing dark found in that picture.'
+                 : 'That file is not a picture.', true);
+      });
+    },
+    lookSave: function () {
+      var l = lookDraft || labelLook(), d = SF.state.data.labels;
+      SF.write('saveLabelLook', { style: l.style, contact: l.contact, logo: l.logo, price: !!l.price }, function () {
+        if (d) d.look = { style: l.style, contact: l.contact, logo: l.logo, price: !!l.price };
+      });
+      lookDraft = null;
+      var box = SF.el('lookbox'); if (box) box.innerHTML = lookEditor();
+      SFA.labelPreview();
+      SF.toast('Label look saved');
+    },
+    lookCancel: function () {
+      lookDraft = null;
+      var box = SF.el('lookbox'); if (box) box.innerHTML = lookEditor();
+      SFA.labelPreview();
+    },
     labelPreview: function () {
       var img = SF.el('lprev'), d = SF.state.data.labels;
       if (!img || !d || !window.SFL) return;
       var p = tickedProducts()[0] || d.products[0];
       if (!p) return;
-      var key = labelSize(), z = SFL.size(key);
-      img.src = SFL.canvas(p, key, d.profile.name).toDataURL('image/png');
+      var key = labelSize(), z = SFL.size(key), look = labelLook();
+      SFL.useLogo(look.logo).then(function () {
+        img.src = SFL.canvas(p, key, d.profile.name, look).toDataURL('image/png');
+      });
       img.style.aspectRatio = z[2] + ' / ' + z[3];
-      SF.el('lprevcap').textContent = 'How each label downloads · ' + z[2] + ' × ' + z[3] + ' mm · 300 dpi';
+      SF.el('lprevcap').textContent = 'How each label downloads · ' + z[2] + ' × ' + z[3] + ' mm · ' + z[4] + ' dpi';
+      var steps = SF.el('lsteps');
+      if (steps) steps.style.display = /^n[bd]-/.test(key) ? '' : 'none';
     },
     downloadLabel: function (id) {
       var d = SF.state.data.labels, p = d && SF.find(d.products, id), key = labelSize();
       if (!p) return;
-      SFL.png(p, key, d.profile.name).then(function (b) {
+      var look = labelLook();
+      SFL.useLogo(look.logo).then(function () { return SFL.png(p, key, d.profile.name, look); }).then(function (b) {
         SFL.save(b, SFL.fileName(p, key));
         SF.toast('Saved ' + p.name + ' label');
       }, function () { SF.toast('Could not make that label.', true); });
@@ -820,11 +956,12 @@
       var d = SF.state.data.labels, list = tickedProducts(), key = labelSize();
       if (!list.length) { SF.toast('Tick at least one product.', true); return; }
       SF.toast('Making ' + list.length + ' label' + (list.length === 1 ? '' : 's') + '…');
-      Promise.all(list.map(function (p) {
-        return SFL.pngBytes(p, key, d.profile.name).then(function (bytes) {
+      var look = labelLook();
+      SFL.useLogo(look.logo).then(function () { return Promise.all(list.map(function (p) {
+        return SFL.pngBytes(p, key, d.profile.name, look).then(function (bytes) {
           return { name: SFL.fileName(p, key), bytes: bytes };
         });
-      })).then(function (files) {
+      })); }).then(function (files) {
         var shop = String(d.profile.name || 'labels').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
         SFL.save(SFL.zip(files), shop + '-labels-' + key + '.zip');
         SF.toast('Saved ' + files.length + ' label' + (files.length === 1 ? '' : 's') + ' in one .zip');
@@ -833,11 +970,12 @@
     shareTicked: function () {
       var d = SF.state.data.labels, list = tickedProducts(), key = labelSize();
       if (!list.length) { SF.toast('Tick at least one product.', true); return; }
-      Promise.all(list.map(function (p) {
-        return SFL.png(p, key, d.profile.name).then(function (b) {
+      var look = labelLook();
+      SFL.useLogo(look.logo).then(function () { return Promise.all(list.map(function (p) {
+        return SFL.png(p, key, d.profile.name, look).then(function (b) {
           return new File([b], SFL.fileName(p, key), { type: 'image/png' });
         });
-      })).then(function (files) {
+      })); }).then(function (files) {
         return navigator.share({ files: files, title: d.profile.name + ' labels' });
       }).catch(function (e) {
         if (e && e.name === 'AbortError') return;            // they closed the share sheet
@@ -900,7 +1038,7 @@
         var c = SF.el('c-' + p.id);
         if (!c || !c.checked) return;
         var many = Math.max(1, Math.min(60, Math.floor(Number(SF.el('n-' + p.id).value) || 1)));
-        var svg = QR.svg('SF:' + p.id, { ec: 'M', border: 2 });
+        var svg = QR.svg(SF.site + '?p=' + encodeURIComponent(p.id), { ec: 'L', border: 2 });
         for (var i = 0; i < many; i++) {
           cards.push('<div class="label"><div class="shopname">' + esc(d.profile.name) +
             '</div><div class="nm">' + esc(p.name) + '</div>' +

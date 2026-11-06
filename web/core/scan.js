@@ -130,8 +130,26 @@
     if (stream) { stream.getTracks().forEach(function (t) { t.stop(); }); stream = null; }
   };
 
+  /**
+   * The product a label points at. Labels carry either a link to the product
+   * on the order page (…/<stall>/?p=P01, so any phone camera opens it) or, on
+   * older and very small labels, the short code SF:P01.
+   */
+  function productOf(value) {
+    var v = String(value || '').trim(), m = v.match(/^SF:([A-Za-z0-9_-]+)$/);
+    if (m) return m[1];
+    try {
+      var u = new URL(v);
+      var ours = u.origin === location.origin || /(^|\.)stallflow\.github\.io$/.test(u.hostname);
+      var id = u.searchParams.get('p');
+      if (ours && id && /^[A-Za-z0-9_-]+$/.test(id)) return id;
+    } catch (e) { /* not a link */ }
+    return null;
+  }
+
   function hit(value) {
-    var m = String(value || '').match(/^SF:([A-Za-z0-9_-]+)$/);
+    var id = productOf(value);
+    var m = id ? [null, id] : null;
     if (!m) {
       // A QR code, but not one of ours (the order poster, a payment code…).
       if (!warned) {

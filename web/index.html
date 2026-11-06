@@ -39,6 +39,8 @@
   .basket .line{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
   .basket .amt{font-size:22px;font-weight:800;font-family:var(--mono)}
 
+  .item.hl{background:color-mix(in srgb, var(--brand) 9%, transparent);border-radius:12px;
+    outline:2px solid var(--brand);outline-offset:4px}
   .finder{margin:12px 0 4px}
   .finder input{width:100%}
   .chips{display:flex;gap:8px;overflow-x:auto;padding:10px 0 2px;-webkit-overflow-scrolling:touch}
@@ -79,6 +81,11 @@
 <script>
 var CFG = window.STALLFLOW, DATA = null, CART = {}, CHOOSING = false;
 var FIND = '', CAT = 'all';   // the product search and category chip on this page
+/* A jar's QR opens …/?p=P01: take them straight to that product. */
+var PID = (function(){
+  try { var p = new URLSearchParams(location.search).get('p') || ''; return /^[A-Za-z0-9_-]+$/.test(p) ? p : ''; }
+  catch (e) { return ''; }
+})(), PID_SHOWN = false;
 /* Which market this page is for: ?m=M04 for one market, ?m=home for between
    markets. Without it, the stall's live market, as printed QR codes expect. */
 var WANT = (function(){
@@ -128,7 +135,7 @@ function marketLine(m){
   return esc(m.name) + (m.date ? ' · ' + esc(prettyDate(m.date)) : '') +
     (m.location ? '<br><span class="where">' + esc(m.location) + '</span>' : '');
 }
-function linkFor(m){ return '?m=' + encodeURIComponent(m.id); }
+function linkFor(m){ return '?m=' + encodeURIComponent(m.id) + (PID ? '&p=' + encodeURIComponent(PID) : ''); }
 function apiPost(body){
   // text/plain keeps this a "simple" request so the browser skips the CORS
   // preflight that Apps Script cannot answer.
@@ -276,6 +283,17 @@ function draw(){
         '<button class="block" id="go" onclick="submit()">Reserve — pay at the stall</button></div>'
       : '');
   applyFind();
+  if (PID && !PID_SHOWN) {
+    // Scanned from a jar: show that one, once, and leave the rest of the page alone after.
+    PID_SHOWN = true;
+    var it = el('it-' + PID), p = product(PID);
+    if (it && p) {
+      setTimeout(function(){ it.scrollIntoView({ block: 'center' }); }, 60);
+      toast('You scanned ' + p.name + (p.variant ? ' ' + p.variant : '') + '. Tap + to put one aside.');
+    } else if (!p) {
+      toast('That product is not on sale here right now. Have a look at what is.', true);
+    }
+  }
 }
 
 /** Show only what matches the search and the chosen category; hide empty headings. */
@@ -316,7 +334,7 @@ function itemRow(p){
   var price = money(p.price) + (p.weighed ? ' per ' + esc(p.unit) : '');
   var shown = p.weighed ? qty(have, p.unit) : String(have);
 
-  return '<div class="item' + (out ? ' out' : '') + '" data-text="' +
+  return '<div class="item' + (out ? ' out' : '') + (p.id === PID ? ' hl' : '') + '" id="it-' + esc(p.id) + '" data-text="' +
     esc([p.name, p.variant, p.category].join(' ').toLowerCase()) + '">' +
     '<div class="info"><div class="nm">' + esc(p.name) +
       (p.variant ? ' <span class="muted small">' + esc(p.variant) + '</span>' : '') + '</div>' +

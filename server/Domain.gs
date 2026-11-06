@@ -891,10 +891,44 @@ SF.action('adjustStock', 'stock', 'write', function (p, ctx) {
    8. ACTIONS — labels and the market view
    ========================================================================= */
 
+/**
+ * How the stall's labels look: the style, the contact lines printed on them
+ * (e.g. a name and a mobile number), a black-and-white logo, and whether the
+ * price is printed. The logo is a small PNG kept in the Settings tab.
+ */
+SF.LABEL_LOGO_MAX = 60000;     // characters of data URL: a 1-bit logo is a few thousand
+
+SF.labelLook = function () {
+  return {
+    style: SF.get('labelStyle', 'classic') === 'simple' ? 'simple' : 'classic',
+    contact: String(SF.get('labelContact', '')),
+    logo: String(SF.get('labelLogo', '')),
+    price: String(SF.get('labelPrice', 'no')) === 'yes'
+  };
+};
+
+SF.action('saveLabelLook', 'reports', 'write', function (p) {
+  var contact = String(p.contact == null ? '' : p.contact).replace(/\r/g, '')
+    .split('\n').map(function (l) { return l.trim().slice(0, 40); }).filter(Boolean).slice(0, 3).join('\n');
+  var logo = String(p.logo == null ? '' : p.logo);
+  if (logo && !/^data:image\/png;base64,[A-Za-z0-9+\/=]+$/.test(logo)) {
+    return { ok: false, message: 'The logo has to be a picture. Choose it again.' };
+  }
+  if (logo.length > SF.LABEL_LOGO_MAX) {
+    return { ok: false, message: 'That logo is too detailed to keep. Try a simpler or smaller picture.' };
+  }
+  SF.set('labelStyle', p.style === 'simple' ? 'simple' : 'classic');
+  SF.set('labelContact', contact);
+  if (p.logo !== undefined) SF.set('labelLogo', logo);
+  SF.set('labelPrice', p.price ? 'yes' : 'no');
+  return { ok: true };
+});
+
 SF.action('labels', 'labels', 'read', function () {
   var pr = SF.profile();
   return {
     profile: { name: pr.name, tagline: pr.tagline, colour: pr.colour },
+    look: SF.labelLook(),
     markets: SF.orderableMarkets(),
     live: SF.publicMarket(SF.orderMarket('')),
     products: SF.products({ all: true }).map(function (p) {
