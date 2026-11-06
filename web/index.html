@@ -39,6 +39,12 @@
   .basket .line{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
   .basket .amt{font-size:22px;font-weight:800;font-family:var(--mono)}
 
+  .item.hl{background:color-mix(in srgb, var(--brand) 9%, transparent);border-radius:12px;
+    outline:2px solid var(--brand);outline-offset:4px}
+  .wa{display:flex;align-items:center;justify-content:center;gap:10px;min-height:54px;margin:16px 0 6px;
+    background:#1F8F4E;color:#fff;border-radius:14px;font-weight:800;font-size:17px;text-decoration:none;
+    padding:10px 16px;text-align:center}
+  .wa::before{content:"";width:22px;height:22px;flex:none;background:no-repeat center/contain url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='white'%3E%3Cpath d='M12 2a10 10 0 0 0-8.6 15.1L2 22l5-1.3A10 10 0 1 0 12 2zm0 18.2c-1.5 0-3-.4-4.3-1.2l-.3-.2-3 .8.8-2.9-.2-.3A8.2 8.2 0 1 1 12 20.2zm4.5-6.1c-.2-.1-1.5-.7-1.7-.8-.2-.1-.4-.1-.6.1l-.8 1c-.1.2-.3.2-.5.1a6.7 6.7 0 0 1-3.3-2.9c-.2-.4.2-.4.7-1.3.1-.2 0-.3 0-.4l-.8-1.8c-.2-.5-.4-.4-.6-.4h-.5c-.2 0-.4.1-.6.3a2.5 2.5 0 0 0-.8 1.9c0 1.1.8 2.2.9 2.4.1.1 1.6 2.5 3.9 3.5 1.5.6 2 .7 2.7.6.4-.1 1.5-.6 1.7-1.2.2-.6.2-1.1.1-1.2l-.5-.3z'/%3E%3C/svg%3E")}
   .finder{margin:12px 0 4px}
   .finder input{width:100%}
   .chips{display:flex;gap:8px;overflow-x:auto;padding:10px 0 2px;-webkit-overflow-scrolling:touch}
@@ -79,6 +85,11 @@
 <script>
 var CFG = window.STALLFLOW, DATA = null, CART = {}, CHOOSING = false;
 var FIND = '', CAT = 'all';   // the product search and category chip on this page
+/* A jar's QR opens …/?p=P01: take them straight to that product. */
+var PID = (function(){
+  try { var p = new URLSearchParams(location.search).get('p') || ''; return /^[A-Za-z0-9_-]+$/.test(p) ? p : ''; }
+  catch (e) { return ''; }
+})(), PID_SHOWN = false;
 /* Which market this page is for: ?m=M04 for one market, ?m=home for between
    markets. Without it, the stall's live market, as printed QR codes expect. */
 var WANT = (function(){
@@ -128,7 +139,7 @@ function marketLine(m){
   return esc(m.name) + (m.date ? ' · ' + esc(prettyDate(m.date)) : '') +
     (m.location ? '<br><span class="where">' + esc(m.location) + '</span>' : '');
 }
-function linkFor(m){ return '?m=' + encodeURIComponent(m.id); }
+function linkFor(m){ return '?m=' + encodeURIComponent(m.id) + (PID ? '&p=' + encodeURIComponent(PID) : ''); }
 function apiPost(body){
   // text/plain keeps this a "simple" request so the browser skips the CORS
   // preflight that Apps Script cannot answer.
@@ -276,6 +287,17 @@ function draw(){
         '<button class="block" id="go" onclick="submit()">Reserve — pay at the stall</button></div>'
       : '');
   applyFind();
+  if (PID && !PID_SHOWN) {
+    // Scanned from a jar: show that one, once, and leave the rest of the page alone after.
+    PID_SHOWN = true;
+    var it = el('it-' + PID), p = product(PID);
+    if (it && p) {
+      setTimeout(function(){ it.scrollIntoView({ block: 'center' }); }, 60);
+      toast('You scanned ' + p.name + (p.variant ? ' ' + p.variant : '') + '. Tap + to put one aside.');
+    } else if (!p) {
+      toast('That product is not on sale here right now. Have a look at what is.', true);
+    }
+  }
 }
 
 /** Show only what matches the search and the chosen category; hide empty headings. */
@@ -316,7 +338,7 @@ function itemRow(p){
   var price = money(p.price) + (p.weighed ? ' per ' + esc(p.unit) : '');
   var shown = p.weighed ? qty(have, p.unit) : String(have);
 
-  return '<div class="item' + (out ? ' out' : '') + '" data-text="' +
+  return '<div class="item' + (out ? ' out' : '') + (p.id === PID ? ' hl' : '') + '" id="it-' + esc(p.id) + '" data-text="' +
     esc([p.name, p.variant, p.category].join(' ').toLowerCase()) + '">' +
     '<div class="info"><div class="nm">' + esc(p.name) +
       (p.variant ? ' <span class="muted small">' + esc(p.variant) + '</span>' : '') + '</div>' +
@@ -385,8 +407,38 @@ function submit(){
     });
 }
 
+/** A South African number as WhatsApp wants it: 066 123 4567 → 27661234567. */
+function waNumber(n){
+  var d = String(n||'').replace(/\D/g,'');
+  if (/^0\d{9}$/.test(d)) d = '27' + d.slice(1);
+  return d.length >= 10 && d.length <= 15 ? d : '';
+}
+
+/** The order, written out for WhatsApp: what, for when, how much, and what we need back. */
+function waText(res, lines){
+  var pr = DATA.profile, m = res.market;
+  var who = pr.ownerName ? 'Hi ' + pr.ownerName + ', ' : 'Hi, ';
+  return who + 'I have just ordered from ' + pr.name + '.\n\n' +
+    'Order ' + res.orderNo + ' · ' + res.name + '\n' +
+    (m ? 'For: ' + (m.home ? 'between markets (collect by arrangement)'
+                 : m.name + (m.date ? ', ' + prettyDate(m.date) : '')) + '\n' : '') +
+    lines.map(function(l){ return '• ' + l; }).join('\n') + '\n' +
+    'Total: ' + money(res.total) + '\n' +
+    (res.note ? 'Note: ' + res.note + '\n' : '') +
+    '\nPlease confirm, and send your banking details if I can pay ahead. Thank you!';
+}
+
 function confirmed(res){
   var pr = DATA.profile;
+  // Written out now, while the basket still holds what they chose.
+  var lines = Object.keys(CART).map(function(id){
+    var p = product(id); if (!p) return '';
+    return (p.weighed ? qty(CART[id], p.unit) : CART[id] + ' ×') + ' ' + p.name +
+      (p.variant ? ' ' + p.variant : '') + ' — ' + money(p.price * CART[id]);
+  }).filter(Boolean);
+  var wa = waNumber(pr.whatsapp);
+  var waLink = wa ? 'https://wa.me/' + wa + '?text=' + encodeURIComponent(waText(res, lines)) : '';
+  CART = {};
   el('app').innerHTML =
     '<div class="hero"><h1>' + esc(pr.name) + '</h1>' +
       (pr.tagline ? '<div class="tag">' + esc(pr.tagline) + '</div>' : '') + '</div>' +
@@ -402,8 +454,12 @@ function confirmed(res){
         : '<div class="say"><b>Give your name at the stall' +
           (res.market && res.market.date ? ' on ' + esc(prettyDate(res.market.date)) : '') +
           '.</b><br>You pay there — cash or card, whatever you like. Nothing has been charged.</div>') +
-      (pr.whatsapp ? '<p class="muted small">Need to change it? WhatsApp ' +
-        esc(pr.whatsapp) + '.</p>' : '') +
+      (waLink
+        ? '<a class="wa" id="sendwa" href="' + esc(waLink) + '" target="_blank" rel="noopener">' +
+            'Send my order to ' + esc(pr.ownerName || pr.name) + ' on WhatsApp</a>' +
+          '<p class="muted small">' + esc(pr.ownerName || 'They') + ' will confirm it and send banking ' +
+            'details if you would like to pay ahead.</p>'
+        : (pr.whatsapp ? '<p class="muted small">Need to change it? WhatsApp ' + esc(pr.whatsapp) + '.</p>' : '')) +
     '</div><div class="foot">Powered by StallFlow</div></div>';
   window.scrollTo(0,0);
 }

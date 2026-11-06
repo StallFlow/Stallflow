@@ -403,7 +403,7 @@ SF.action('catalogue', null, 'read', function (p) {
 
   return {
     profile: {
-      name: pr.name, tagline: pr.tagline, whatsapp: pr.whatsapp,
+      name: pr.name, tagline: pr.tagline, whatsapp: pr.whatsapp, ownerName: pr.ownerName || '',
       colour: pr.colour, ink: pr.ink, paper: pr.paper, vocab: pr.vocab
     },
     open: SF.takesOrders(market),
@@ -465,7 +465,7 @@ SF.action('placeOrder', null, 'write', function (p, ctx) {
   SF.emit('order.placed', { orderNo: no, total: built.total, lines: built.lines }, ctx);
 
   return { ok: true, orderNo: no, total: built.total, units: built.units, name: name,
-           market: SF.publicMarket(m) };
+           note: String(p.note || '').slice(0, 140), market: SF.publicMarket(m) };
 });
 
 /* =========================================================================
@@ -891,10 +891,44 @@ SF.action('adjustStock', 'stock', 'write', function (p, ctx) {
    8. ACTIONS — labels and the market view
    ========================================================================= */
 
+/**
+ * How the stall's labels look: the style, the contact lines printed on them
+ * (e.g. a name and a mobile number), a black-and-white logo, and whether the
+ * price is printed. The logo is a small PNG kept in the Settings tab.
+ */
+SF.LABEL_LOGO_MAX = 60000;     // characters of data URL: a 1-bit logo is a few thousand
+
+SF.labelLook = function () {
+  return {
+    style: SF.get('labelStyle', 'classic') === 'simple' ? 'simple' : 'classic',
+    contact: String(SF.get('labelContact', '')),
+    logo: String(SF.get('labelLogo', '')),
+    price: String(SF.get('labelPrice', 'no')) === 'yes'
+  };
+};
+
+SF.action('saveLabelLook', 'settings', 'write', function (p) {
+  var contact = String(p.contact == null ? '' : p.contact).replace(/\r/g, '')
+    .split('\n').map(function (l) { return l.trim().slice(0, 40); }).filter(Boolean).slice(0, 3).join('\n');
+  var logo = String(p.logo == null ? '' : p.logo);
+  if (logo && !/^data:image\/png;base64,[A-Za-z0-9+\/=]+$/.test(logo)) {
+    return { ok: false, message: 'The logo has to be a picture. Choose it again.' };
+  }
+  if (logo.length > SF.LABEL_LOGO_MAX) {
+    return { ok: false, message: 'That logo is too detailed to keep. Try a simpler or smaller picture.' };
+  }
+  SF.set('labelStyle', p.style === 'simple' ? 'simple' : 'classic');
+  SF.set('labelContact', contact);
+  if (p.logo !== undefined) SF.set('labelLogo', logo);
+  SF.set('labelPrice', p.price ? 'yes' : 'no');
+  return { ok: true };
+});
+
 SF.action('labels', 'labels', 'read', function () {
   var pr = SF.profile();
   return {
     profile: { name: pr.name, tagline: pr.tagline, colour: pr.colour },
+    look: SF.labelLook(),
     markets: SF.orderableMarkets(),
     live: SF.publicMarket(SF.orderMarket('')),
     products: SF.products({ all: true }).map(function (p) {
@@ -982,35 +1016,42 @@ SF.action('dashboard', 'reports', 'read', function (p) {
   };
 });
 
-SF.action('addMarket', 'reports', 'write', function (p) {
+SF.action('addMarket', 'settings', 'write', function (p) {
   var name = String(p.name || '').trim().slice(0, 60);
   if (name.length < 2) return { ok: false, message: 'Give the market a name.' };
+  var date = String(p.date || '').trim();
+  if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) return { ok: false, message: 'That date is not a date.' };
   var id = 'M' + ('00' + (SF.rows('markets').length + 1)).slice(-2);
   SF.append('markets', {
-    MarketId: id, Name: name, Date: String(p.date || ''),
+    MarketId: id, Name: name, Date: date,
     Location: String(p.location || '').slice(0, 160), Status: 'planned', Note: ''
   });
   if (p.makeActive) { SF.set('activeMarket', id); SF.purgeCustomers(); }
   return { ok: true, id: id };
 });
 
-SF.action('setActiveMarket', 'reports', 'write', function (p) {
+SF.action('setActiveMarket', 'settings', 'write', function (p) {
+  var id = String(p.marketId || '');
+  // Only a market that exists: a made-up id would break the order page and the QR codes.
+  if (!SF.rows('markets').some(function (r) { return String(r.MarketId) === id; })) {
+    return { ok: false, message: 'That market is not on the list.' };
+  }
   SF.set('activeMarket', String(p.marketId || ''));
   SF.purgeCustomers();
   return { ok: true };
 });
 
-SF.action('setPreordersOpen', 'reports', 'write', function (p) {
+SF.action('setPreordersOpen', 'settings', 'write', function (p) {
   SF.set('preordersOpen', p.open ? 'yes' : 'no');
   return { ok: true, open: !!p.open };
 });
 
-SF.action('setCollectStep', 'reports', 'write', function (p) {
+SF.action('setCollectStep', 'settings', 'write', function (p) {
   SF.set('collectStep', p.on ? 'yes' : 'no');
   return { ok: true, on: !!p.on };
 });
 
-SF.action('setHomeOrders', 'reports', 'write', function (p) {
+SF.action('setHomeOrders', 'settings', 'write', function (p) {
   SF.set('homeOrders', p.open ? 'yes' : 'no');
   return { ok: true, open: !!p.open };
 });
@@ -1046,7 +1087,7 @@ SF.action('deleteExpense', 'expenses', 'write', function (p) {
    ========================================================================= */
 
 /** Owner or manager: put every unpaid reservation for the live market back on the shelf. */
-SF.action('releaseUnpaid', 'reports', 'write', function (p, ctx) {
+SF.action('releaseUnpaid', 'settings', 'write', function (p, ctx) {
   var market = SF.activeMarket(), n = 0;
   SF.orders().forEach(function (o) {
     if (o.marketId !== market || o.status !== 'reserved') return;
@@ -1080,21 +1121,33 @@ SF.action('boot', 'sell', 'read', function (p, ctx) {
   };
 });
 
-SF.action('saveProfile', 'reports', 'write', function (p, ctx) {
+SF.action('saveProfile', 'settings', 'write', function (p, ctx) {
   if (ctx.role !== 'owner' && ctx.role !== 'manager') {
     return { ok: false, message: 'Only an owner or manager can change the shop details.' };
   }
   var stored = SF.json(SF.get('profile', '{}'), {});
-  ['name', 'tagline', 'whatsapp', 'colour', 'ink', 'paper'].forEach(function (k) {
+  ['name', 'tagline', 'whatsapp', 'ownerName'].forEach(function (k) {
     if (p[k] !== undefined) stored[k] = String(p[k]).slice(0, 120);
   });
-  if (p.vocab) stored.vocab = p.vocab;
-  if (p.plugins) stored.plugins = p.plugins;
+  ['colour', 'ink', 'paper'].forEach(function (k) {
+    if (p[k] !== undefined && SF.cleanColour(p[k])) stored[k] = SF.cleanColour(p[k]);
+  });
+  if (p.vocab && typeof p.vocab === 'object') {
+    var words = {}, known = (SF.presets[SF.get('preset', 'general')] || SF.presets.general).vocab;
+    Object.keys(known).forEach(function (k) {
+      if (p.vocab[k] !== undefined && SF.cleanWord(p.vocab[k])) words[k] = SF.cleanWord(p.vocab[k]);
+    });
+    stored.vocab = words;
+  }
+  if (Array.isArray(p.plugins)) {
+    var ids = SF.registry.plugins.map(function (x) { return x.id; });
+    stored.plugins = p.plugins.map(String).filter(function (x) { return ids.indexOf(x) !== -1; });
+  }
   SF.set('profile', stored);
   return { ok: true };
 });
 
-SF.action('savePluginSettings', 'reports', 'write', function (p) {
+SF.action('savePluginSettings', 'settings', 'write', function (p) {
   var all = SF.json(SF.get('pluginSettings', '{}'), {});
   all[String(p.plugin)] = p.values || {};
   SF.set('pluginSettings', all);
@@ -1112,7 +1165,7 @@ SF.action('savePluginSettings', 'reports', 'write', function (p) {
  * Two keys, not one: an owner's token AND the exact phrase. Nothing else in
  * the API destroys history, so it does not get to be a one-tap action.
  */
-SF.action('resetTrading', 'reports', 'write', function (p, ctx) {
+SF.action('resetTrading', 'settings', 'write', function (p, ctx) {
   if (ctx.role !== 'owner') {
     return { ok: false, message: 'Only the owner can reset trading data.' };
   }
@@ -1256,4 +1309,208 @@ SF.action('reportIssue', 'report', 'write', function (p, ctx) {
   SF.setCell('issues', row, 'Status', gh.ok ? 'sent' : 'saved (' + gh.why + ')');
   if (gh.ok) SF.setCell('issues', row, 'Link', gh.url);
   return { ok: true, id: id, sent: gh.ok };
+});
+
+/* =========================================================================
+   10. STOCKTAKE — everyone counts, the owner approves
+   =========================================================================
+   One person (owner or manager) starts it; the stock on hand at that moment
+   is kept as the snapshot. Anyone signed in picks a location and counts what
+   is there; each "done" is a new submission and the latest per location
+   counts. The owner reviews counted against expected and approves: the
+   difference goes into the stock ledger as 'stocktake' movements (never a
+   count written over the stock), and the loss is recorded at cost. */
+
+SF.DEFAULT_COUNT_LOCATIONS = ['Stall table', 'Storeroom', 'Car'];
+
+SF.countLocations = function () {
+  var l = SF.json(SF.get('countLocations', ''), null);
+  return Array.isArray(l) && l.length ? l.map(String) : SF.DEFAULT_COUNT_LOCATIONS.slice();
+};
+
+SF.openCount = function () {
+  var open = null;
+  SF.rows('stockcounts').forEach(function (r) { if (String(r.Status) === 'open') open = r; });
+  return open;
+};
+
+/** Per location: who is on it, and the latest submission (product → qty). */
+SF.countProgress = function (countId) {
+  var locs = {};
+  SF.rows('countlines').forEach(function (r) {
+    if (String(r.CountId) !== countId) return;
+    var name = String(r.Location), sub = String(r.Submission);
+    var l = locs[name] || (locs[name] = { claim: null, sub: null, subAt: 0, lines: {} });
+    var at = r.When && r.When.getTime ? r.When.getTime() : 0;
+    if (sub.indexOf('claim-') === 0) {
+      if (!l.claim || at >= l.claim.at) l.claim = { by: String(r.By), at: at };
+      return;
+    }
+    if (sub !== l.sub) {
+      if (at < l.subAt) return;                 // an older submission: superseded
+      l.sub = sub; l.subAt = at; l.lines = {}; l.by = String(r.By);
+    }
+    if (r.ProductId) l.lines[String(r.ProductId)] = (l.lines[String(r.ProductId)] || 0) + SF.num(r.Qty);
+  });
+  return locs;
+};
+
+SF.countReview = function (row) {
+  var snap = SF.json(row.Snapshot, {}), progress = SF.countProgress(String(row.CountId));
+  var counted = {};
+  Object.keys(progress).forEach(function (loc) {
+    if (!progress[loc].sub) return;
+    var lines = progress[loc].lines;
+    Object.keys(lines).forEach(function (id) { counted[id] = (counted[id] || 0) + lines[id]; });
+  });
+  var cost = SF.costPerUnit();
+  return SF.products({ all: true }).filter(function (p) { return p.type !== 'made'; }).map(function (p) {
+    var expected = SF.num(snap[p.id]), c = counted[p.id];
+    return { id: p.id, name: p.name, variant: p.variant, unit: p.unit, expected: expected,
+             counted: c === undefined ? null : Math.round(c * 1000) / 1000,
+             diff: c === undefined ? null : Math.round((c - expected) * 1000) / 1000,
+             cost: cost[p.id] || 0 };
+  });
+};
+
+SF.action('countState', 'count', 'read', function (p, ctx) {
+  var open = SF.openCount(), locations = SF.countLocations(), out = {
+    locations: locations,
+    canStart: SF.can(ctx.role, 'stock'), canManage: SF.can(ctx.role, 'stock'),
+    canApprove: ctx.role === 'owner',
+    products: SF.products({ all: true }).filter(function (x) { return x.type !== 'made'; }).map(function (x) {
+      return { id: x.id, name: x.name, variant: x.variant, category: x.category, unit: x.unit,
+               weighed: x.weighed, active: x.active };
+    }),
+    open: null,
+    history: SF.rows('stockcounts').filter(function (r) { return String(r.Status) !== 'open'; })
+      .slice(-10).reverse().map(function (r) {
+        return { id: String(r.CountId), status: String(r.Status), by: String(r.ClosedBy || ''),
+                 when: r.ClosedAt && r.ClosedAt.getTime ? Utilities.formatDate(r.ClosedAt, SF.TZ, 'yyyy-MM-dd HH:mm') : '',
+                 result: SF.json(r.Result, {}) };
+      })
+  };
+  if (open) {
+    var progress = SF.countProgress(String(open.CountId));
+    out.open = {
+      id: String(open.CountId), startedBy: String(open.StartedBy),
+      startedAt: open.StartedAt && open.StartedAt.getTime ? Utilities.formatDate(open.StartedAt, SF.TZ, 'yyyy-MM-dd HH:mm') : '',
+      locations: locations.map(function (name) {
+        var l = progress[name] || {};
+        var items = 0;
+        Object.keys(l.lines || {}).forEach(function (k) { items += l.lines[k]; });
+        var counting = l.claim && (!l.sub || l.claim.at > l.subAt);
+        return { name: name, status: counting ? 'counting' : l.sub ? 'done' : 'todo',
+                 by: counting ? l.claim.by : l.sub ? l.by : '', items: Math.round(items * 1000) / 1000 };
+      })
+    };
+    if (out.canApprove) out.open.review = SF.countReview(open);
+  }
+  return out;
+});
+
+SF.action('countStart', 'stock', 'write', function (p, ctx) {
+  if (SF.openCount()) return { ok: false, message: 'A stocktake is already going. Finish or cancel it first.' };
+  var hand = SF.onHand(), snap = {};
+  SF.products({ all: true }).forEach(function (x) { if (x.type !== 'made') snap[x.id] = hand[x.id] || 0; });
+  var id = 'ST' + ('00' + (SF.rows('stockcounts').length + 1)).slice(-3);
+  SF.append('stockcounts', { CountId: id, StartedAt: new Date(), StartedBy: ctx.user || ctx.role,
+                             Status: 'open', Snapshot: JSON.stringify(snap) });
+  return { ok: true, id: id };
+});
+
+SF.countCheck = function (p) {
+  var open = SF.openCount();
+  if (!open || String(open.CountId) !== String(p.countId || '')) {
+    return { ok: false, message: 'That stocktake is no longer open.' };
+  }
+  if (SF.countLocations().indexOf(String(p.location || '')) === -1) {
+    return { ok: false, message: 'That location is not on the list any more.' };
+  }
+  return null;
+};
+
+/** "I am counting here": others see it, so two people do not count the same shelf. */
+SF.action('countClaim', 'count', 'write', function (p, ctx) {
+  var bad = SF.countCheck(p);
+  if (bad) return bad;
+  SF.append('countlines', { CountId: String(p.countId), Location: String(p.location),
+    Submission: 'claim-' + String(p.opId || Date.now()).slice(0, 40), ProductId: '', Qty: '',
+    By: ctx.user || ctx.role, When: new Date() });
+  return { ok: true };
+});
+
+SF.action('countSave', 'count', 'write', function (p, ctx) {
+  var bad = SF.countCheck(p);
+  if (bad) return bad;
+  var known = {};
+  SF.products({ all: true }).forEach(function (x) { known[x.id] = x; });
+  var lines = Array.isArray(p.lines) ? p.lines.slice(0, 500) : [];
+  var clean = [];
+  for (var i = 0; i < lines.length; i++) {
+    var id = String(lines[i] && lines[i].id || ''), q = Number(lines[i] && lines[i].qty);
+    if (!known[id] || known[id].type === 'made') continue;
+    if (!(q >= 0) || q > 100000) return { ok: false, message: 'A count of ' + lines[i].qty + ' does not look right.' };
+    if (q > 0) clean.push({ id: id, qty: Math.round(q * 1000) / 1000 });
+  }
+  var sub = 'S' + String(p.opId || Date.now()).slice(0, 40), now = new Date(), by = ctx.user || ctx.role;
+  if (!clean.length) {
+    SF.append('countlines', { CountId: String(p.countId), Location: String(p.location), Submission: sub,
+                              ProductId: '', Qty: 0, By: by, When: now });
+  }
+  clean.forEach(function (l) {
+    SF.append('countlines', { CountId: String(p.countId), Location: String(p.location), Submission: sub,
+                              ProductId: l.id, Qty: l.qty, By: by, When: now });
+  });
+  return { ok: true, items: clean.length };
+});
+
+SF.action('countApprove', 'stock', 'write', function (p, ctx) {
+  if (ctx.role !== 'owner') return { ok: false, message: 'Only the owner can approve a stocktake.' };
+  var open = SF.openCount();
+  if (!open || String(open.CountId) !== String(p.countId || '')) return { ok: false, message: 'That stocktake is no longer open.' };
+  var zero = p.uncounted === 'zero', ref = 'Stocktake ' + open.CountId;
+  var res = { moved: 0, lossUnits: 0, lossValue: 0, foundUnits: 0, foundValue: 0, uncounted: 0 };
+  SF.countReview(open).forEach(function (r) {
+    var diff = r.diff;
+    if (diff === null) {
+      if (!zero || !r.expected) { if (r.expected) res.uncounted++; return; }
+      diff = -r.expected;                       // nobody counted it, and the owner said: none left
+    }
+    if (!diff) return;
+    SF.move(r.id, diff, 'stocktake', ref);
+    res.moved++;
+    if (diff < 0) { res.lossUnits += -diff; res.lossValue += -diff * r.cost; }
+    else { res.foundUnits += diff; res.foundValue += diff * r.cost; }
+  });
+  res.lossValue = Math.round(res.lossValue * 100) / 100;
+  res.foundValue = Math.round(res.foundValue * 100) / 100;
+  SF.setCell('stockcounts', open._row, 'Status', 'approved');
+  SF.setCell('stockcounts', open._row, 'ClosedAt', new Date());
+  SF.setCell('stockcounts', open._row, 'ClosedBy', ctx.user || ctx.role);
+  SF.setCell('stockcounts', open._row, 'Result', JSON.stringify(res));
+  return { ok: true, result: res };
+});
+
+SF.action('countCancel', 'stock', 'write', function (p, ctx) {
+  if (ctx.role !== 'owner' && ctx.role !== 'manager') return { ok: false, message: 'Only an owner or manager can cancel it.' };
+  var open = SF.openCount();
+  if (!open) return { ok: true };
+  SF.setCell('stockcounts', open._row, 'Status', 'cancelled');
+  SF.setCell('stockcounts', open._row, 'ClosedAt', new Date());
+  SF.setCell('stockcounts', open._row, 'ClosedBy', ctx.user || ctx.role);
+  return { ok: true };
+});
+
+SF.action('countLocationsSave', 'stock', 'write', function (p) {
+  var seen = {}, list = (Array.isArray(p.locations) ? p.locations : []).map(function (x) {
+    return String(x || '').replace(/\s+/g, ' ').trim().slice(0, 30);
+  }).filter(function (x) {
+    var k = x.toLowerCase();
+    if (!x || seen[k]) return false;
+    seen[k] = true; return true;
+  }).slice(0, 30);
+  if (!list.length) return { ok: false, message: 'Keep at least one location.' };
+  SF.set('countLocations', JSON.stringify(list));
+  return { ok: true, locations: list };
 });

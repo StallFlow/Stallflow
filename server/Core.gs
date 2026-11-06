@@ -18,7 +18,7 @@
 var SF = SF || {};
 
 SF.VERSION = '2.0.0';
-SF.SCHEMA = 8;                        // bump when SHEETS changes; see MIGRATIONS
+SF.SCHEMA = 9;                        // bump when SHEETS changes; see MIGRATIONS
 SF.TZ = 'Africa/Johannesburg';
 
 /* =========================================================================
@@ -41,7 +41,12 @@ SF.SHEETS = {
   recipes:   ['Name', 'Makes', 'Lines', 'UpdatedAt', 'UpdatedBy'],
   audit:     ['When', 'Actor', 'Role', 'Device', 'Action', 'Target', 'Detail', 'Outcome'],
   issues:    ['IssueId', 'When', 'Reporter', 'Role', 'Screen', 'Message', 'Context',
-              'Status', 'Link']
+              'Status', 'Link'],
+  // Stocktakes: one row each. Snapshot is what the stock said when it started.
+  stockcounts: ['CountId', 'StartedAt', 'StartedBy', 'Status', 'Snapshot', 'ClosedAt',
+                'ClosedBy', 'Result'],
+  // Every count submitted, never edited: the latest submission per location counts.
+  countlines: ['CountId', 'Location', 'Submission', 'ProductId', 'Qty', 'By', 'When']
 };
 
 SF.sheet = function (key) {
@@ -132,6 +137,16 @@ SF.set = function (key, value) {
 };
 
 /** Shop identity and wording, merged over the active preset. */
+/** A vocabulary word ("jar", "pots"): letters and spaces only, short. */
+SF.cleanWord = function (w) {
+  return String(w == null ? '' : w).replace(/[<>&"'`=\\\/(){};]/g, '').trim().slice(0, 24);
+};
+/** A colour: #abc or #aabbcc (or with alpha), or nothing. */
+SF.cleanColour = function (c) {
+  c = String(c == null ? '' : c).trim();
+  return /^#[0-9a-fA-F]{3,8}$/.test(c) ? c : '';
+};
+
 SF.profile = function () {
   var preset = SF.presets[SF.get('preset', 'general')] || SF.presets.general;
   var stored = SF.json(SF.get('profile', '{}'), {});
@@ -147,8 +162,14 @@ SF.profile = function () {
   if (stored.vocab) {
     p.vocab = {};
     Object.keys(preset.vocab).forEach(function (k) { p.vocab[k] = preset.vocab[k]; });
-    Object.keys(stored.vocab).forEach(function (k) { p.vocab[k] = stored.vocab[k]; });
+    // Only the words the preset knows, cleaned on the way out as well as in.
+    Object.keys(preset.vocab).forEach(function (k) {
+      if (stored.vocab[k] !== undefined && SF.cleanWord(stored.vocab[k])) p.vocab[k] = SF.cleanWord(stored.vocab[k]);
+    });
   }
+  ['colour', 'ink', 'paper'].forEach(function (k) {
+    if (stored[k] !== undefined && !SF.cleanColour(stored[k])) p[k] = { colour: '#7B2D43', ink: '#221A1C', paper: '#FCF8F4' }[k];
+  });
   return p;
 };
 
@@ -163,9 +184,9 @@ SF.profile = function () {
 
 SF.ROLES = {
   owner:   ['*'],
-  manager: ['sell', 'orders', 'stock', 'price', 'labels', 'reports', 'expenses', 'report'],
-  cashier: ['sell', 'orders', 'labels', 'report'],
-  viewer:  ['reports', 'report']
+  manager: ['sell', 'orders', 'stock', 'price', 'labels', 'reports', 'expenses', 'report', 'count', 'settings'],
+  cashier: ['sell', 'orders', 'labels', 'report', 'count'],
+  viewer:  ['reports', 'report', 'count']
 };
 
 SF.secret = function () {
@@ -526,6 +547,9 @@ SF.MIGRATIONS = [
     } },
   { to: 8, what: 'Add the Issues tab for problems reported from the app', run: function () {
       SF.sheet('issues');
+    } },
+  { to: 9, what: 'Add the Stockcounts and Countlines tabs for stocktakes', run: function () {
+      SF.sheet('stockcounts'); SF.sheet('countlines');
     } }
 ];
 
@@ -591,7 +615,7 @@ SF.action('health', 'reports', 'read', function () {
 // Returned inside `data` like any read; the client checks data.ok.
 SF.action('signIn', null, 'read', function (p) { return SF.signIn(p); });
 
-SF.action('setPin', 'reports', 'write', function (p, ctx) {
+SF.action('setPin', 'settings', 'write', function (p, ctx) {
   if (ctx.role !== 'owner') return { ok: false, message: 'Only the owner can set PINs.' };
   if (SF.googleOn()) return { ok: false, message: 'PINs are off. Add people under People.' };
   return SF.setPin(String(p.role), String(p.pin));

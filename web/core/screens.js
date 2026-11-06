@@ -206,8 +206,8 @@
     if (!groups[cat]) cat = order[0];
 
     var chips = '<div class="chips">' + order.map(function (c) {
-      return '<button class="' + (c === cat ? 'on' : '') + '" onclick="SFT.cat(\'' +
-        esc(c).replace(/'/g, '&#39;') + '\')">' + esc(c) + '</button>';
+      return '<button class="' + (c === cat ? 'on' : '') + '" data-c="' + esc(c) + '" ' +
+        'onclick="SFT.cat(this.getAttribute(\'data-c\'))">' + esc(c) + '</button>';
     }).join('') + '</div>';
 
     var byName = {}, names = [];
@@ -235,7 +235,7 @@
       });
       var out = !open && left <= 0;
       return '<button class="tile' + (out ? ' out' : '') + '"' + (out ? ' disabled' : '') +
-        ' onclick="SFT.name(\'' + esc(n).replace(/'/g, '&#39;') + '\')">' +
+        ' data-n="' + esc(n) + '" onclick="SFT.name(this.getAttribute(\'data-n\'))">' +
         '<span class="nm">' + esc(n) + ' <span class="vr">' + list.length + ' sizes · tap to choose</span></span>' +
         '<span class="bot"><span class="pr">' + money(from) + '</span>' +
         (out ? '<span class="st sold">SOLD OUT</span>'
@@ -1033,6 +1033,7 @@
       ['cook', pots ? 'Cook a pot' : 'Add a ' + v.run],
       ['shelf', 'Shelf & prices'],
       ['cupboard', 'Cupboard'],
+      ['count', 'Stocktake'],
       ['history', 'History']
     ];
     if (pots) tabs.splice(3, 0, ['other', 'Other']);
@@ -1042,6 +1043,7 @@
           'that is not a pot of jam.</div>' + runCard(s, v)
       : on === 'shelf' ? priceTable(s)
       : on === 'cupboard' ? pantryCard(s)
+      : on === 'count' ? (window.SFCount ? SFCount.render() : '')
       : runHistory(s, v);
     return tb.html + body;
   }
@@ -1054,8 +1056,9 @@
                                      { name: String(r.item).toLowerCase(), qty: r.qty }) + '><td>' + esc(r.item) + (r.note ? ' <span class="muted small">' + esc(r.note) + '</span>' : '') +
         '</td><td class="num"><b>' + esc(r.qty) + '</b> ' + esc(r.unit) + '</td>' +
         '<td class="muted small">' + esc(r.updated) + '</td>' +
-        '<td><button class="quiet" onclick="SFS.editPantry(\'' + esc(r.item).replace(/'/g, '&#39;') +
-        '\',' + r.qty + ',\'' + r.unit + '\')">change</button></td></tr>';
+        '<td><button class="quiet" data-i="' + esc(r.item) + '" data-q="' + esc(r.qty) + '" data-u="' + esc(r.unit) + '" ' +
+        'onclick="SFS.editPantry(this.getAttribute(\'data-i\'),this.getAttribute(\'data-q\'),this.getAttribute(\'data-u\'))">' +
+        'change</button></td></tr>';
     }).join('') : '<tr><td colspan="4" class="empty">Nothing yet. Add fruit, sugar, ' +
       'empty bottles — whatever is waiting to be cooked.</td></tr>';
     return '<div class="card"><h2>Uncooked stock</h2>' +
@@ -1385,6 +1388,24 @@
       SF.el('pu').value = t === 'weighed' ? 'kg' : 'each';
     },
 
+    /** Scan a jar on the Stock screen: show how many are in stock, and point at its row. */
+    scanCheck: function () {
+      SF.scan({ once: function (id) {
+        var d = SF.state.data.stock, p = d && SF.find(d.products, id);
+        if (!p) { SF.toast('That label is for a product that is not in the list.', true); return; }
+        SF.filters.clear('shelf');
+        var row = SF.el('shelf-' + id);
+        if (row) {
+          row.scrollIntoView({ block: 'center' });
+          row.classList.add('flash');
+          setTimeout(function () { row.classList.remove('flash'); }, 2400);
+        }
+        var left = p.type === 'made' ? (p.available === null ? 'made to order' : p.available + ' left today')
+          : qty(p.onHand, p.unit) + ' in stock';
+        SF.toast(p.name + (p.variant ? ' ' + p.variant : '') + ': ' + left);
+      } });
+    },
+
     saveProduct: function () {
       var name = SF.el('pn').value;
       if (String(name).trim().length < 2) { SF.toast('Give it a name.', true); return; }
@@ -1423,7 +1444,7 @@
         : p.onHand <= 4 ? '<span class="tag warn">' + qty(p.onHand, p.unit) + '</span>'
         : '<span class="tag ok">' + qty(p.onHand, p.unit) + '</span>';
 
-      return '<tr' + SF.filters.row(F, {
+      return '<tr id="shelf-' + esc(p.id) + '"' + SF.filters.row(F, {
           text: [p.name, p.variant, p.category, p.id, p.type].join(' '),
           cat: p.category || 'none', show: show.join(' '), type: p.type
         }, { name: p.name.toLowerCase() + ' ' + String(p.variant || '').toLowerCase(), left: left,
@@ -1445,8 +1466,9 @@
         '</td></tr>';
     }).join('');
 
-    return '<div class="card"><div style="display:flex;gap:10px;align-items:center">' +
+    return '<div class="card"><div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">' +
       '<h2 style="flex:1">Prices and what is left</h2>' +
+      '<button class="ghost sm" onclick="SFS.scanCheck()">Scan a jar</button>' +
       '<button class="ghost sm" onclick="SFS.newProduct()">Add product</button></div>' +
       '<div class="sub">Change a price and it takes effect at once — the order page and the ' +
         'till both follow.</div>' +

@@ -215,10 +215,30 @@ h2 .for{font-weight:600;color:var(--muted);font-size:.8em}
 /* ---- labels as files (labelimg.js) ------------------------------------ */
 .labelfiles{margin-top:14px;border:1px solid var(--rule)}
 .labelfiles h3{margin:0 0 4px;font-size:17px}
+.lookedit{margin:6px 0 12px;border:1px solid var(--rule);border-radius:var(--radius-sm);padding:10px 12px}
+.lookedit summary{font-weight:700;cursor:pointer}
+.lookedit[open] summary{margin-bottom:10px}
+.lookedit textarea{width:100%;font:inherit}
+.logorow{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.logorow img{max-height:64px;max-width:120px;background:#fff;border:1px dashed var(--rule);border-radius:6px;padding:4px}
+.filebtn{position:relative;overflow:hidden;display:inline-flex;align-items:center;cursor:pointer;
+  border:1.5px solid var(--rule);border-radius:10px;padding:0 12px;min-height:40px;font-weight:700}
+.filebtn input{position:absolute;inset:0;opacity:0;cursor:pointer}
+.check{display:flex;gap:10px;align-items:center;font-weight:600;margin-top:8px}
+.labelfiles .steps{margin:4px 0 10px;padding-left:22px;font-size:14.5px;line-height:1.5}
+.labelfiles .steps li{margin:3px 0}
 .lprev{display:flex;flex-direction:column;align-items:center;gap:6px;margin-top:6px}
 .lprev img{width:100%;max-width:340px;background:#fff;border:1px dashed var(--rule);border-radius:6px}
 .pick .dl{flex:none;min-height:36px;padding:0 10px;font-size:12px}
 @media print{.labelfiles,.pick .dl{display:none!important}}
+
+/* ---- stocktake (stocktake.js) ------------------------------------------ */
+.countsum{font-size:15px;margin:6px 0 12px}
+.countsum b{font-size:26px;font-family:var(--mono);margin-right:6px}
+.countrow{gap:10px}
+.countrow.has{background:color-mix(in srgb, var(--ok) 8%, transparent)}
+.countrow .qn{min-width:54px}
+tr.flash td{background:color-mix(in srgb, var(--brand) 14%, transparent);transition:background .4s}
 
 /* ---- filter bars (filters.js) ------------------------------------------ */
 .fbar{display:grid;gap:8px;margin:12px 0 10px}

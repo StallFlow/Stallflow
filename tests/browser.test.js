@@ -36,7 +36,10 @@ function makeSheet() {
           const out = [];
           for (let i = 0; i < nr; i++) {
             const row = rows[r - 1 + i] || [], o = [];
-            for (let j = 0; j < nc; j++) o.push(row[c - 1 + j] === undefined ? '' : row[c - 1 + j]);
+            for (let j = 0; j < nc; j++) {
+              const v = row[c - 1 + j] === undefined ? '' : row[c - 1 + j];
+              o.push(typeof v === 'string' && v.charAt(0) === "'" ? v.slice(1) : v);   // as Sheets reads it
+            }
             out.push(o);
           }
           return out;
@@ -127,6 +130,8 @@ const MAPS_STUB = (mode) => `(function () {
 
 let failures = 0;
 async function test(name, fn) {
+  // SF_ONLY=stocktake node tests/browser.test.js runs just the tests whose names contain it.
+  if (process.env.SF_ONLY && name.indexOf(process.env.SF_ONLY) === -1) return;
   try { await fn(); console.log('ok   ' + name); }
   catch (e) { failures++; console.log('FAIL ' + name + '\n     ' + String(e.message).split('\n')[0]); }
 }
@@ -175,6 +180,7 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
                                 : '\ndelete window.STALLFLOW.mapsKey;') });
     });
     page.on('pageerror', (e) => { env.pageErrors = (env.pageErrors || []).concat(String(e)); });
+    if (process.env.SF_DEBUG) page.on('console', (m) => { if (m.type() === 'error') console.log('console:', m.text().slice(0, 300)); });
     await ctx.route('https://script.google.com/**', async (route) => {
       const req = route.request();
       // The order page reads with GET (?action=catalogue&market=…); the staff app always POSTs.
@@ -1045,7 +1051,8 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
     const env = await phone({ hash: '#labels', seed: shop10 });
     const page = env.page;
     await page.waitForSelector('#lsize');
-    assert.ok(/50 × 30 mm/.test(await page.textContent('#lprevcap')));
+    await page.selectOption('#lsize', '50x30');
+    assert.ok(/50 × 30 mm · 300 dpi/.test(await page.textContent('#lprevcap')));
     const [dl] = await Promise.all([page.waitForEvent('download'),
       page.click('button[aria-label="Download the label for Apricot Jam"]')]);
     assert.strictEqual(dl.suggestedFilename(), 'P01-apricot-jam-50x30.png');
@@ -1060,6 +1067,134 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
     await env.ctx.close();
   });
 
+  /** Read a downloaded label's QR back with the app's own scanner library. */
+  const readQR = async (page, file) => {
+    await page.addScriptTag({ path: path.join(ROOT, 'web', 'core', 'vendor', 'jsQR.js') });
+    return page.evaluate(async (b64) => {
+      const im = new Image(); im.src = 'data:image/png;base64,' + b64; await im.decode();
+      const k = 4, c = document.createElement('canvas'); c.width = im.width * k; c.height = im.height * k;
+      const x = c.getContext('2d'); x.imageSmoothingEnabled = false; x.drawImage(im, 0, 0, c.width, c.height);
+      const r = window.jsQR(x.getImageData(0, 0, c.width, c.height).data, c.width, c.height);
+      return r && r.data;
+    }, fs.readFileSync(file).toString('base64'));
+  };
+
+  await test('Niimbot: labels come out at the printer\'s own 203 dpi, with the steps shown', async () => {
+    const env = await phone({ hash: '#labels', seed: shop10 });
+    const page = env.page;
+    await page.waitForSelector('#lsize');
+    assert.strictEqual(await page.inputValue('#lsize'), 'nb-50x30', 'Niimbot 50 × 30 is the starting size');
+    assert.ok(/203 dpi/.test(await page.textContent('#lprevcap')));
+    assert.strictEqual(await page.isVisible('#lsteps'), true);
+    assert.ok(/NIIMBOT/.test(await page.textContent('#lsteps')));
+    const [dl] = await Promise.all([page.waitForEvent('download'),
+      page.click('button[aria-label="Download the label for Apricot Jam"]')]);
+    assert.strictEqual(dl.suggestedFilename(), 'P01-apricot-jam-niimbot-50x30.png');
+    const file = await dl.path();
+    assert.deepStrictEqual(pngInfo(fs.readFileSync(file)), { w: 400, h: 240, ppm: 7992, sig: 'PNG' });
+    assert.strictEqual(await readQR(page, file), site + '?p=P01', 'the QR is a link to the product, and it scans');
+    if (process.env.SF_SHOT) fs.copyFileSync(file, path.join(process.env.SF_SHOT, 'label-niimbot-50x30.png'));
+    await page.selectOption('#lsize', '62x29');
+    assert.strictEqual(await page.isVisible('#lsteps'), false, 'Niimbot steps only for Niimbot sizes');
+    await env.ctx.close();
+  });
+
+  await test('Niimbot 60 × 40 and 70 × 50: right size, and the QR link scans', async () => {
+    const env = await phone({ hash: '#labels', seed: shop10 });
+    const page = env.page;
+    await page.waitForSelector('#lsize');
+    for (const [key, w, h] of [['nb-60x40', 480, 320], ['nb-70x50', 559, 400]]) {
+      await page.selectOption('#lsize', key);
+      const [dl] = await Promise.all([page.waitForEvent('download'),
+        page.click('button[aria-label="Download the label for Guava Jam"]')]);
+      const file = await dl.path(), info = pngInfo(fs.readFileSync(file));
+      assert.strictEqual(info.w + 'x' + info.h, w + 'x' + h, key);
+      assert.strictEqual(info.ppm, 7992, key + ' at 203 dpi');
+      assert.strictEqual(await readQR(page, file), site + '?p=P05', key);
+      if (process.env.SF_SHOT) fs.copyFileSync(file, path.join(process.env.SF_SHOT, 'label-' + key + '.png'));
+    }
+    await env.ctx.close();
+  });
+
+  await test('Niimbot D11 strip: a 40 × 12 mm label still carries a QR that scans', async () => {
+    const env = await phone({ hash: '#labels', seed: shop10 });
+    const page = env.page;
+    await page.waitForSelector('#lsize');
+    await page.selectOption('#lsize', 'nd-40x12');
+    const [dl] = await Promise.all([page.waitForEvent('download'),
+      page.click('button[aria-label="Download the label for Topsy-turvy doll"]')]);
+    assert.strictEqual(dl.suggestedFilename(), 'P07-topsy-turvy-doll-niimbot-40x12.png');
+    const file = await dl.path();
+    const info = pngInfo(fs.readFileSync(file));
+    assert.strictEqual(info.w + 'x' + info.h, '320x96');
+    assert.strictEqual(await readQR(page, file), 'SF:P07', 'a thin strip keeps the short code, which scans at that size');
+    if (process.env.SF_SHOT) fs.copyFileSync(file, path.join(process.env.SF_SHOT, 'label-niimbot-40x12.png'));
+    await env.ctx.close();
+  });
+
+  await test('the label look: contact lines and a logo, tried in the preview, then saved', async () => {
+    const env = await phone({ hash: '#labels', seed: shop10 });
+    const page = env.page;
+    await page.waitForSelector('#lsize');
+    await page.click('.lookedit summary');
+    await page.fill('#lkcontact', 'Marian\nMobile 066 000 0000');
+    await page.dispatchEvent('#lkcontact', 'input');
+    // A logo: a dark ring on a light background, as a phone photo of a drawing would be.
+    const logo = Buffer.from(await page.evaluate(() => {
+      const c = document.createElement('canvas'); c.width = 300; c.height = 260;
+      const x = c.getContext('2d'); x.fillStyle = '#f4efe6'; x.fillRect(0, 0, 300, 260);
+      x.strokeStyle = '#222'; x.lineWidth = 14; x.beginPath(); x.arc(150, 130, 80, 0, 7); x.stroke();
+      return c.toDataURL('image/png').split(',')[1];
+    }), 'base64');
+    await page.setInputFiles('#lkfile', { name: 'logo.png', mimeType: 'image/png', buffer: logo });
+    await page.waitForSelector('#lklogo');
+    const cleaned = await page.getAttribute('#lklogo', 'src');
+    assert.ok(/^data:image\/png;base64,/.test(cleaned) && cleaned.length < 58000, 'a small black-and-white PNG');
+    await page.click('button:has-text("Save the look")');
+    await page.waitForFunction(() => !SF.outbox.pending().length);
+    assert.strictEqual(env.SF.get('labelContact'), 'Marian\nMobile 066 000 0000');
+    assert.strictEqual(env.SF.get('labelLogo'), cleaned);
+    await page.selectOption('#lsize', 'nb-50x30');
+    const [dl] = await Promise.all([page.waitForEvent('download'),
+      page.click('button[aria-label="Download the label for Strawberry Jam"]')]);
+    const file = await dl.path();
+    assert.strictEqual(await readQR(page, file), site + '?p=P03');
+    if (process.env.SF_SHOT) {
+      fs.copyFileSync(file, path.join(process.env.SF_SHOT, 'label-classic-niimbot-50x30.png'));
+      await page.selectOption('#lsize', '50x30');
+      const [d2] = await Promise.all([page.waitForEvent('download'),
+        page.click('button[aria-label="Download the label for Apricot Preserve"]')]);
+      fs.copyFileSync(await d2.path(), path.join(process.env.SF_SHOT, 'label-classic-300dpi.png'));
+    }
+    await env.ctx.close();
+  });
+
+  await test('a cashier sees the labels but not the look editor', async () => {
+    const env = await phone({ hash: '#labels', seed: (SF) => { shop10(SF); SF.setPin('cashier', '1111'); } });
+    const page = env.page;
+    const tok = env.SF.dispatch('signIn', { pin: '1111', device: 'c' }).data.token;
+    await page.evaluate((t) => SF.ls.set('sf.auth', { token: t, role: 'cashier', user: '' }), tok);
+    await page.goto('about:blank'); await page.goto(base + '#labels');
+    await page.waitForSelector('#lsize');
+    assert.strictEqual(await page.locator('.lookedit').count(), 0);
+    await env.ctx.close();
+  });
+
+  await test('a customer scanning a jar lands on that product, even via the market list', async () => {
+    const env = await phone({ hash: '#till', seed: (SF) => {
+      shop10(SF);
+      SF.append('markets', { MarketId: 'M02', Name: 'Spring Fair', Date: day(3), Status: 'planned' });
+    } });
+    const page = await customer(env, '?p=P03');           // the live market has passed: the list comes first
+    assert.ok(/Which market are you coming to/.test(await page.textContent('.card')));
+    await page.click('a.mkt:has-text("Spring Fair")');
+    await page.waitForSelector('#it-P03');
+    assert.ok(page.url().endsWith('?m=M02&p=P03'), page.url());
+    assert.ok(await page.$eval('#it-P03', (e) => e.classList.contains('hl')), 'highlighted');
+    await page.waitForFunction(() => /You scanned Strawberry Jam/.test(document.getElementById('toast').textContent));
+    await env.ctx.close();
+  });
+
   await test('the ticked labels download together as one .zip', async () => {
     const env = await phone({ hash: '#labels', seed: shop10 });
     const page = env.page;
@@ -1067,6 +1202,7 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
     await page.selectOption('#ff-labels-cat', 'Resin');
     await page.click('text=Tick none'); await page.selectOption('#ff-labels-cat', 'all');
     await page.click('text=Tick none');
+    await page.selectOption('#lsize', '50x30');
     for (const id of ['P03', 'P05', 'P07']) await page.check('#c-' + id);
     const [dl] = await Promise.all([page.waitForEvent('download'), page.click('text=Download ticked (.zip)')]);
     assert.ok(/-labels-50x30\.zip$/.test(dl.suggestedFilename()), dl.suggestedFilename());
@@ -1090,12 +1226,14 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
   const iphoneCamera = () => {
     delete window.BarcodeDetector;
     window.__fakeText = 'SF:P01';
+    if (!navigator.mediaDevices) return;                 // a blank page has no camera to fake
     navigator.mediaDevices.getUserMedia = async () => {
       if (window.__denyCamera) { const e = new Error('denied'); e.name = 'NotAllowedError'; throw e; }
       const c = document.createElement('canvas'); c.width = 640; c.height = 480;
       const x = c.getContext('2d');
       const paint = () => {
         x.fillStyle = '#fff'; x.fillRect(0, 0, 640, 480);
+        if (!window.__fakeText) return;                 // between jars: nothing in view
         const q = window.QR.make(window.__fakeText, 'M'), cell = Math.floor(300 / (q.size + 4));
         x.fillStyle = '#000';
         for (let r = 0; r < q.size; r++) for (let k = 0; k < q.size; k++)
@@ -1142,6 +1280,196 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
     await page.evaluate(() => { window.__denyCamera = true; });
     await page.click('button:has-text("Scan")');
     await page.waitForFunction(() => /Settings › Safari › Camera/.test(document.getElementById('toast').textContent));
+    await env.ctx.close();
+  });
+
+  await test('Scan reads the product link on a jar label too', async () => {
+    const env = await phone({ hash: '#till', seed: shop10, init: iphoneCamera });
+    const page = env.page;
+    await page.waitForFunction(() => SF.state.data.till);
+    await page.evaluate(() => { window.__fakeText = SF.site + '?p=P03'; });
+    await page.click('button:has-text("Scan")');
+    await page.waitForFunction(() => document.querySelector('.basketbtn .cnt'), null, { timeout: 10000 });
+    await openBasket(page);
+    assert.ok(/Strawberry Jam/.test(await page.textContent('#basketbody')));
+    await env.ctx.close();
+  });
+
+  /* ---------- the order goes to Marian on WhatsApp ---------- */
+  await test('after ordering, the customer can send the whole order to Marian on WhatsApp', async () => {
+    const env = await phone({ hash: '#till', seed: (SF) => {
+      shop10(SF);
+      SF.append('markets', { MarketId: 'M02', Name: 'Spring Fair', Date: day(3), Status: 'planned' });
+      SF.set('profile', JSON.stringify({ name: "Duxie's Homemade", ownerName: 'Marian', whatsapp: '066 000 0000' }));
+    } });
+    const page = await customer(env, '?m=M02');
+    await page.click('.item:has-text("Strawberry Jam") button[aria-label^="More"]');
+    await page.click('.item:has-text("Strawberry Jam") button[aria-label^="More"]');
+    await page.fill('#nm', 'Anna Bester'); await page.fill('#ph', '082 555 0101');
+    await page.fill('#nt', 'After 11 please');
+    await page.check('#cs'); await page.click('#go');
+    await page.waitForSelector('#sendwa');
+    assert.ok(/Send my order to Marian on WhatsApp/.test(await page.textContent('#sendwa')));
+    const href = await page.getAttribute('#sendwa', 'href');
+    assert.ok(href.startsWith('https://wa.me/27660000000?text='), href.slice(0, 50));
+    const text = decodeURIComponent(href.split('text=')[1]);
+    const no = env.sheets.Orders.rows.find((r) => r[4] === 'Anna Bester')[0];
+    for (const want of ['Hi Marian', 'Order ' + no, 'Anna Bester', 'Spring Fair', '2 × Strawberry Jam',
+                        'Total: R 100.00', 'Note: After 11 please', 'banking details']) {
+      assert.ok(text.indexOf(want) !== -1, 'message has "' + want + '":\n' + text);
+    }
+    await env.ctx.close();
+  });
+
+  /* ---------- stocktake ---------- */
+  const show = (page, code) => page.evaluate((c) => { window.__fakeText = c; }, code);
+
+  await test('stocktake: start, count a location by scanning jar by jar, approve, and the stock follows', async () => {
+    const env = await phone({ hash: '#stock', seed: shop10, init: iphoneCamera });
+    const page = env.page;
+    await page.waitForFunction(() => SF.state.data.stock);
+    await page.evaluate(() => { SF.ls.set('sf.tab.stock', 'count'); SF.render(); });
+    await page.waitForTimeout(1500);
+    if (process.env.SF_DEBUG) console.log('DEBUG countbox:', await page.evaluate(() => (document.getElementById('countbox') || {}).innerHTML || document.getElementById('view').innerHTML.slice(0, 400)), JSON.stringify(env.pageErrors || []));
+    await page.waitForSelector('#ctstart');
+    await page.click('#ctstart');
+    await page.waitForSelector('button[data-loc="Storeroom"]');
+    await page.click('button[data-loc="Storeroom"]');
+    await page.waitForSelector('#ctdone');
+    // Scan: Apricot Jam, away, Apricot Jam again (a second jar), away, Marmalade.
+    await show(page, ''); await page.click('button:has-text("Scan jars")');
+    await page.waitForSelector('#sfcam');
+    await show(page, 'SF:P01'); await page.waitForFunction(() => /Apricot Jam · 1/.test(document.getElementById('scanhint').textContent));
+    await page.waitForTimeout(700);
+    const stillOne = await page.evaluate(() => document.getElementById('scanhint').textContent);
+    assert.ok(/Apricot Jam · 1/.test(stillOne), 'the same jar left in view counts once: ' + stillOne);
+    await show(page, ''); await page.waitForTimeout(700);
+    await show(page, site + '?p=P01'); await page.waitForFunction(() => /Apricot Jam · 2/.test(document.getElementById('scanhint').textContent));
+    await show(page, ''); await page.waitForTimeout(700);
+    await show(page, 'SF:P02'); await page.waitForFunction(() => /Marmalade · 1/.test(document.getElementById('scanhint').textContent));
+    await page.click('#scan .x');
+    // Type a number for one more product.
+    await page.click('button[aria-label="How many Strawberry Jam"]');
+    await page.fill('#ctq', '2'); await page.keyboard.press('Enter');
+    assert.ok(/^5/.test((await page.textContent('#cttotal')).trim()), 'five counted here');
+    await page.click('#ctdone');
+    await page.waitForFunction(() => !SF.outbox.pending().length);
+    await page.waitForSelector('#ctapprove');
+    const row = async (name) => page.$eval('tr:has-text("' + name + '")', (tr) => Array.from(tr.querySelectorAll('td')).map((td) => td.textContent.trim()));
+    assert.deepStrictEqual((await row('Apricot Jam')).slice(1, 4), ['10', '2', '-8']);
+    assert.deepStrictEqual((await row('Strawberry Jam')).slice(1, 4), ['3', '2', '-1']);
+    if (process.env.SF_SHOT) await page.locator('.card:has(#ctapprove)').screenshot({ path: path.join(process.env.SF_SHOT, 'stocktake-review.png') });
+    await page.click('#ctapprove');
+    await page.waitForFunction(() => !SF.outbox.pending().length);
+    await page.waitForFunction(() => /Earlier stocktakes/.test(document.getElementById('countbox').textContent));
+    const hand = env.SF.onHand();
+    assert.strictEqual(hand.P01, 2); assert.strictEqual(hand.P02, 1); assert.strictEqual(hand.P03, 2);
+    assert.strictEqual(hand.P05, 9, 'not counted anywhere: left as it was');
+    assert.ok(/approved/.test(await page.textContent('#countbox')));
+    await env.ctx.close();
+  });
+
+  await test('stocktake: a cashier counts from More, but cannot start or approve', async () => {
+    const env = await phone({ hash: '#till', seed: (SF) => { shop10(SF); SF.setPin('cashier', '1111'); } });
+    const page = env.page;
+    const owner = env.SF.dispatch('signIn', { pin: '4321', device: 'o' }).data.token;
+    env.SF.dispatch('countStart', { token: owner, opId: 'st1' });
+    const tok = env.SF.dispatch('signIn', { pin: '1111', device: 'c' }).data.token;
+    await page.evaluate((t) => SF.ls.set('sf.auth', { token: t, role: 'cashier', user: '' }), tok);
+    await page.goto('about:blank'); await page.goto(base + '#till');
+    await page.waitForFunction(() => window.SF && SF.state.ready);
+    await page.evaluate(() => SF.openMore());
+    await page.click('.sheet button:has-text("Stocktake")');
+    await page.waitForSelector('button[data-loc="Car"]');
+    assert.strictEqual(await page.locator('#ctapprove').count(), 0);
+    assert.strictEqual(await page.locator('#ctstart').count(), 0);
+    await page.click('button[data-loc="Car"]');
+    await page.click('button[aria-label="One more Fig Jam"]');
+    // Close the app half way: the count is still there when it opens again.
+    await page.goto('about:blank'); await page.goto(base + '#stocktake');
+    await page.waitForSelector('#ctdone');
+    assert.strictEqual((await page.textContent('button[aria-label="How many Fig Jam"]')).trim(), '1');
+    await page.click('#ctdone');
+    await page.waitForFunction(() => !SF.outbox.pending().length);
+    const lines = env.sheets.Countlines.rows.filter((r) => r[1] === 'Car' && r[3] === 'P04');
+    assert.strictEqual(lines.length, 1); assert.strictEqual(lines[0][4], 1);
+    await env.ctx.close();
+  });
+
+  await test('Stock: scan a jar to see how many are in stock', async () => {
+    const env = await phone({ hash: '#stock', seed: shop10, init: iphoneCamera });
+    const page = env.page;
+    await openShelf(page);
+    await show(page, site + '?p=P06');
+    await page.click('button:has-text("Scan a jar")');
+    await page.waitForFunction(() => /Apricot Preserve: 7 in stock/.test(document.getElementById('toast').textContent), null, { timeout: 10000 });
+    assert.strictEqual(await page.isVisible('#scan'), false);
+    await env.ctx.close();
+  });
+
+  await test('each part of the app keeps its own name (no two scripts share one)', async () => {
+    const env = await phone({ hash: '#till' });
+    const kinds = await env.page.evaluate(() => ({
+      cashup: typeof (window.SFC && window.SFC.save), kitchen: typeof (window.SFK && window.SFK.load),
+      stocktake: typeof (window.SFCount && window.SFCount.render), till: typeof (window.SFT && window.SFT.tap),
+      admin: typeof (window.SFA && window.SFA.drawLabels), labels: typeof (window.SFL && window.SFL.canvas),
+      places: typeof (window.SFP && window.SFP.typed), filters: typeof (window.SF && SF.filters && SF.filters.bar)
+    }));
+    Object.keys(kinds).forEach((k) => assert.strictEqual(kinds[k], 'function', k + ' was overwritten'));
+    await env.ctx.close();
+  });
+
+  /* ---------- security: text that tries to be code stays text ---------- */
+  const pwned = (page) => page.evaluate(() => window.__pwned);
+
+  await test('a market date that hides code shows as text on the poster', async () => {
+    const env = await phone({ hash: '#labels', seed: (SF) => {
+      shop10(SF);
+      // Planted straight into the sheet, past the server's own date check.
+      SF.append('markets', { MarketId: 'M02', Name: 'Bad Market', Date: '2099-01-01<img src=x onerror="window.__pwned=1">', Status: 'planned' });
+    } });
+    const page = env.page;
+    await page.waitForSelector('#tabP');
+    await page.click('#tabP');
+    await page.selectOption('#pfor', 'M02');
+    await page.waitForSelector('.poster .mkt');
+    await page.waitForTimeout(300);
+    assert.strictEqual(await pwned(page), undefined);
+    assert.ok(/<img/.test(await page.textContent('.poster .mkt')), 'shown as text');
+    await env.ctx.close();
+  });
+
+  await test('shop words that hide code show as text on Numbers and the till', async () => {
+    const env = await phone({ hash: '#numbers', seed: (SF) => {
+      shop10(SF);
+      SF.set('profile', JSON.stringify({ name: 'Test', vocab: { units: '<img src=x onerror="window.__pwned=1">', unit: 'jar' } }));
+    } });
+    const page = env.page;
+    await page.waitForFunction(() => SF.state.data.numbers);
+    await page.goto(base + '#till'); await page.waitForFunction(() => SF.state.data.till);
+    await page.goto(base + '#numbers'); await page.waitForTimeout(500);
+    assert.strictEqual(await pwned(page), undefined);
+    await env.ctx.close();
+  });
+
+  await test('a category or cupboard item with a quote in it cannot break out of its button', async () => {
+    const evil = "Jams');window.__pwned=1;//";
+    const env = await phone({ hash: '#till', seed: (SF) => {
+      SF.append('products', { ProductId: 'P20', Name: 'Odd Jam', Category: evil, Type: 'stocked', Unit: 'each', Price: 10, Active: 'Yes', Sort: 1 });
+      SF.move('P20', 3, 'adjust', 'test');
+      SF.append('pantry', { Item: "Sugar');window.__pwned=1;//", Qty: 2, Unit: 'kg', Note: '', UpdatedAt: new Date(), UpdatedBy: 'x' });
+    } });
+    const page = env.page;
+    await page.waitForFunction(() => SF.state.data.till);
+    await page.click('.chips button[data-c="' + evil.replace(/"/g, '\\"') + '"]');
+    assert.strictEqual(await pwned(page), undefined);
+    assert.strictEqual(await page.evaluate(() => SF.ls.get('sf.tillcat')), evil, 'the chip still picks its category');
+    await page.goto(base + '#stock');
+    await page.waitForFunction(() => SF.state.data.stock);
+    await page.evaluate(() => { SF.ls.set('sf.tab.stock', 'cupboard'); SF.render(); });
+    await page.click('button[data-i^="Sugar"]');
+    assert.strictEqual(await pwned(page), undefined);
+    assert.strictEqual(await page.inputValue('#pi'), "Sugar');window.__pwned=1;//", 'the item still fills the form');
     await env.ctx.close();
   });
 

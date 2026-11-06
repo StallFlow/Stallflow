@@ -96,6 +96,27 @@ go through `SF.once` so a retried request never runs twice.
   Off, `markPaid` also hands the order over (status `collected`) and the
   Collect tab is hidden; the till's Still to pay shows the items and takes the
   money through the same notes-and-change sheet as a walk-up sale.
+- **Stocktake** (`stockcounts`, `countlines`; Stock › Stocktake and More ›
+  Stocktake): an owner or manager starts it and the stock on hand is kept as
+  the snapshot; anyone with the `count` capability counts a location (scan
+  or − / +; the draft stays on the phone until Done); each Done is a new
+  submission and the latest per location counts. Only the owner approves: the
+  difference goes into Movements as `stocktake` lines and the loss is kept at
+  cost in the stocktake's Result. Counts are never edited, only appended.
+- **Who may change things:** anything that changes how the stall runs
+  (markets, pre-orders on/off, Collect, plugins, label look, profile, PINs,
+  release unpaid, reset) needs the `settings` capability: owner and manager
+  only. `reports` is read access (the viewer role has it). Never give a write
+  action `reports` alone.
+- **Text from people is never markup or code:** escape with `esc()` in HTML;
+  pass values to onclick handlers through `data-*` attributes and
+  `this.getAttribute(...)`, never inside a quoted JS string (HTML-escaping does
+  not protect a JS string: the browser decodes `&#39;` back to `'` first).
+  Market dates must be `yyyy-mm-dd`; shop words go through `SF.cleanWord`;
+  colours through `SF.cleanColour`; any raw `setValues` passes cells through
+  `SF.safe`.
+- **Global names are taken**: SFC is the cash-up plugin, SFK the kitchen
+  plugin, SFCount the stocktake. A test checks none overwrites another.
 - **Sales between markets** go under the market id `SF.HOME` ('HOME'), a
   virtual market `SF.markets()` adds; it is not a row in Markets.
 - **Uncooked stock** (the `Pantry` tab) is a plain count list, not a ledger:
