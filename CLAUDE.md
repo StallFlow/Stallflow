@@ -22,6 +22,12 @@ web/                 the front end, one copy for every stall
                      it, else core/vendor/jsQR.js — jsqr 1.4.0 from npm,
                      unchanged, Apache-2.0 — which is how iPhones scan)
   landing.html       stallflow.github.io/Stallflow/
+  guide/             How-to videos (More › How-to videos, core/guide.js): one
+                     captioned MP4 + poster per chapter, made by tools/guide/.
+                     Never cached by the service worker (played from the network)
+tools/guide/         remakes the videos: guide.js drives the real app on an
+                     iPhone screen with demo data, make_video.py adds captions.
+                     Run both after changing a screen the videos show
 server/              Apps Script, identical in every stall's sheet
   Core.gs            sheets, settings, identity, audit, plugin host, router, migrations
   Domain.gs          catalogue, stock, orders, costing, markets, dashboard

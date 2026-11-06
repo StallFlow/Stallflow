@@ -54,12 +54,12 @@ var SFL = (function () {
       }
       if (line) lines.push(line);
       var wide = lines.some(function (l) { return ctx.measureText(l).width > width; });
-      if (lines.length <= max && !wide) return { size: s, lines: lines };
+      if (lines.length <= max && !wide) return { size: s, lines: lines, weight: weight };
     }
     ctx.font = weight + ' ' + small + 'px ' + FONT;
     var all = String(text), cut = all;
     while (cut.length > 1 && ctx.measureText(cut + '…').width > width) cut = cut.slice(0, -1);
-    return { size: small, lines: [cut === all ? all : cut + '…'] };
+    return { size: small, lines: [cut === all ? all : cut + '…'], weight: weight };
   }
 
   /** The biggest type that fits `text` in a box `width` × `maxH`, whole; shortened only as a last resort. */
@@ -90,6 +90,9 @@ var SFL = (function () {
   }
 
   function lines(ctx, f, x, y, colour) {
+    // Draw at the size the text was measured at. Measuring other text since
+    // (the name is fitted after the line under it) leaves a different font set.
+    ctx.font = f.weight + ' ' + f.size + 'px ' + FONT;
     ctx.fillStyle = colour;
     f.lines.forEach(function (l, i) { ctx.fillText(l, x, y + i * f.size * 1.08); });
     return y + f.lines.length * f.size * 1.08;
@@ -165,7 +168,7 @@ var SFL = (function () {
       var tx = m + px(1), tw = W - qr - m * 2 - px(2);
       // Whatever goes under the name is measured first; the name gets the room left
       // above the contact lines, so nothing ever runs into anything else.
-      var vf = p.variant ? fit(ctx, p.variant, tw, Math.round(H * 0.09), Math.round(H * 0.07), 1, '700') : null;
+      var vf = p.variant ? fit(ctx, p.variant, tw, Math.round(H * 0.09), Math.round(H * 0.07), 2, '700') : null;
       var pf = look.price ? fit(ctx, price, tw, Math.round(H * 0.1), Math.round(H * 0.08), 1, '800') : null;
       var below = (vf ? vf.size * 1.08 : 0) + (pf ? pf.size * 1.08 : 0);
       var nf = fitBox(ctx, p.name, tw, cTop - y - below - px(0.3), Math.round(H * 0.15), Math.round(H * 0.07), 2, '800');
@@ -221,21 +224,42 @@ var SFL = (function () {
       classic(ctx, W, H, m, p, String(shop || ''), look, code, price);
     } else if (W > H * 1.25) {
       // Landscape: the code on the left, the words on the right.
-      var side = H - m * 2;
-      drawQR(ctx, code, m, m, side, look.ec);
+      // At most half the width, so a short label keeps room for the words.
+      var side = Math.min(H - m * 2, Math.round(W * 0.5));
+      drawQR(ctx, code, m, Math.round((H - side) / 2), side, look.ec);
       var tx = m + side + px(1.5), tw = W - tx - m, y = m + px(0.5);
       // Pure black throughout: thermal printers (Niimbot and friends) turn grey into speckles.
       var tiny = H < px(20);
       if (shopName && !tiny) y = lines(ctx, fit(ctx, shopName, tw, Math.round(H * 0.09), Math.round(H * 0.07), 1, '700'), tx, y, '#000') + px(0.6);
-      // On a thin strip the name gets one line (smaller type first, then shortened), so it never meets the price.
-      y = lines(ctx, fit(ctx, p.name, tw, Math.round(H * (tiny ? 0.34 : 0.2)), Math.round(H * (tiny ? 0.22 : 0.11)),
-                         tiny ? 1 : 2, '800'), tx, y, '#000');
-      if (p.variant && !tiny) y = lines(ctx, fit(ctx, p.variant, tw, Math.round(H * 0.12), Math.round(H * 0.08), 1, '600'), tx, y + px(0.4), '#000');
+      // The price (and code) sit at the foot; the name and size share what is
+      // left above them, so nothing ever runs into anything else. On a thin
+      // strip the name gets one line (smaller type first, then shortened).
       var pf = fit(ctx, price, tw, Math.round(H * (tiny ? 0.3 : 0.19)), Math.round(H * (tiny ? 0.22 : 0.11)), 1, '800');
+      var cf = tiny ? null : fit(ctx, p.id, tw, Math.round(H * 0.08), Math.round(H * 0.07), 1, '700');
+      var floor = H - m - pf.size * 1.08 - (cf ? cf.size * 1.2 : 0) - px(0.4);
+      var tall = function (f) { return f ? f.lines.length * f.size * 1.08 : 0; };
+      var nameIn = function (room) {
+        return fitBox(ctx, p.name, tw, room, Math.round(H * (tiny ? 0.34 : 0.2)), Math.round(H * (tiny ? 0.22 : 0.11)),
+                      tiny ? 1 : 3, '800');
+      };
+      // The whole name comes first. The size under it gets two lines, else one
+      // (shortened), else it is left off: the QR opens the product anyway.
+      var whole = function (f) { return f.lines.join(' ') === String(p.name).replace(/\s+/g, ' ').trim(); };
+      var tries = p.variant && !tiny ? [
+        fit(ctx, p.variant, tw, Math.round(H * 0.12), Math.round(H * 0.08), 2, '600'),
+        fit(ctx, p.variant, tw, Math.round(H * 0.1), Math.round(H * 0.08), 1, '600')] : [];
+      tries.push(null);
+      var vf = null, nf;
+      for (var ti = 0; ti < tries.length; ti++) {
+        vf = tries[ti];
+        nf = nameIn(floor - y - (vf ? tall(vf) + px(0.4) : 0));
+        if (whole(nf) && y + tall(nf) + (vf ? px(0.4) + tall(vf) : 0) <= floor + 0.5) break;
+      }
+      y = lines(ctx, nf, tx, y, '#000');
+      if (vf) lines(ctx, vf, tx, y + px(0.4), '#000');
       if (tiny) {
         lines(ctx, pf, tx, H - m - pf.size, '#000');
       } else {
-        var cf = fit(ctx, p.id, tw, Math.round(H * 0.08), Math.round(H * 0.07), 1, '700');
         lines(ctx, pf, tx, H - m - pf.size - cf.size * 1.2, '#000');
         lines(ctx, cf, tx, H - m - cf.size, '#000');
       }

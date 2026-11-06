@@ -1590,6 +1590,51 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
     await env.ctx.close();
   });
 
+  await test('labels: a long size under the name never runs over the QR, at any size, in either style', async () => {
+    const env = await phone({ hash: '#till' });
+    const page = env.page;
+    await page.addScriptTag({ path: path.join(ROOT, 'web', 'core', 'vendor', 'jsQR.js') });
+    const bad = await page.evaluate(() => {
+      const p = { id: 'P11', name: 'Tomato Ginger', variant: 'Medium (odd bottle)', price: 85, unit: 'each' };
+      const out = [];
+      for (const style of ['classic', 'simple']) for (const s of SFL.sizes) {
+        const look = { style, price: false, contact: '', base: 'https://stallflow.github.io/Stallflow/duxies/' };
+        const c = SFL.canvas(p, s[0], "Duxie's Homemade", look), x = c.getContext('2d');
+        const img = x.getImageData(0, 0, c.width, c.height);
+        const q = window.jsQR(img.data, img.width, img.height);
+        const want = s[3] < 20 ? 'SF:P11' : look.base + '?p=P11';
+        if (!q || q.data !== want) out.push(style + ' ' + s[0] + ': ' + (q ? q.data : 'QR does not scan'));
+      }
+      return out;
+    });
+    assert.deepStrictEqual(bad, []);
+    await env.ctx.close();
+  });
+
+  await test('How-to videos: anyone signed in finds them in More, and every video is published', async () => {
+    const env = await phone({ hash: '#till', seed: (SF) => SF.setPin('cashier', '1111') });
+    const page = env.page;
+    const tok = env.SF.dispatch('signIn', { pin: '1111', device: 'c' }).data.token;
+    await page.evaluate((t) => SF.ls.set('sf.auth', { token: t, role: 'cashier', user: '' }), tok);
+    await page.goto('about:blank'); await page.goto(base + '#till');
+    await page.waitForFunction(() => window.SF && SF.state.ready);
+    await page.evaluate(() => SF.openMore());
+    await page.click('.sheet button:has-text("How-to videos")');
+    await page.waitForSelector('.guidevid video');
+    const vids = await page.$$eval('.guidevid video', (v) => v.map((x) => [x.getAttribute('src'), x.getAttribute('poster'), x.preload]));
+    assert.strictEqual(vids.length, 7);
+    for (const [src, poster, preload] of vids) {
+      assert.strictEqual(preload, 'none', 'nothing downloads until play is tapped');
+      for (const f of [src, poster]) {
+        assert.ok(fs.existsSync(path.join(ROOT, '_site', 'duxies', 'app', f)), f + ' is published');
+      }
+    }
+    const sw = fs.readFileSync(path.join(ROOT, 'web', 'app', 'sw.js'), 'utf8');
+    assert.ok(sw.indexOf('guide/') === -1 || sw.indexOf('.mp4') === -1, 'videos are never kept offline');
+    assert.deepStrictEqual(env.pageErrors || [], []);
+    await env.ctx.close();
+  });
+
   await test('the QR reader is kept for offline use', async () => {
     const sw = fs.readFileSync(path.join(ROOT, 'web', 'app', 'sw.js'), 'utf8');
     assert.ok(sw.indexOf("'../core/vendor/jsQR.js'") !== -1);
