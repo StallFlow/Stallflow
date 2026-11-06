@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write     # to keep the latest test build on the android-builds branch
 
 jobs:
   apk:
@@ -35,3 +35,9 @@ jobs:
         with:
           name: duxies-till-apk
           path: duxies-till.apk
+      - name: Keep the APK on the android-builds branch (easy to fetch with git)
+        run: |
+          mkdir /tmp/out && cp duxies-till.apk /tmp/out/ && cd /tmp/out
+          git init -q -b android-builds && git add duxies-till.apk
+          git -c user.name='StallFlow build' -c user.email='build@stallflow.invalid' commit -q -m "APK from ${GITHUB_SHA::7}"
+          git push -q -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" android-builds
