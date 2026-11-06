@@ -1959,6 +1959,40 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
     await env.ctx.close();
   });
 
+  /* ---------- landscape ---------- */
+  await test('the app may be turned sideways: the manifest allows it, and the till, payment and basket still work on a short screen', async () => {
+    const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'web', 'app', 'manifest.webmanifest'), 'utf8'));
+    assert.strictEqual(manifest.orientation, 'any', 'not locked to portrait');
+    const env = await phone({ hash: '#till', seed: shop10 });
+    const page = env.page;
+    await page.waitForFunction(() => SF.state.data.till);
+    for (const [w, h] of [[844, 390], [667, 375], [915, 412]]) {
+      await page.setViewportSize({ width: w, height: h });
+      await page.evaluate(() => { SF.closeSheet(); window.scrollTo(0, 0); });
+      await page.waitForTimeout(300);
+      const wide = await tooWide(page);
+      assert.ok(!wide, 'till at ' + w + '×' + h + ': ' + wide);
+      await page.evaluate(() => { SFT.tap('P03'); SFT.tap('P05'); });
+      // the products and the bars: the tab bar is slim, and a product can be tapped without the bars covering it
+      const bars = await page.evaluate(() => ({
+        tabs: document.querySelector('.tabs').getBoundingClientRect().height,
+        cart: document.querySelector('.cart').getBoundingClientRect().height, vh: innerHeight }));
+      assert.ok(bars.tabs <= 56, 'the tab bar is slim in landscape: ' + bars.tabs);
+      assert.ok(bars.tabs + bars.cart < bars.vh * 0.36, 'the bars leave room for products: ' + JSON.stringify(bars));
+      await page.click('.basketbtn');
+      await page.waitForSelector('#basketbody');
+      const ph = await page.evaluate(() => { const p = document.querySelector('.sheet .panel').getBoundingClientRect(); return [p.top, p.bottom, innerHeight]; });
+      assert.ok(ph[0] >= 0 && ph[1] <= ph[2] + 1, 'the basket fits the screen: ' + ph);
+      await page.click('#basketbody button:has-text("Take payment")');
+      await page.waitForSelector('#doSale');
+      await page.click('#pw-card');
+      await page.click('#doSale');                         // reachable by scrolling inside the sheet
+      await page.waitForFunction(() => !SF.outbox.pending().length);
+      if (process.env.SF_SHOT) await page.screenshot({ path: path.join(process.env.SF_SHOT, 'landscape-' + w + '.png') });
+    }
+    await env.ctx.close();
+  });
+
   await test('How-to videos: anyone signed in finds them in More, and every video is published', async () => {
     const env = await phone({ hash: '#till', seed: (SF) => SF.setPin('cashier', '1111') });
     const page = env.page;

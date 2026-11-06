@@ -386,3 +386,28 @@ details.card summary{cursor:pointer;padding:6px 0;font-size:16px}
 /* Poster: share and download buttons, one per line on a phone */
 .adbtns{display:grid;gap:8px;margin-top:8px}
 .adbtns button{min-height:48px}
+
+/* Landscape on a phone: the screen is short, so the bars slim down and sheets scroll inside it */
+@media (orientation:landscape) and (max-height:520px){
+  :root{--tabbar:48px}
+  .tabs a{flex-direction:row;gap:7px;font-size:12.5px;padding:4px 2px}
+  .tabs svg{width:20px;height:20px}
+  .rail .line{padding-top:5px;padding-bottom:5px}
+  .rail .shop{font-size:14px}
+  .sheet{align-items:center}
+  .sheet .panel{max-height:calc(100vh - 10px);max-height:calc(100dvh - 10px);border-radius:16px;
+    width:min(100%,560px);margin:0 auto;padding-top:12px}
+  .sheet .basketlist{max-height:none}
+  #scan .hint{bottom:calc(10px + env(safe-area-inset-bottom))}
+  .poster{max-width:420px;margin-left:auto;margin-right:auto}
+  .wrap{padding-top:8px;padding-bottom:8px}
+  .snap{gap:6px;margin-bottom:8px}
+  .snap .figure{padding:6px 10px}
+  .snap .figure .n{display:none}
+  .snap .figure .k{font-size:10px}
+  .snap .figure .v{font-size:18px;margin-top:1px}
+  .card.stale{padding:8px 12px;font-size:14px}
+  .stabs{padding:0;margin-bottom:8px}
+  .stabs button{min-height:40px}
+  .card{padding:12px 14px}
+}
