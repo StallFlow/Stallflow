@@ -39,6 +39,7 @@ var SHELL = [
   '../core/places.js',
   '../core/scan.js',
   '../core/stocktake.js',
+  '../core/guide.js',
   '../core/vendor/jsQR.js',
   '../plugins/kitchen.js',
   '../plugins/scale.js',

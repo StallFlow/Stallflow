@@ -201,8 +201,8 @@ SF.definePlugin({
       SF.orders().forEach(function (o) {
         if (o.marketId !== market) return;
         if (o.status !== 'paid' && o.status !== 'collected') return;
-        // Everything is cash unless a payments plugin says otherwise.
-        var method = SF.filter('order.method', 'cash', { orderNo: o.no });
+        // Card and EFT never reach the tin. A payments plugin may still say otherwise.
+        var method = SF.filter('order.method', o.paid, { orderNo: o.no });
         if (method === 'cash') cash += o.total; else other += o.total;
       });
       var s = SF.pluginSettings('cashup');
@@ -229,7 +229,7 @@ SF.definePlugin({
       SF.orders().forEach(function (o) {
         if (o.marketId !== market) return;
         if (o.status !== 'paid' && o.status !== 'collected') return;
-        cash += o.total;
+        if (SF.filter('order.method', o.paid, { orderNo: o.no }) === 'cash') cash += o.total;
       });
       var expected = cash + float;
       var diff = Math.round((counted - expected) * 100) / 100;
@@ -292,6 +292,7 @@ function onOpen() {
     .addItem('Connect problem reports to Claude…', 'sfConnectReports')
     .addItem('Delete past customers\' details', 'sfPurge')
     .addItem('Export orders', 'sfExport')
+    .addItem('Back up now', 'sfBackup')
     .addItem('Clear trading data', 'sfClear')
     .addToUi();
 }
@@ -336,6 +337,12 @@ function sfLinks() {
   SpreadsheetApp.getUi().alert(url
     ? 'Paste this into config.js as the "api" value:\n\n' + url
     : 'Not deployed yet. Deploy > New deployment first.');
+}
+
+function sfBackup() {
+  var r = SF.backup({ role: 'owner', device: 'sheet' });
+  SpreadsheetApp.getUi().alert('Backed up ' + r.tabs + ' tabs to "' + r.name + '" in Google Drive.\n\n' +
+    'Customers\' names and phone numbers are left out of backups.');
 }
 
 function sfHealth() {

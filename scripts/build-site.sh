@@ -29,7 +29,7 @@ for dir in stalls/*/; do
   fi
 
   mkdir -p "$OUT/$slug"
-  cp -r web/app web/core web/plugins web/index.html "$OUT/$slug/"
+  cp -r web/app web/core web/plugins web/guide web/index.html "$OUT/$slug/"
   node -e '
     const fs = require("fs");
     const c = require(process.argv[1]);

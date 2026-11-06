@@ -18,7 +18,7 @@
 var SF = SF || {};
 
 SF.VERSION = '2.0.0';
-SF.SCHEMA = 9;                        // bump when SHEETS changes; see MIGRATIONS
+SF.SCHEMA = 10;                       // bump when SHEETS changes; see MIGRATIONS
 SF.TZ = 'Africa/Johannesburg';
 
 /* =========================================================================
@@ -33,7 +33,8 @@ SF.SHEETS = {
               'CostPerUnit', 'Note'],
   movements: ['When', 'ProductId', 'Qty', 'Type', 'Ref', 'MarketId'],
   orders:    ['OrderNo', 'When', 'MarketId', 'Channel', 'Customer', 'Phone', 'Lines',
-              'Units', 'Total', 'Cost', 'Status', 'PaidAt', 'CollectedAt', 'Note', 'Consent'],
+              'Units', 'Total', 'Cost', 'Status', 'PaidAt', 'CollectedAt', 'Note', 'Consent',
+              'Paid'],
   markets:   ['MarketId', 'Name', 'Date', 'Location', 'Status', 'Note'],
   expenses:  ['ExpenseId', 'MarketId', 'Description', 'Amount', 'Category', 'When'],
   ops:       ['OpId', 'When', 'Action', 'Result'],
@@ -550,8 +551,20 @@ SF.MIGRATIONS = [
     } },
   { to: 9, what: 'Add the Stockcounts and Countlines tabs for stocktakes', run: function () {
       SF.sheet('stockcounts'); SF.sheet('countlines');
+    } },
+  { to: 10, what: 'Add how each order was paid (cash, card or EFT) to Orders', run: function () {
+      // A new heading at the end; older orders stay blank, which reads as cash.
+      var s = SF.sheet('orders'), col = SF.SHEETS.orders.indexOf('Paid') + 1;
+      if (String(s.getRange(1, col).getValue()) !== 'Paid') s.getRange(1, col).setValue('Paid');
     } }
 ];
+
+/** How an order was paid: cash, card or eft. Anything else, or blank (older orders), is cash. */
+SF.PAY_METHODS = ['cash', 'card', 'eft'];
+SF.payMethod = function (v) {
+  v = String(v || '').toLowerCase();
+  return SF.PAY_METHODS.indexOf(v) === -1 ? 'cash' : v;
+};
 
 SF.migrate = function () {
   var from = Number(SF.get('schemaVersion', 0)) || 0;
@@ -606,6 +619,7 @@ SF.action('health', 'reports', 'read', function () {
     locked: SF.googleOn() || Object.keys(SF.json(SF.get('pins', '{}'), {})).length > 0,
     google: SF.googleOn(),
     reports: SF.reportsConnected(),
+    backup: SF.lastBackup ? SF.lastBackup() : null,
     problems: problems,
     checkedAt: Date.now()
   };

@@ -64,11 +64,24 @@ function load(googleTokens) {
   const props = {};
   const ctx = {
     console, __gh: [],
+    __created: [],
     SpreadsheetApp: {
       getActiveSpreadsheet: () => ({
+        getName: () => 'Test sheet',
         getSheetByName: (n) => sheets[n] || null,
-        insertSheet: (n) => (sheets[n] = makeSheet())
+        insertSheet: (n) => (sheets[n] = Object.assign(makeSheet(), { getName: () => n })),
+        getSheets: () => Object.keys(sheets).map((n) => sheets[n])
       }),
+      // A new spreadsheet (the backup): kept on ctx.__created to look at.
+      create: (name) => {
+        const tabs = { Sheet1: Object.assign(makeSheet(), { getName: () => 'Sheet1' }) };
+        const ss = { name, tabs, getUrl: () => 'https://docs.google.com/spreadsheets/d/backup' + ctx.__created.length,
+          getSheets: () => Object.keys(tabs).map((n) => tabs[n]),
+          insertSheet: (n) => (tabs[n] = Object.assign(makeSheet(), { getName: () => n })),
+          deleteSheet: (t) => { delete tabs[t.getName()]; } };
+        ctx.__created.push(ss);
+        return ss;
+      },
       getUi: () => ({ alert() {} 
       })
     },
@@ -116,7 +129,7 @@ function load(googleTokens) {
   ctx.SF.PLATFORM.googleClientId = '';
   ctx.SF.PLATFORM.admins = [];
   ctx.SF.migrate();
-  return { SF: ctx.SF, sheets, props, gh: ctx.__gh, ctx };
+  return { SF: ctx.SF, sheets, props, gh: ctx.__gh, ctx, created: ctx.__created };
 }
 
 const CLIENT = 'client-123.apps.googleusercontent.com';
@@ -853,6 +866,91 @@ test('connecting reports checks the token with GitHub before keeping it', () => 
 test('reporting needs a sign-in', () => {
   const { SF } = shop(day(3));
   assert.strictEqual(SF.dispatch('reportIssue', { opId: 'x', message: 'Anything at all' }).ok, false);
+});
+
+
+/* ---------- how each sale was paid ---------- */
+const ownerTok = (SF) => { SF.setPin('owner', '4321'); return SF.dispatch('signIn', { pin: '4321', device: 'd' }).data.token; };
+
+test('schema 10 adds a Paid heading to an Orders tab that had none', () => {
+  const { SF, sheets } = shop(day(3));
+  const head = sheets.Orders.rows[0];
+  head.length = 15;                                  // an Orders tab from before
+  SF.set('schemaVersion', 9);
+  const done = SF.migrate();
+  assert.ok(done.some((d) => /^10:/.test(d)), done.join(' | '));
+  assert.strictEqual(sheets.Orders.rows[0][15], 'Paid');
+  assert.strictEqual(SF.SCHEMA, 10);
+});
+
+test('a till sale keeps how it was paid; anything unknown, or nothing, is cash', () => {
+  const { SF } = shop(day(3));
+  const tok = ownerTok(SF);
+  const sell = (paid, id) => SF.dispatch('sell', { token: tok, opId: id, marketId: 'M01', paid, lines: [{ id: 'P01', qty: 1 }] });
+  assert.strictEqual(sell('card', 's1').ok, true);
+  assert.strictEqual(sell('eft', 's2').ok, true);
+  assert.strictEqual(sell(undefined, 's3').ok, true);
+  assert.strictEqual(sell('bitcoin', 's4').ok, true);
+  assert.strictEqual(JSON.stringify(SF.orders().map((o) => o.paid)), JSON.stringify(['card', 'eft', 'cash', 'cash']));
+  const d = SF.dispatch('dashboard', { token: tok }).data;
+  assert.strictEqual(JSON.stringify(d.summary.byMethod), JSON.stringify({ cash: 140, card: 70, eft: 70 }));
+});
+
+test('a pre-order paid by card is recorded as card', () => {
+  const { SF } = shop(day(3));
+  const tok = ownerTok(SF);
+  const no = order(SF).orderNo;
+  assert.strictEqual(SF.dispatch('markPaid', { token: tok, opId: 'p1', orderNo: no, paid: 'card' }).ok, true);
+  assert.strictEqual(SF.findOrder(no).paid, 'card');
+});
+
+test('the cash-up only expects the cash in the tin, not card or EFT', () => {
+  const { SF } = shop(day(3));
+  SF.setPluginEnabled ? SF.setPluginEnabled('cashup', true) : SF.set('plugins', JSON.stringify(['cashup']));
+  const tok = ownerTok(SF);
+  SF.dispatch('sell', { token: tok, opId: 'a', marketId: 'M01', paid: 'cash', lines: [{ id: 'P01', qty: 2 }] });
+  SF.dispatch('sell', { token: tok, opId: 'b', marketId: 'M01', paid: 'card', lines: [{ id: 'P01', qty: 1 }] });
+  const exp = SF.dispatch('cashup.expected', { token: tok, opId: 'c' });
+  const e = exp.data || exp;
+  assert.strictEqual(e.cash, 140, JSON.stringify(e));
+  assert.strictEqual(e.other, 70);
+  const rec = SF.dispatch('cashup.record', { token: tok, opId: 'r', counted: 140 + e.float });
+  assert.strictEqual(rec.ok, true, rec.message);
+  assert.strictEqual(rec.expected, 140 + e.float, 'card money is not expected in the tin, only cash and the float');
+});
+
+/* ---------- weekly backup ---------- */
+test('a backup copies every tab, but no customer names or phone numbers', () => {
+  const { SF, created } = shop(day(3));
+  const tok = ownerTok(SF);
+  order(SF, { name: 'Anna Bester', phone: '082 555 0101' });
+  SF.dispatch('sell', { token: tok, opId: 't', marketId: 'M01', lines: [{ id: 'P01', qty: 1 }] });
+  const r = SF.dispatch('backupNow', { token: tok }).data;
+  assert.strictEqual(r.ok, true);
+  const b = created[0];
+  assert.ok(!b.tabs.Sheet1, 'the empty first tab is gone');
+  for (const t of ['Products', 'Orders', 'Movements', 'Markets']) assert.ok(b.tabs[t], t + ' copied');
+  const text = JSON.stringify(b.tabs.Orders.rows);
+  assert.ok(text.indexOf('Anna') === -1 && text.indexOf('082 555') === -1, 'customer details left out: ' + text);
+  assert.ok(text.indexOf('Walk-up') !== -1, 'till sales keep their Walk-up name');
+  assert.strictEqual(b.tabs.Products.rows[1][1], 'Apricot Jam');
+  assert.strictEqual(SF.dispatch('health', { token: tok }).data.backup.url, r.url);
+});
+
+test('the weekly backup runs once a week, and only for an owner or manager', () => {
+  const { SF, created } = shop(day(3));
+  const tok = ownerTok(SF);
+  assert.strictEqual(SF.dispatch('autoBackup', { token: tok }).data.ok, true);
+  assert.strictEqual(created.length, 1, 'the first one runs');
+  assert.strictEqual(SF.dispatch('autoBackup', { token: tok }).data.skipped, true);
+  assert.strictEqual(created.length, 1, 'not again the same week');
+  SF.set('lastBackup', JSON.stringify({ at: new Date(Date.now() - 8 * 864e5).toISOString() }));
+  SF.set('backupStarted', 0);
+  SF.dispatch('autoBackup', { token: tok });
+  assert.strictEqual(created.length, 2, 'due again after a week');
+  SF.setPin('cashier', '1111');
+  const c = SF.dispatch('signIn', { pin: '1111', device: 'c' }).data.token;
+  assert.strictEqual(SF.dispatch('backupNow', { token: c }).code, 'forbidden');
 });
 
 console.log(failures ? '\n' + failures + ' failed' : '\nall passed');

@@ -22,6 +22,12 @@ web/                 the front end, one copy for every stall
                      it, else core/vendor/jsQR.js — jsqr 1.4.0 from npm,
                      unchanged, Apache-2.0 — which is how iPhones scan)
   landing.html       stallflow.github.io/Stallflow/
+  guide/             How-to videos (More › How-to videos, core/guide.js): one
+                     captioned MP4 + poster per chapter, made by tools/guide/.
+                     Never cached by the service worker (played from the network)
+tools/guide/         remakes the videos: guide.js drives the real app on an
+                     iPhone screen with demo data, make_video.py adds captions.
+                     Run both after changing a screen the videos show
 server/              Apps Script, identical in every stall's sheet
   Core.gs            sheets, settings, identity, audit, plugin host, router, migrations
   Domain.gs          catalogue, stock, orders, costing, markets, dashboard
@@ -119,6 +125,19 @@ go through `SF.once` so a retried request never runs twice.
   plugin, SFCount the stocktake. A test checks none overwrites another.
 - **Sales between markets** go under the market id `SF.HOME` ('HOME'), a
   virtual market `SF.markets()` adds; it is not a row in Markets.
+- **How each order was paid** is the `Paid` column of Orders (schema 10):
+  `cash`, `card` or `eft`, through `SF.payMethod`; blank (older orders) is
+  cash. The cash-up expects only cash (plus the float) in the tin; Numbers
+  splits takings by method.
+- **Receipts** go out through WhatsApp from the phone (`wa.me` link). The
+  customer's number is typed for that one message and never sent to the
+  server or kept on the phone.
+- **Backups** (`SF.backup`, weekly via `autoBackup` from an owner's or
+  manager's phone, or Health › Back up now, or the sheet menu) copy every tab
+  as plain values into a new spreadsheet in the StallFlow Drive, with
+  customers' names and phone numbers left out. Only the spreadsheets
+  permission is used: adding another Google service (Drive, triggers)
+  would need the owner to re-authorise before the live app works again.
 - **Uncooked stock** (the `Pantry` tab) is a plain count list, not a ledger:
   nothing is sold from it, so `savePantry` overwrites the amount.
 - Server code is plain Apps Script (V8, no modules). Every `.gs` shares one

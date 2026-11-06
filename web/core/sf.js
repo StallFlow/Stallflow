@@ -292,6 +292,7 @@ window.SF = (function () {
   };
 
   function can(cap) {
+    if (cap === null) return true;                  // open to everyone signed in (How-to videos)
     var list = CAPS[S.role] || [];
     return list.indexOf('*') !== -1 || list.indexOf(cap) !== -1;
   }
@@ -846,7 +847,7 @@ window.SF = (function () {
     var extra = registry.screens.filter(function (sc) {
       return pluginOn(sc.plugin) && can(sc.cap);
     });
-    var core = ['stocktake', 'labels', 'people', 'settings', 'health', 'report'].filter(function (id) {
+    var core = ['guide', 'stocktake', 'labels', 'people', 'settings', 'health', 'report'].filter(function (id) {
       return screens[id] && can(screens[id].cap);
     }).map(function (id) { return screens[id]; });
 
@@ -1042,6 +1043,9 @@ window.SF = (function () {
     S.ready = true;
     route();
     sync().then(warm);
+    // The weekly copy of the sheet. The server does nothing unless a week has
+    // passed; it runs in the background, long after the screen has loaded.
+    if (can('settings')) setTimeout(function () { if (S.online) get('autoBackup').catch(function () {}); }, 20000);
   }
 
   function init() {
