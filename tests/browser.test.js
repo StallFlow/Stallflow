@@ -15,9 +15,14 @@ const crypto = require('crypto');
 const assert = require('assert');
 const { execFileSync } = require('child_process');
 
-let chromium;
+let chromium, DEVICE = null;
 try { chromium = require('playwright').chromium; }
 catch (e) { console.log('skip  Playwright is not installed'); process.exit(0); }
+if (process.env.SF_DEVICE) {
+  DEVICE = require('playwright').devices[process.env.SF_DEVICE];
+  if (!DEVICE) { console.log('no such device: ' + process.env.SF_DEVICE); process.exit(1); }
+  delete DEVICE.defaultBrowserType;
+}
 
 const ROOT = path.join(__dirname, '..');
 
@@ -133,7 +138,8 @@ async function test(name, fn) {
   // SF_ONLY=stocktake node tests/browser.test.js runs just the tests whose names contain it.
   if (process.env.SF_ONLY && name.indexOf(process.env.SF_ONLY) === -1) return;
   try { await fn(); console.log('ok   ' + name); }
-  catch (e) { failures++; console.log('FAIL ' + name + '\n     ' + String(e.message).split('\n')[0]); }
+  catch (e) { failures++; console.log('FAIL ' + name + '\n     ' +
+    String(e.message).split('\n').filter((l) => !/^[+-]?\s*(\[|\]|actual|expected)/.test(l)).slice(0, 14).join('\n     ')); }
 }
 const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
 
@@ -161,8 +167,17 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
       token = SF.dispatch('signIn', { pin: '4321', device: 'd' }).data.token;
     }
     // Service workers off, so the routed config.js above is what the app really reads.
-    const ctx = await browser.newContext({ viewport: { width: 420, height: 640 },
-      deviceScaleFactor: process.env.SF_SHOT ? 2 : 1, serviceWorkers: 'block' });
+    // SF_DEVICE='iPhone 13' (any Playwright device name) runs every test on that
+    // phone's screen, touch and browser name instead of the plain 420×640 window.
+    const ctx = await browser.newContext(DEVICE
+      ? Object.assign({}, DEVICE, { serviceWorkers: 'block' })
+      : { viewport: { width: 420, height: 640 },
+          deviceScaleFactor: process.env.SF_SHOT ? 2 : 1, serviceWorkers: 'block' });
+    // An iPhone or iPad has no BarcodeDetector in any browser: take it away so
+    // the scanner uses jsQR, as it does there.
+    if (DEVICE && /iPhone|iPad/.test(DEVICE.userAgent)) {
+      await ctx.addInitScript(() => { try { delete window.BarcodeDetector; } catch (e) {} });
+    }
     if (opts.init) await ctx.addInitScript(opts.init);
     const page = await ctx.newPage();
     env.mapsRequests = 0;
@@ -761,6 +776,72 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
     await env.ctx.close();
   });
 
+  /** Wider than the screen? A phone then widens the whole page to fit, and the
+   *  bars at the bottom slide off it. Names what sticks out, to fix it. */
+  const tooWide = (page) => page.evaluate(() => {
+    const W = document.documentElement.clientWidth, sw = document.documentElement.scrollWidth;
+    if (sw <= W + 1) return null;
+    const scrolls = (e) => { for (let a = e.parentElement; a; a = a.parentElement) {
+      const o = getComputedStyle(a).overflowX; if (o !== 'visible') return true; } return false; };
+    const out = [];
+    document.querySelectorAll('body *').forEach((e) => {
+      const b = e.getBoundingClientRect();
+      if (out.length < 4 && b.width && b.right > W + 1 && !scrolls(e) &&
+          getComputedStyle(e).position !== 'fixed' && !e.closest('.cart,.tabs,#toast'))
+        out.push(e.id ? '#' + e.id : e.tagName.toLowerCase() + '.' + String(e.className).split(' ')[0]);
+    });
+    return sw + 'px on a ' + W + 'px screen: ' + out.join(', ');
+  });
+
+  await test('Every screen fits a small phone, even with large text', async () => {
+    const env = await phone({ hash: '#till', seed: (SF) => {
+      shop10(SF);
+      SF.append('markets', { MarketId: 'M02', Name: 'Spring Fair', Date: day(3), Status: 'planned' });
+      SF.set('activeMarket', 'M02');
+    } });
+    const page = env.page;
+    await page.setViewportSize({ width: 360, height: 640 });
+    await page.evaluate(() => { SFT.tap('P01'); SFT.tap('P02'); });
+    const screens = [
+      ['till', 'till', 'sell'], ['till', 'till', 'topay'],
+      ['stock', 'stock', 'cook'], ['stock', 'stock', 'shelf'], ['stock', 'stock', 'cupboard'],
+      ['stock', 'stock', 'count'], ['stock', 'stock', 'history'],
+      ['numbers', 'numbers', 'today'], ['numbers', 'numbers', 'costs'],
+      ['numbers', 'numbers', 'all'], ['numbers', 'numbers', 'new'],
+      ['labels'], ['stocktake'], ['settings'], ['people'], ['health'], ['report']];
+    const wide = [];
+    for (const zoom of ['1', '1.6']) {
+      await page.evaluate((z) => { document.documentElement.style.zoom = z; }, zoom);
+      for (const [hash, tab, on] of screens) {
+        await page.evaluate(([h, t, o]) => {
+          if (t) SF.ls.set('sf.tab.' + t, o);
+          if (location.hash !== '#' + h) location.hash = h; else SF.render();
+        }, [hash, tab, on]);
+        await page.waitForTimeout(500);
+        const w = await tooWide(page);
+        if (w) wide.push(hash + (on ? ' › ' + on : '') + ' at ' + zoom + '×: ' + w);
+      }
+      await page.evaluate(() => { location.hash = 'till'; });
+      await page.waitForTimeout(500);
+      await page.click('.basketbtn');
+      await page.waitForSelector('#basketbody');
+      const w = await tooWide(page);
+      if (w) wide.push('basket at ' + zoom + '×: ' + w);
+      await page.keyboard.press('Escape');
+      await page.evaluate(() => { const s = document.querySelector('.sheetbg,.sheet'); if (s && SF.closeSheet) SF.closeSheet(); });
+    }
+    const shop = await customer(env, '?m=M02');
+    await shop.setViewportSize({ width: 360, height: 640 });
+    for (const zoom of ['1', '1.6']) {
+      await shop.evaluate((z) => { document.documentElement.style.zoom = z; }, zoom);
+      await shop.waitForTimeout(300);
+      const w = await tooWide(shop);
+      if (w) wide.push('order page at ' + zoom + '×: ' + w);
+    }
+    assert.deepStrictEqual(wide, [], 'screens wider than the phone:\n  ' + wide.join('\n  '));
+    await env.ctx.close();
+  });
+
   await test('the order page says why + stops at the stock limit', async () => {
     const env = await phone({ hash: '#till', seed: (SF) => {
       shop10(SF);
@@ -1192,6 +1273,38 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
     assert.ok(page.url().endsWith('?m=M02&p=P03'), page.url());
     assert.ok(await page.$eval('#it-P03', (e) => e.classList.contains('hl')), 'highlighted');
     await page.waitForFunction(() => /You scanned Strawberry Jam/.test(document.getElementById('toast').textContent));
+    await env.ctx.close();
+  });
+
+  await test('Send to printer app: when an iPhone refuses the late share sheet, the next tap sends', async () => {
+    const env = await phone({ hash: '#labels', seed: shop10, init: () => {
+      // Like Safari on an iPhone: the share sheet is refused once the tap is too long ago.
+      window.__shared = [];
+      navigator.canShare = () => true;
+      navigator.share = (data) => {
+        if (!window.__refused) {
+          window.__refused = true;
+          return Promise.reject(new DOMException('not from a tap', 'NotAllowedError'));
+        }
+        window.__shared.push(data.files.map((f) => f.name + ':' + f.type + ':' + (f.size > 100)));
+        return Promise.resolve();
+      };
+    } });
+    const page = env.page;
+    await page.waitForSelector('#sharebtn');
+    await page.click('text=Tick none');
+    for (const id of ['P03', 'P05']) await page.check('#c-' + id);
+    await page.click('#sharebtn');
+    await page.waitForFunction(() => /ready/.test(document.getElementById('sharebtn').textContent));
+    assert.ok(/Tap Send again/.test(await page.textContent('#toast')));
+    await page.click('#sharebtn');
+    await page.waitForFunction(() => window.__shared.length === 1);
+    const sent = await page.evaluate(() => window.__shared[0]);
+    assert.deepStrictEqual(sent.map((s) => s.split(':')[1] + ':' + s.split(':')[2]),
+      ['image/png:true', 'image/png:true']);
+    assert.ok(/^P03-/.test(sent[0]) && /^P05-/.test(sent[1]), sent.join(' '));
+    assert.strictEqual(await page.textContent('#sharebtn'), 'Send to printer app');
+    assert.deepStrictEqual(env.pageErrors || [], []);
     await env.ctx.close();
   });
 

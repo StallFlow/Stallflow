@@ -143,6 +143,7 @@ for f in web/core/*.js web/plugins/*.js web/app/sw.js; do node --check "$f"; don
 for f in server/*.gs stalls/*/*.gs; do cp "$f" /tmp/c.js && node --check /tmp/c.js; done
 node tests/server.test.js      # runs the real server code against a fake sheet
 node tests/browser.test.js     # the real app in a browser against that server (needs Playwright)
+SF_DEVICE='iPhone SE' node tests/browser.test.js   # the same, on a phone's screen and touch
 scripts/build-site.sh
 ```
 

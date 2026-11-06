@@ -133,7 +133,8 @@ main{padding-bottom:calc(var(--tabbar) + var(--dock, 0px) + env(safe-area-inset-
   border-top:1px solid var(--rule);display:flex;padding-bottom:env(safe-area-inset-bottom)}
 .tabs a{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;
   gap:3px;padding:8px 2px;text-decoration:none;color:var(--muted);font-size:10.5px;
-  font-weight:700;min-height:var(--tabbar)}
+  font-weight:700;min-height:var(--tabbar);min-width:0}
+.tabs a span{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .tabs a.on{color:var(--accent)}
 .tabs a.on svg{stroke-width:2.2}
 .tabs svg{width:23px;height:23px;fill:none;stroke:currentColor;stroke-width:1.8;
@@ -169,11 +170,12 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--brand);
 .field{margin-bottom:12px}
 .row{display:flex;gap:10px;flex-wrap:wrap}
 .row > *{flex:1;min-width:0}
+.row > button{min-width:min-content}
 .row.tight{gap:8px}
 
 button{font:inherit;font-weight:700;border:none;border-radius:var(--radius-sm);
   padding:12px 16px;background:var(--brand);color:var(--brand-ink);cursor:pointer;
-  min-height:var(--tap)}
+  min-height:var(--tap);overflow-wrap:break-word}
 button:active{transform:translateY(1px)}
 button:disabled{opacity:.4;cursor:default;transform:none}
 button.ghost{background:var(--surface);color:var(--ink);border:1.5px solid var(--rule)}

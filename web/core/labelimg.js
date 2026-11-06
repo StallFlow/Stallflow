@@ -287,11 +287,22 @@ var SFL = (function () {
     return out;
   }
 
+  /** Blob.arrayBuffer() arrived in iOS 14; FileReader works on older iPhones too. */
+  function bytesOf(b) {
+    if (b.arrayBuffer) return b.arrayBuffer();
+    return new Promise(function (ok, fail) {
+      var r = new FileReader();
+      r.onload = function () { ok(r.result); };
+      r.onerror = function () { fail(r.error); };
+      r.readAsArrayBuffer(b);
+    });
+  }
+
   function pngBytes(cv, dpi) {
     return new Promise(function (ok, fail) {
       cv.toBlob(function (b) {
         if (!b) { fail(new Error('could not draw the label')); return; }
-        b.arrayBuffer().then(function (buf) { ok(withDpi(new Uint8Array(buf), dpi)); }, fail);
+        bytesOf(b).then(function (buf) { ok(withDpi(new Uint8Array(buf), dpi)); }, fail);
       }, 'image/png');
     });
   }
@@ -333,7 +344,8 @@ var SFL = (function () {
     var url = URL.createObjectURL(blob), a = document.createElement('a');
     a.href = url; a.download = name; a.rel = 'noopener';
     document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
+    // Long enough for Safari's "Download?" question to be answered.
+    setTimeout(function () { URL.revokeObjectURL(url); }, 120000);
   }
 
   return {
