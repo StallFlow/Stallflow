@@ -206,8 +206,8 @@
     if (!groups[cat]) cat = order[0];
 
     var chips = '<div class="chips">' + order.map(function (c) {
-      return '<button class="' + (c === cat ? 'on' : '') + '" onclick="SFT.cat(\'' +
-        esc(c).replace(/'/g, '&#39;') + '\')">' + esc(c) + '</button>';
+      return '<button class="' + (c === cat ? 'on' : '') + '" data-c="' + esc(c) + '" ' +
+        'onclick="SFT.cat(this.getAttribute(\'data-c\'))">' + esc(c) + '</button>';
     }).join('') + '</div>';
 
     var byName = {}, names = [];
@@ -235,7 +235,7 @@
       });
       var out = !open && left <= 0;
       return '<button class="tile' + (out ? ' out' : '') + '"' + (out ? ' disabled' : '') +
-        ' onclick="SFT.name(\'' + esc(n).replace(/'/g, '&#39;') + '\')">' +
+        ' data-n="' + esc(n) + '" onclick="SFT.name(this.getAttribute(\'data-n\'))">' +
         '<span class="nm">' + esc(n) + ' <span class="vr">' + list.length + ' sizes · tap to choose</span></span>' +
         '<span class="bot"><span class="pr">' + money(from) + '</span>' +
         (out ? '<span class="st sold">SOLD OUT</span>'
@@ -1056,8 +1056,9 @@
                                      { name: String(r.item).toLowerCase(), qty: r.qty }) + '><td>' + esc(r.item) + (r.note ? ' <span class="muted small">' + esc(r.note) + '</span>' : '') +
         '</td><td class="num"><b>' + esc(r.qty) + '</b> ' + esc(r.unit) + '</td>' +
         '<td class="muted small">' + esc(r.updated) + '</td>' +
-        '<td><button class="quiet" onclick="SFS.editPantry(\'' + esc(r.item).replace(/'/g, '&#39;') +
-        '\',' + r.qty + ',\'' + r.unit + '\')">change</button></td></tr>';
+        '<td><button class="quiet" data-i="' + esc(r.item) + '" data-q="' + esc(r.qty) + '" data-u="' + esc(r.unit) + '" ' +
+        'onclick="SFS.editPantry(this.getAttribute(\'data-i\'),this.getAttribute(\'data-q\'),this.getAttribute(\'data-u\'))">' +
+        'change</button></td></tr>';
     }).join('') : '<tr><td colspan="4" class="empty">Nothing yet. Add fruit, sugar, ' +
       'empty bottles — whatever is waiting to be cooked.</td></tr>';
     return '<div class="card"><h2>Uncooked stock</h2>' +

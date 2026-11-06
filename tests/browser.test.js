@@ -36,7 +36,10 @@ function makeSheet() {
           const out = [];
           for (let i = 0; i < nr; i++) {
             const row = rows[r - 1 + i] || [], o = [];
-            for (let j = 0; j < nc; j++) o.push(row[c - 1 + j] === undefined ? '' : row[c - 1 + j]);
+            for (let j = 0; j < nc; j++) {
+              const v = row[c - 1 + j] === undefined ? '' : row[c - 1 + j];
+              o.push(typeof v === 'string' && v.charAt(0) === "'" ? v.slice(1) : v);   // as Sheets reads it
+            }
             out.push(o);
           }
           return out;
@@ -1413,6 +1416,60 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
       places: typeof (window.SFP && window.SFP.typed), filters: typeof (window.SF && SF.filters && SF.filters.bar)
     }));
     Object.keys(kinds).forEach((k) => assert.strictEqual(kinds[k], 'function', k + ' was overwritten'));
+    await env.ctx.close();
+  });
+
+  /* ---------- security: text that tries to be code stays text ---------- */
+  const pwned = (page) => page.evaluate(() => window.__pwned);
+
+  await test('a market date that hides code shows as text on the poster', async () => {
+    const env = await phone({ hash: '#labels', seed: (SF) => {
+      shop10(SF);
+      // Planted straight into the sheet, past the server's own date check.
+      SF.append('markets', { MarketId: 'M02', Name: 'Bad Market', Date: '2099-01-01<img src=x onerror="window.__pwned=1">', Status: 'planned' });
+    } });
+    const page = env.page;
+    await page.waitForSelector('#tabP');
+    await page.click('#tabP');
+    await page.selectOption('#pfor', 'M02');
+    await page.waitForSelector('.poster .mkt');
+    await page.waitForTimeout(300);
+    assert.strictEqual(await pwned(page), undefined);
+    assert.ok(/<img/.test(await page.textContent('.poster .mkt')), 'shown as text');
+    await env.ctx.close();
+  });
+
+  await test('shop words that hide code show as text on Numbers and the till', async () => {
+    const env = await phone({ hash: '#numbers', seed: (SF) => {
+      shop10(SF);
+      SF.set('profile', JSON.stringify({ name: 'Test', vocab: { units: '<img src=x onerror="window.__pwned=1">', unit: 'jar' } }));
+    } });
+    const page = env.page;
+    await page.waitForFunction(() => SF.state.data.numbers);
+    await page.goto(base + '#till'); await page.waitForFunction(() => SF.state.data.till);
+    await page.goto(base + '#numbers'); await page.waitForTimeout(500);
+    assert.strictEqual(await pwned(page), undefined);
+    await env.ctx.close();
+  });
+
+  await test('a category or cupboard item with a quote in it cannot break out of its button', async () => {
+    const evil = "Jams');window.__pwned=1;//";
+    const env = await phone({ hash: '#till', seed: (SF) => {
+      SF.append('products', { ProductId: 'P20', Name: 'Odd Jam', Category: evil, Type: 'stocked', Unit: 'each', Price: 10, Active: 'Yes', Sort: 1 });
+      SF.move('P20', 3, 'adjust', 'test');
+      SF.append('pantry', { Item: "Sugar');window.__pwned=1;//", Qty: 2, Unit: 'kg', Note: '', UpdatedAt: new Date(), UpdatedBy: 'x' });
+    } });
+    const page = env.page;
+    await page.waitForFunction(() => SF.state.data.till);
+    await page.click('.chips button[data-c="' + evil.replace(/"/g, '\\"') + '"]');
+    assert.strictEqual(await pwned(page), undefined);
+    assert.strictEqual(await page.evaluate(() => SF.ls.get('sf.tillcat')), evil, 'the chip still picks its category');
+    await page.goto(base + '#stock');
+    await page.waitForFunction(() => SF.state.data.stock);
+    await page.evaluate(() => { SF.ls.set('sf.tab.stock', 'cupboard'); SF.render(); });
+    await page.click('button[data-i^="Sugar"]');
+    assert.strictEqual(await pwned(page), undefined);
+    assert.strictEqual(await page.inputValue('#pi'), "Sugar');window.__pwned=1;//", 'the item still fills the form');
     await env.ctx.close();
   });
 

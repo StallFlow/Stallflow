@@ -317,7 +317,7 @@
   }
 
   function lookEditor() {
-    if (!SF.can('reports')) return '';
+    if (!SF.can('settings')) return '';
     var l = labelLook();
     return '<details class="lookedit"' + (lookDraft ? ' open' : '') + '><summary>Change how the labels look</summary>' +
       '<div class="field"><label for="lkstyle">Style</label><select id="lkstyle" onchange="SFA.lookSet()">' +
@@ -473,7 +473,7 @@
      ================================================================== */
 
   SF.screen({
-    id: 'settings', title: 'Settings', cap: 'reports',
+    id: 'settings', title: 'Settings', cap: 'settings',
     render: function () {
       var b = SF.state.boot, p = b.profile;
       var plugins = (b.plugins || []).map(function (pl) {
@@ -1026,7 +1026,7 @@
           '<div class="tag2">' + esc(d.profile.tagline || '') + '</div>' +
           '<div class="mkt">' + (pick.home
             ? 'Order any time<br><span>We arrange the collection with you</span>'
-            : esc(pick.name) + (pick.date ? '<br><span>' + prettyDate(pick.date) +
+            : esc(pick.name) + (pick.date ? '<br><span>' + esc(prettyDate(pick.date)) +
               (pick.location ? ' · ' + esc(pick.location) : '') + '</span>'
               : pick.location ? '<br><span>' + esc(pick.location) + '</span>' : '')) + '</div>' +
           '<div class="qr">' + QR.svg(link, { ec: 'H', border: 2 }) + '</div>' +

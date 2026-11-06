@@ -61,7 +61,7 @@ SF.action('presets', 'reports', 'read', function () {
   return { presets: out, active: SF.get('preset', 'general') };
 });
 
-SF.action('applyPreset', 'reports', 'write', function (p, ctx) {
+SF.action('applyPreset', 'settings', 'write', function (p, ctx) {
   if (ctx.role !== 'owner') return { ok: false, message: 'Only the owner can change the preset.' };
   var key = String(p.preset || '');
   if (!SF.presets[key]) return { ok: false, message: 'No such preset.' };
@@ -386,7 +386,8 @@ function sfExport() {
                 l.units || l.qty, l.unit || 'each', l.total, o.status]);
     });
   });
-  s.getRange(1, 1, out.length, head.length).setValues(out);
+  // Through SF.safe: a customer named "=IMAGE(…)" must stay text, not become a formula.
+  s.getRange(1, 1, out.length, head.length).setValues(out.map(function (row) { return row.map(SF.safe); }));
   s.getRange(1, 1, 1, head.length).setFontWeight('bold')
     .setBackground(SF.profile().colour).setFontColor('#FFFFFF');
   s.setFrozenRows(1);

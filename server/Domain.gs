@@ -907,7 +907,7 @@ SF.labelLook = function () {
   };
 };
 
-SF.action('saveLabelLook', 'reports', 'write', function (p) {
+SF.action('saveLabelLook', 'settings', 'write', function (p) {
   var contact = String(p.contact == null ? '' : p.contact).replace(/\r/g, '')
     .split('\n').map(function (l) { return l.trim().slice(0, 40); }).filter(Boolean).slice(0, 3).join('\n');
   var logo = String(p.logo == null ? '' : p.logo);
@@ -1016,35 +1016,42 @@ SF.action('dashboard', 'reports', 'read', function (p) {
   };
 });
 
-SF.action('addMarket', 'reports', 'write', function (p) {
+SF.action('addMarket', 'settings', 'write', function (p) {
   var name = String(p.name || '').trim().slice(0, 60);
   if (name.length < 2) return { ok: false, message: 'Give the market a name.' };
+  var date = String(p.date || '').trim();
+  if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) return { ok: false, message: 'That date is not a date.' };
   var id = 'M' + ('00' + (SF.rows('markets').length + 1)).slice(-2);
   SF.append('markets', {
-    MarketId: id, Name: name, Date: String(p.date || ''),
+    MarketId: id, Name: name, Date: date,
     Location: String(p.location || '').slice(0, 160), Status: 'planned', Note: ''
   });
   if (p.makeActive) { SF.set('activeMarket', id); SF.purgeCustomers(); }
   return { ok: true, id: id };
 });
 
-SF.action('setActiveMarket', 'reports', 'write', function (p) {
+SF.action('setActiveMarket', 'settings', 'write', function (p) {
+  var id = String(p.marketId || '');
+  // Only a market that exists: a made-up id would break the order page and the QR codes.
+  if (!SF.rows('markets').some(function (r) { return String(r.MarketId) === id; })) {
+    return { ok: false, message: 'That market is not on the list.' };
+  }
   SF.set('activeMarket', String(p.marketId || ''));
   SF.purgeCustomers();
   return { ok: true };
 });
 
-SF.action('setPreordersOpen', 'reports', 'write', function (p) {
+SF.action('setPreordersOpen', 'settings', 'write', function (p) {
   SF.set('preordersOpen', p.open ? 'yes' : 'no');
   return { ok: true, open: !!p.open };
 });
 
-SF.action('setCollectStep', 'reports', 'write', function (p) {
+SF.action('setCollectStep', 'settings', 'write', function (p) {
   SF.set('collectStep', p.on ? 'yes' : 'no');
   return { ok: true, on: !!p.on };
 });
 
-SF.action('setHomeOrders', 'reports', 'write', function (p) {
+SF.action('setHomeOrders', 'settings', 'write', function (p) {
   SF.set('homeOrders', p.open ? 'yes' : 'no');
   return { ok: true, open: !!p.open };
 });
@@ -1080,7 +1087,7 @@ SF.action('deleteExpense', 'expenses', 'write', function (p) {
    ========================================================================= */
 
 /** Owner or manager: put every unpaid reservation for the live market back on the shelf. */
-SF.action('releaseUnpaid', 'reports', 'write', function (p, ctx) {
+SF.action('releaseUnpaid', 'settings', 'write', function (p, ctx) {
   var market = SF.activeMarket(), n = 0;
   SF.orders().forEach(function (o) {
     if (o.marketId !== market || o.status !== 'reserved') return;
@@ -1114,21 +1121,33 @@ SF.action('boot', 'sell', 'read', function (p, ctx) {
   };
 });
 
-SF.action('saveProfile', 'reports', 'write', function (p, ctx) {
+SF.action('saveProfile', 'settings', 'write', function (p, ctx) {
   if (ctx.role !== 'owner' && ctx.role !== 'manager') {
     return { ok: false, message: 'Only an owner or manager can change the shop details.' };
   }
   var stored = SF.json(SF.get('profile', '{}'), {});
-  ['name', 'tagline', 'whatsapp', 'ownerName', 'colour', 'ink', 'paper'].forEach(function (k) {
+  ['name', 'tagline', 'whatsapp', 'ownerName'].forEach(function (k) {
     if (p[k] !== undefined) stored[k] = String(p[k]).slice(0, 120);
   });
-  if (p.vocab) stored.vocab = p.vocab;
-  if (p.plugins) stored.plugins = p.plugins;
+  ['colour', 'ink', 'paper'].forEach(function (k) {
+    if (p[k] !== undefined && SF.cleanColour(p[k])) stored[k] = SF.cleanColour(p[k]);
+  });
+  if (p.vocab && typeof p.vocab === 'object') {
+    var words = {}, known = (SF.presets[SF.get('preset', 'general')] || SF.presets.general).vocab;
+    Object.keys(known).forEach(function (k) {
+      if (p.vocab[k] !== undefined && SF.cleanWord(p.vocab[k])) words[k] = SF.cleanWord(p.vocab[k]);
+    });
+    stored.vocab = words;
+  }
+  if (Array.isArray(p.plugins)) {
+    var ids = SF.registry.plugins.map(function (x) { return x.id; });
+    stored.plugins = p.plugins.map(String).filter(function (x) { return ids.indexOf(x) !== -1; });
+  }
   SF.set('profile', stored);
   return { ok: true };
 });
 
-SF.action('savePluginSettings', 'reports', 'write', function (p) {
+SF.action('savePluginSettings', 'settings', 'write', function (p) {
   var all = SF.json(SF.get('pluginSettings', '{}'), {});
   all[String(p.plugin)] = p.values || {};
   SF.set('pluginSettings', all);
@@ -1146,7 +1165,7 @@ SF.action('savePluginSettings', 'reports', 'write', function (p) {
  * Two keys, not one: an owner's token AND the exact phrase. Nothing else in
  * the API destroys history, so it does not get to be a one-tap action.
  */
-SF.action('resetTrading', 'reports', 'write', function (p, ctx) {
+SF.action('resetTrading', 'settings', 'write', function (p, ctx) {
   if (ctx.role !== 'owner') {
     return { ok: false, message: 'Only the owner can reset trading data.' };
   }

@@ -77,7 +77,16 @@ window.SF = (function () {
   /** "3 jars" / "1 jar" — the noun comes from the market preset. */
   function countOf(n, one, many) {
     var v = Math.round(Number(n) || 0);
-    return v + ' ' + (v === 1 ? (one || S.vocab.unit) : (many || S.vocab.units));
+    return v + ' ' + esc(v === 1 ? (one || S.vocab.unit) : (many || S.vocab.units));
+  }
+
+  /** The shop's words ("jar", "pots") as plain text, whatever was stored. */
+  function cleanVocab(v) {
+    var out = {};
+    Object.keys(v || {}).forEach(function (k) {
+      out[k] = String(v[k] == null ? '' : v[k]).replace(/[<>&"'`=\\\/(){};]/g, '').slice(0, 24);
+    });
+    return out;
   }
 
   function clock(ts) {
@@ -277,7 +286,7 @@ window.SF = (function () {
 
   var CAPS = {
     owner: ['*'],
-    manager: ['sell', 'orders', 'stock', 'price', 'labels', 'reports', 'expenses', 'report', 'count'],
+    manager: ['sell', 'orders', 'stock', 'price', 'labels', 'reports', 'expenses', 'report', 'count', 'settings'],
     cashier: ['sell', 'orders', 'labels', 'report', 'count'],
     viewer: ['reports', 'report', 'count']
   };
@@ -1019,14 +1028,14 @@ window.SF = (function () {
   }
 
   function refreshBoot() {
-    S.vocab = S.boot.profile.vocab || S.vocab;
+    S.vocab = S.boot.profile.vocab ? cleanVocab(S.boot.profile.vocab) : S.vocab;
     S.marketId = S.boot.marketId || S.marketId;
     paintTheme(S.boot.profile);
     render(true);
   }
 
   function begin() {
-    S.vocab = S.boot.profile.vocab || S.vocab;
+    S.vocab = S.boot.profile.vocab ? cleanVocab(S.boot.profile.vocab) : S.vocab;
     S.marketId = S.boot.marketId || '';
     paintTheme(S.boot.profile);
     document.title = S.boot.profile.name + ' — StallFlow';

