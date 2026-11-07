@@ -532,6 +532,8 @@ test('a new product can start with the stock she has on the shelf', () => {
   const again = SF.dispatch('saveProduct', { token: tok, opId: 'np1', name: 'Lizard resin ornament', category: 'Resin', type: 'stocked', unit: 'each', price: 105, qty: 4 });
   p = SF.dispatch('stock', { token: tok }).data.products.filter((x) => x.name === 'Lizard resin ornament');
   assert.strictEqual(p.length, 1); assert.strictEqual(p[0].onHand, 4, 'the same request sent twice adds once');
+});
+
 /* ---------- Claude as a connector ---------- */
 function claudeKit() {
   const env = shop(day(3));

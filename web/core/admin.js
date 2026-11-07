@@ -1295,12 +1295,14 @@
           '<div class="sub">' + (st.on
             ? 'On since ' + esc(st.since || '?') + (st.lastUsed ? ' \u00b7 last used ' + esc(String(st.lastUsed).slice(0, 16).replace('T', ' ')) + ' (UTC)' : ' \u00b7 not used yet')
             : 'Off. Claude cannot see or change anything here.') + '</div>' +
-          '<div id="claudekey"></div>' +
-          '<button class="ok block" onclick="SFA.claudeKey(' + (st.on ? 'true' : 'false') + ')">' +
-            (st.on ? 'Make a new address (the old one stops working)' : 'Switch on and make the address') + '</button>' +
-          (st.on ? '<button class="bad block" style="margin-top:8px" onclick="SFA.claudeOff()">Switch off</button>' : '') +
+          '<div id="claudekey"></div><div id="claudebtns">' + SFA.claudeButtons(st.on) + '</div>' +
           '<button class="quiet block" style="margin-top:8px" onclick="SF.closeSheet()">Close</button>');
       }).catch(function () { SF.toast('Could not reach the shop. This needs signal.', true); });
+    },
+    claudeButtons: function (on) {
+      return '<button class="ok block" onclick="SFA.claudeKey(' + (on ? 'true' : 'false') + ')">' +
+          (on ? 'Make a new address (the old one stops working)' : 'Switch on and make the address') + '</button>' +
+        (on ? '<button class="bad block" style="margin-top:8px" onclick="SFA.claudeOff()">Switch off</button>' : '');
     },
     claudeKey: function (again) {
       if (again && !window.confirm('The old address will stop working straight away. Make a new one?')) return;
@@ -1320,6 +1322,7 @@
             '<li>Name it StallFlow and paste the address.</li>' +
             '<li>Anyone with this address can change your stock, so do not post or forward it. ' +
               'If it leaks, switch it off here.</li></ol></div>';
+        var bt = SF.el('claudebtns'); if (bt) bt.innerHTML = SFA.claudeButtons(true);
       }).catch(function () { SF.toast('That did not go through. Try again with signal.', true); });
     },
     claudeOff: function () {

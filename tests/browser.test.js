@@ -1106,6 +1106,24 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
     await env.ctx.close();
   });
 
+  await test('Settings: the owner switches Claude on, sees the address once, and can switch it off', async () => {
+    const env = await phone({ hash: '#settings' });
+    const page = env.page;
+    await page.waitForSelector('button:has-text("Set up or switch off")');
+    await page.click('button:has-text("Set up or switch off")');
+    await page.waitForSelector('.sheet button:has-text("Switch on and make the address")');
+    await page.click('.sheet button:has-text("Switch on and make the address")');
+    await page.waitForSelector('#claudeurl');
+    const url = (await page.textContent('#claudeurl')).trim();
+    assert.ok(/\?mcp=[a-f0-9]{32,}$/.test(url), url);
+    assert.strictEqual(env.SF.mcp(url.split('mcp=')[1], { jsonrpc: '2.0', id: 1, method: 'tools/list' }).reply.result.tools.length, 6, 'the address works');
+    assert.ok(!JSON.stringify(env.sheets).includes(url.split('mcp=')[1]), 'the key itself is not in the sheet');
+    await page.click('.sheet button:has-text("Switch off")');
+    await page.waitForFunction(() => !document.querySelector('.sheet'));
+    assert.strictEqual(env.SF.mcp(url.split('mcp=')[1], { jsonrpc: '2.0', id: 1, method: 'tools/list' }).error.code, -32001);
+    await env.ctx.close();
+  });
+
   await test('All markets: Show Coming up and sort by profit', async () => {
     const env = await phone({ hash: '#numbers', seed: (SF) => {
       [['M02', 'Spring Fair', 5], ['M03', 'Winter Fair', -40], ['M04', 'Craft Night', 12], ['M05', 'Easter Market', -200],
