@@ -239,9 +239,11 @@
         (h.location ? '<div class="muted small">' + esc(h.location) + '</div>' : '') +
         (when === 'past' ? '' : '<button class="quiet" style="padding:4px 0;min-height:36px;text-decoration:underline" ' +
           'data-id="' + esc(h.id) + '" onclick="SFA.shareMarket(this.getAttribute(\'data-id\'))">Share the order form</button>') +
-        '</td><td>' + esc(h.date || '—') + '</td><td class="r">' + qty(h.units, 'each') + '</td>' +
-        '<td class="r">' + money(h.revenue) + '</td><td class="r">' + money(h.expenses) + '</td>' +
-        '<td class="r"><b style="color:' + (h.profit >= 0 ? 'var(--ok)' : 'var(--bad)') + '">' +
+        '</td><td class="mkdate">' + esc(h.date || '—') + '</td>' +
+        '<td class="r" data-l="' + esc(v.units) + '">' + qty(h.units, 'each') + '</td>' +
+        '<td class="r" data-l="Taken">' + money(h.revenue) + '</td>' +
+        '<td class="r" data-l="Costs">' + money(h.expenses) + '</td>' +
+        '<td class="r" data-l="Profit"><b style="color:' + (h.profit >= 0 ? 'var(--ok)' : 'var(--bad)') + '">' +
         money(h.profit) + '</b></td></tr>';
     }).join('') : '<tr><td colspan="6" class="empty">No markets recorded yet.</td></tr>';
 
@@ -252,7 +254,7 @@
           ['past', 'Been and gone'], ['home', 'Between markets']] }],
         sorts: [['', 'Newest first'], ['date', 'Oldest first'], ['-profit', 'Most profit'],
                 ['-taken', 'Most taken'], ['-units', 'Most sold'], ['-costs', 'Most spent'], ['name', 'A–Z']] }) +
-      '<div class="scroll"><table><tr>' + SF.filters.th('markets', 'name', 'Market') +
+      '<div class="scroll"><table class="mktable"><tr class="mkhead">' + SF.filters.th('markets', 'name', 'Market') +
       SF.filters.th('markets', 'date', 'Date') +
       SF.filters.th('markets', 'units', v.units.charAt(0).toUpperCase() + v.units.slice(1), 'r') +
       SF.filters.th('markets', 'taken', 'Taken', 'r') + SF.filters.th('markets', 'costs', 'Costs', 'r') +

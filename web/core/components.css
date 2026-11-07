@@ -458,3 +458,19 @@ details.card summary{cursor:pointer;padding:6px 0;font-size:16px}
 .pacts .quiet{padding:4px 8px;min-height:36px}
 .card.stale.slim{padding:8px 12px;font-size:14px;margin-bottom:10px}
 .card.stale.slim .quiet{padding:2px 6px;text-decoration:underline}
+
+/* Every market so far: on a phone each market is a card (name, date, then
+   four figures in a row) instead of a six-column table that wraps letter by letter. */
+@media (max-width:640px){
+  .mktable,.mktable tbody{display:block}
+  .mktable tr.mkhead{display:none}
+  .mktable tr[data-fempty]{display:block}
+  .mktable tr:not(.mkhead):not([data-fempty]){display:grid;grid-template-columns:repeat(4,minmax(0,1fr));
+    gap:2px 14px;padding:12px 4px;border-bottom:1px solid var(--rule)}
+  .mktable td{display:block;padding:0;border:0;text-align:left}
+  .mktable td:first-child{grid-column:1/-1;font-size:16px}
+  .mktable td.mkdate{grid-column:1/-1;color:var(--muted);font-size:13.5px;margin-bottom:8px}
+  .mktable td[data-l]{text-align:left;font-size:14px;white-space:nowrap}
+  .mktable td[data-l]::before{content:attr(data-l);display:block;font-size:11px;font-weight:700;
+    letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-bottom:2px}
+}

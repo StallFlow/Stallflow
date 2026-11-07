@@ -1788,6 +1788,29 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
     await env.ctx.close();
   });
 
+  await test('Every market so far is one readable card per market on a phone', async () => {
+    const env = await phone({ hash: '#numbers', seed: shop10 });
+    const page = env.page;
+    await page.waitForFunction(() => SF.state.data.numbers);
+    await page.evaluate(() => { SF.ls.set('sf.tab.numbers', 'all'); SF.render(); });
+    await page.waitForSelector('.mktable tr:not(.mkhead)');
+    const m = await page.evaluate(() => {
+      const tr = document.querySelector('.mktable tr:not(.mkhead):not([data-fempty])');
+      const name = tr.querySelector('td:first-child');
+      const r = name.getBoundingClientRect();
+      const head = document.querySelector('.mktable tr.mkhead');
+      return { nameH: r.height, wide: r.width, headShown: getComputedStyle(head).display !== 'none',
+               labels: [].map.call(tr.querySelectorAll('td[data-l]'), (t) => t.getAttribute('data-l')).length,
+               over: document.documentElement.scrollWidth > window.innerWidth + 1 };
+    });
+    assert.ok(m.nameH < 90, 'name is not squeezed into a tall narrow column: ' + m.nameH);
+    assert.ok(m.wide > 200, 'name has the full width of the card: ' + m.wide);
+    assert.strictEqual(m.headShown, false);
+    assert.strictEqual(m.labels, 4);
+    assert.strictEqual(m.over, false);
+    await env.ctx.close();
+  });
+
   await test('a category or cupboard item with a quote in it cannot break out of its button', async () => {
     const evil = "Jams');window.__pwned=1;//";
     const env = await phone({ hash: '#till', seed: (SF) => {
