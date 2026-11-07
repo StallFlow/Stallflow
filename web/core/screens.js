@@ -1567,13 +1567,35 @@
 
     newProduct: function () {
       var types = (SF.state.boot.profile.types || ['stocked']);
+      // The categories already in use, so a new product goes under the right heading
+      // with one tap and a typo cannot start a second "Resin".
+      var seen = {}, cats = [];
+      [SF.state.data.stock, SF.state.data.till, SF.state.data.labels].forEach(function (d) {
+        ((d && d.products) || []).forEach(function (p) {
+          var c = String(p.category || '').trim();
+          if (c && !seen[c.toLowerCase()]) { seen[c.toLowerCase()] = true; cats.push(c); }
+        });
+      });
+      cats.sort(function (a, b) { return a.toLowerCase() < b.toLowerCase() ? -1 : 1; });
+      var last = SF.ls.get('sf.lastcat', '');
       SF.openSheet('<h2>New product</h2>' +
         '<div class="sub">You can change any of this later.</div>' +
-        '<div class="field"><label for="pn">Name</label><input id="pn" placeholder="Gooseberry jam"></div>' +
-        '<div class="row"><div class="field"><label for="pv">Variant</label>' +
+        '<div class="field"><label for="pn">Name</label><input id="pn" placeholder="Lizard resin ornament"></div>' +
+        '<div class="field"><label for="pc">Category</label><select id="pc" onchange="SFS.catChanged()">' +
+          cats.map(function (c) {
+            return '<option value="' + esc(c) + '"' + (c === last ? ' selected' : '') + '>' + esc(c) + '</option>';
+          }).join('') + '<option value="__new__"' + (cats.length ? '' : ' selected') + '>New category\u2026</option></select>' +
+          '<input id="pcn" placeholder="Name the new category" style="margin-top:8px;display:' +
+            (cats.length ? 'none' : 'block') + '"></div>' +
+        '<div class="row"><div class="field"><label for="pp">Price</label>' +
+          '<input id="pp" type="number" inputmode="decimal" min="0" step="0.5" placeholder="105"></div>' +
+        '<div class="field" id="qtywrap"><label for="pq">How many do you have?</label>' +
+          '<input id="pq" type="number" inputmode="decimal" min="0" step="1" placeholder="0"></div></div>' +
+        '<div class="row"><div class="field"><label for="pv">Size or variant (optional)</label>' +
           '<input id="pv" placeholder="340g"></div>' +
-        '<div class="field"><label for="pc">Category</label>' +
-          '<input id="pc" placeholder="Jams"></div></div>' +
+        '<div class="field"><label for="pu">Unit</label>' +
+          '<select id="pu"><option value="each">each</option><option value="kg">per kg</option>' +
+          '<option value="100g">per 100 g</option></select></div></div>' +
         '<div class="field"><label for="pt">How is it sold?</label><select id="pt" onchange="SFS.typeChanged()">' +
           types.map(function (t) {
             return '<option value="' + t + '">' + ({
@@ -1582,20 +1604,21 @@
               weighed: 'By weight'
             })[t] + '</option>';
           }).join('') + '</select></div>' +
-        '<div class="row"><div class="field"><label for="pu">Unit</label>' +
-          '<select id="pu"><option value="each">each</option><option value="kg">per kg</option>' +
-          '<option value="100g">per 100 g</option></select></div>' +
-        '<div class="field"><label for="pp">Price</label>' +
-          '<input id="pp" type="number" inputmode="decimal" min="0" step="0.5" placeholder="65"></div>' +
-        '</div>' +
         '<div class="field" id="capwrap" style="display:none"><label for="pcap">How many can you make in a day?</label>' +
           '<input id="pcap" type="number" inputmode="numeric" min="0" placeholder="40"></div>' +
         '<button class="block" onclick="SFS.saveProduct()">Add it</button>');
     },
 
+    catChanged: function () {
+      var isNew = SF.el('pc').value === '__new__';
+      SF.el('pcn').style.display = isNew ? 'block' : 'none';
+      if (isNew) SF.el('pcn').focus();
+    },
+
     typeChanged: function () {
       var t = SF.el('pt').value;
       SF.el('capwrap').style.display = t === 'made' ? '' : 'none';
+      SF.el('qtywrap').style.display = t === 'made' ? 'none' : '';
       SF.el('pu').value = t === 'weighed' ? 'kg' : 'each';
     },
 
@@ -1621,13 +1644,19 @@
       var name = SF.el('pn').value;
       if (String(name).trim().length < 2) { SF.toast('Give it a name.', true); return; }
       if (!(Number(SF.el('pp').value) > 0)) { SF.toast('Set a selling price.', true); return; }
-      SF.closeSheet();
-      SF.write('saveProduct', {
-        name: name, variant: SF.el('pv') ? SF.el('pv').value : '',
-        category: SF.el('pc') ? SF.el('pc').value : '',
+      var cat = SF.el('pc').value === '__new__' ? SF.el('pcn').value.trim() : SF.el('pc').value;
+      if (SF.el('pc').value === '__new__' && cat.length < 2) { SF.toast('Name the new category.', true); return; }
+      if (cat) SF.ls.set('sf.lastcat', cat);
+      // Read everything first: closing the sheet removes the boxes from the page.
+      var made = SF.el('pt').value === 'made';
+      var item = {
+        name: name, variant: SF.el('pv').value, category: cat,
         type: SF.el('pt').value, unit: SF.el('pu').value,
-        price: SF.el('pp').value, capacity: SF.el('pcap') ? SF.el('pcap').value : 0
-      });
+        qty: made ? 0 : Number(SF.el('pq').value) || 0,
+        price: SF.el('pp').value, capacity: SF.el('pcap').value || 0
+      };
+      SF.closeSheet();
+      SF.write('saveProduct', item);
       SF.toast('Added');
     }
   };

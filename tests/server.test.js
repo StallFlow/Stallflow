@@ -501,16 +501,37 @@ test('a stall data fix runs once, only changes what is still as it was, and neve
   SF.append('markets', { MarketId: 'M03', Name: 'Blairegowrie Church Market', Date: day(0), Location: 'Christ Church Blairgowrie, Gordon Avenue', Status: 'planned' });
   vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'stalls', 'duxies', 'Fixes.gs'), 'utf8'), ctx);
   const row = () => SF.rows('markets').filter((m) => m.MarketId === 'M03')[0];
-  assert.strictEqual(SF.runDataFixes().length, 1);
+  assert.strictEqual(SF.runDataFixes().length, 2, 'both one-off fixes ran');
   assert.strictEqual(row().Name, 'Blairegowrie Craft Market');
   assert.ok(/Domus Dei Campus, 39 Malcolm Road/.test(row().Location), row().Location);
   // typed in by hand afterwards: the fix is spent and never overwrites it
   SF.setCell('markets', row()._row, 'Name', 'Blairgowrie Craft Market');
   assert.strictEqual(SF.runDataFixes().length, 0);
   assert.strictEqual(row().Name, 'Blairgowrie Craft Market');
+  // the lizard ornament: added once with 1 in stock, and not again
+  const liz = () => SF.products({ all: true }).filter((x) => /lizard/i.test(x.name));
+  assert.strictEqual(liz().length, 1); assert.strictEqual(liz()[0].onHand, 1);
+  assert.strictEqual(liz()[0].price, 105); assert.strictEqual(liz()[0].category, 'Resin');
   // a fix that throws does not escape
   vm.runInContext("sfDataFixes = function () { return [{ id: 'boom', what: 'x', run: function () { throw new Error('no'); } }]; };", ctx);
   assert.deepStrictEqual(Array.from(SF.runDataFixes()), []);
+});
+
+test('a new product can start with the stock she has on the shelf', () => {
+  const { SF } = shop(day(3));
+  SF.setPin('owner', '4321');
+  const tok = SF.dispatch('signIn', { pin: '4321', device: 'd' }).data.token;
+  const r = SF.dispatch('saveProduct', { token: tok, opId: 'np1', name: 'Lizard resin ornament', category: 'Resin', type: 'stocked', unit: 'each', price: 105, qty: 4 });
+  assert.ok(r.ok, JSON.stringify(r));
+  let p = SF.dispatch('stock', { token: tok }).data.products.filter((x) => x.name === 'Lizard resin ornament')[0];
+  assert.strictEqual(p.onHand, 4); assert.strictEqual(p.price, 105);
+  const r2 = SF.dispatch('saveProduct', { token: tok, opId: 'np2', name: 'Pot of cakes', category: 'Baking', type: 'made', unit: 'each', price: 20, qty: 9, capacity: 10 });
+  assert.ok(r2.ok);
+  p = SF.dispatch('stock', { token: tok }).data.products.filter((x) => x.name === 'Pot of cakes')[0];
+  assert.ok(!p.onHand, 'made-to-order items have no stock count');
+  const again = SF.dispatch('saveProduct', { token: tok, opId: 'np1', name: 'Lizard resin ornament', category: 'Resin', type: 'stocked', unit: 'each', price: 105, qty: 4 });
+  p = SF.dispatch('stock', { token: tok }).data.products.filter((x) => x.name === 'Lizard resin ornament');
+  assert.strictEqual(p.length, 1); assert.strictEqual(p[0].onHand, 4, 'the same request sent twice adds once');
 });
 
 test('uncooked stock is a list she can add to and update', () => {

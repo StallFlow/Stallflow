@@ -4,6 +4,17 @@
  */
 function sfDataFixes() {
   return [{
+    id: 'lizard-resin-ornament',
+    what: 'Added Lizard resin ornament, R105, with 1 in stock',
+    // Asked for by the owner: one lizard ornament on the shelf. Skipped if one is already there.
+    run: function () {
+      var have = SF.products({ all: true }).some(function (p) { return /lizard/i.test(p.name); });
+      if (have) return false;
+      var r = SF.CORE_ACTIONS.saveProduct.fn({ name: 'Lizard resin ornament', category: 'Resin', price: 105,
+        qty: 1, type: 'stocked', unit: 'each' }, {});
+      return !!(r && r.ok);
+    }
+  }, {
     id: 'blairegowrie-craft-market',
     what: 'Market M03 renamed Blairegowrie Craft Market, at Domus Dei Campus',
     // The market is the Blairgowrie Craft Market at Domus Dei Campus, 39 Malcolm Road,
