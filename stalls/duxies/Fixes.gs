@@ -4,6 +4,24 @@
  */
 function sfDataFixes() {
   return [{
+    id: 'lizard-own-id',
+    what: 'Lizard resin ornament moved off the id it shared with Apricot Jam, and its stock with it',
+    // The ornament was given P01, which Apricot Jam already has, so one extra jar showed on
+    // Apricot Jam. Give the ornament its own id and move its opening-stock line with it.
+    run: function () {
+      var sharing = SF.rows('products').filter(function (r) { return String(r.ProductId) === 'P01'; });
+      if (sharing.length < 2) return false;
+      var liz = sharing.filter(function (r) { return /^lizard resin ornament$/i.test(String(r.Name).trim()); })[0];
+      if (!liz) return false;
+      var id = SF.nextProductId();
+      SF.setCell('products', liz._row, 'ProductId', id);
+      var mv = SF.rows('movements').filter(function (m) {
+        return String(m.ProductId) === 'P01' && String(m.Ref) === 'Opening stock' && Number(m.Qty) === 1;
+      }).pop();
+      if (mv) SF.setCell('movements', mv._row, 'ProductId', id);
+      return true;
+    }
+  }, {
     id: 'lizard-resin-ornament',
     what: 'Added Lizard resin ornament, R105, with 1 in stock',
     // Asked for by the owner: one lizard ornament on the shelf. Skipped if one is already there.

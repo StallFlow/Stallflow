@@ -859,6 +859,20 @@ SF.action('setPrice', 'price', 'write', function (p) {
   return { ok: true, price: value };
 });
 
+/** The next free product id: one past the highest in use, and never one that already exists. */
+SF.nextProductId = function () {
+  var used = {}, top = 0;
+  SF.rows('products').forEach(function (r) {
+    var id = String(r.ProductId);
+    used[id] = true;
+    var m = /^P(\d+)$/.exec(id);
+    if (m) top = Math.max(top, Number(m[1]));
+  });
+  var n = top + 1, id;
+  do { id = 'P' + (n < 10 ? '0' + n : String(n)); n++; } while (used[id]);
+  return id;
+};
+
 SF.action('saveProduct', 'stock', 'write', function (p) {
   var name = String(p.name || '').trim().slice(0, 60);
   var type = String(p.type || 'stocked');
@@ -887,7 +901,7 @@ SF.action('saveProduct', 'stock', 'write', function (p) {
     return { ok: true, id: existing.id };
   }
   var count = SF.rows('products').length;
-  fields.ProductId = 'P' + ('00' + (count + 1)).slice(-2);
+  fields.ProductId = SF.nextProductId();
   fields.Sort = (count + 1) * 10;
   SF.append('products', fields);
   // What she has on the shelf right now goes in as the first line of the ledger.

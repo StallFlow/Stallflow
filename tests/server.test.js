@@ -612,6 +612,36 @@ test('a new key replaces the old one, switching off ends it, and the hourly limi
   assert.strictEqual(SF.mcp(fresh, { jsonrpc: '2.0', id: 1, method: 'tools/list' }).error.code, -32001);
 });
 
+test('a new product never takes an id that is already in use', () => {
+  const { SF } = shop(day(3));
+  SF.setPin('owner', '4321');
+  const tok = SF.dispatch('signIn', { pin: '4321', device: 'd' }).data.token;
+  // 98 more products: ids P02..P99, then one more must not wrap round to P01
+  for (let i = 2; i <= 99; i++) SF.append('products', { ProductId: 'P' + (i < 10 ? '0' + i : i), Name: 'Item ' + i, Type: 'stocked', Unit: 'each', Price: 10, Active: 'Yes', Sort: i * 10 });
+  const r = SF.dispatch('saveProduct', { token: tok, opId: 'big1', name: 'Lizard resin ornament', category: 'Resin', type: 'stocked', unit: 'each', price: 105, qty: 1 });
+  assert.strictEqual(r.id, 'P100');
+  const ids = SF.rows('products').map((x) => x.ProductId);
+  assert.strictEqual(new Set(ids).size, ids.length, 'every id is unique');
+  assert.strictEqual(SF.products({ all: true }).filter((x) => x.id === 'P01')[0].onHand, 10, 'Apricot Jam is untouched');
+});
+
+test('the shared-id mistake is repaired: the ornament gets its own id and takes its stock with it', () => {
+  const env = shop(day(3));
+  const { SF, ctx } = env;
+  // what the live sheet looks like: the ornament added under P01, with its opening stock on P01
+  SF.append('products', { ProductId: 'P01', Name: 'Lizard resin ornament', Category: 'Resin', Type: 'stocked', Unit: 'each', Price: 105, Active: 'Yes', Sort: 20 });
+  SF.move('P01', 1, 'adjust', 'Opening stock');
+  assert.strictEqual(SF.products({ all: true }).filter((x) => x.id === 'P01')[0].onHand, 11, 'both are counted together');
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'stalls', 'duxies', 'Fixes.gs'), 'utf8'), ctx);
+  const fixes = vm.runInContext('sfDataFixes()', ctx).filter((f) => f.id === 'lizard-own-id');
+  assert.strictEqual(fixes[0].run(), true);
+  const by = (id) => SF.products({ all: true }).filter((x) => x.id === id);
+  assert.strictEqual(by('P01').length, 1); assert.strictEqual(by('P01')[0].onHand, 10, 'Apricot Jam is back to its own stock');
+  const liz = SF.products({ all: true }).filter((x) => /lizard/i.test(x.name))[0];
+  assert.notStrictEqual(liz.id, 'P01'); assert.strictEqual(liz.onHand, 1);
+  assert.strictEqual(fixes[0].run(), false, 'nothing left to repair');
+});
+
 test('uncooked stock is a list she can add to and update', () => {
   const { SF } = shop(day(3));
   SF.setPin('owner', '4321');
