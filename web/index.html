@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Order ahead</title>
 <meta name="description" content="Reserve before the market and skip the queue. Pay at the stall.">
+<link rel="preconnect" href="https://script.google.com" crossorigin>
+<link rel="preconnect" href="https://script.googleusercontent.com" crossorigin>
 <link rel="stylesheet" href="core/ui.css">
 <style>
   main{padding-bottom:0}
@@ -158,28 +160,60 @@ function apiPost(body){
   }).then(function(r){ return r.json(); });
 }
 
-window.addEventListener('load', function(){
+/* The last catalogue this phone saw for this market (public product data only,
+   never a customer's details). It is drawn at once while the server answers,
+   which on a cold Apps Script can take several seconds. */
+var DATA_FRESH = false;
+function cacheKey(){ return 'sf:' + (CFG.stall || 'stall') + ':catalogue:' + (WANT || 'live'); }
+function cacheRead(){
+  try {
+    var c = JSON.parse(localStorage.getItem(cacheKey()) || 'null');
+    return c && c.data && c.data.profile && Date.now() - c.at < 864e5 ? c.data : null;
+  } catch (e) { return null; }
+}
+function cacheWrite(d){
+  try { localStorage.setItem(cacheKey(), JSON.stringify({ at: Date.now(), data: d })); } catch (e) {}
+}
+function adopt(d){
+  DATA = d;
+  var r = document.documentElement.style;
+  r.setProperty('--brand', d.profile.colour);
+  r.setProperty('--ink', d.profile.ink);
+  r.setProperty('--paper', d.profile.paper);
+  document.title = d.profile.name + ' \u2014 order ahead';
+}
+function typing(){
+  var a = document.activeElement;
+  return !!a && /^(INPUT|TEXTAREA)$/.test(a.tagName);
+}
+
+/* Ask for the catalogue straight away, not after the page has finished loading. */
+var FIRST = CFG.api ? loadCatalogue() : null;
+
+(function start(){
   if (!CFG.api){
     el('app').innerHTML = '<div class="wrap"><div class="card"><div class="say">' +
       '<b>Not connected yet.</b><br>The <code>api</code> address is blank in config.js.' +
       '</div></div></div>';
     return;
   }
-  loadCatalogue().then(function(res){
+  var shown = cacheRead();
+  if (shown){ adopt(shown); draw(); }
+  FIRST.then(function(res){
     if (!res || res.ok === false) throw new Error('no');
-    DATA = res.data;
-    var r = document.documentElement.style;
-    r.setProperty('--brand', DATA.profile.colour);
-    r.setProperty('--ink', DATA.profile.ink);
-    r.setProperty('--paper', DATA.profile.paper);
-    document.title = DATA.profile.name + ' — order ahead';
-    draw();
+    DATA_FRESH = true;
+    cacheWrite(res.data);
+    // Do not redraw under someone who has already started choosing or typing.
+    var leave = shown && (Object.keys(CART).length || typing());
+    adopt(res.data);
+    if (!leave) draw();
   }).catch(function(){
+    if (shown) return;   // keep showing what we have
     el('app').innerHTML = '<div class="wrap"><div class="card"><div class="say">' +
       '<b>We could not load the stall.</b><br>Check your signal and pull down to refresh. ' +
-      'If it keeps happening, come by the table — we will sort you out there.</div></div></div>';
+      'If it keeps happening, come by the table \u2014 we will sort you out there.</div></div></div>';
   });
-});
+})();
 
 function unitOf(id){ var p = product(id); return p ? p.unit : 'each'; }
 function product(id){
@@ -299,12 +333,12 @@ function draw(){
   applyFind();
   if (PID && !PID_SHOWN) {
     // Scanned from a jar: show that one, once, and leave the rest of the page alone after.
-    PID_SHOWN = true;
     var it = el('it-' + PID), p = product(PID);
+    if (p || DATA_FRESH) PID_SHOWN = true;   // a saved copy may not know this product yet
     if (it && p) {
       setTimeout(function(){ it.scrollIntoView({ block: 'center' }); }, 60);
       toast('You scanned ' + p.name + (p.variant ? ' ' + p.variant : '') + '. Tap + to put one aside.');
-    } else if (!p) {
+    } else if (!p && DATA_FRESH) {
       toast('That product is not on sale here right now. Have a look at what is.', true);
     }
   }
