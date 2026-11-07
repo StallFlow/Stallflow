@@ -444,23 +444,41 @@
 
   /* The picture is drawn as soon as the poster shows, so Share is answered at once.
      (An iPhone only opens the share sheet straight from a tap.) */
-  var adPics = { key: '', feed: null, story: null };
+  var adPics = { key: '', feed: null, story: null, pdf: null };
   function preparePoster(info) {
     if (!window.SFL) return;
     var key = JSON.stringify(info);
     if (adPics.key === key && adPics.feed) return;
-    adPics = { key: key, feed: null, story: null, info: info };
-    ['feed', 'story'].forEach(function (kind) {
-      SFL.posterBlob(info, kind).then(function (b) {
-        if (adPics.key === key) adPics[kind] = b;
-      }).catch(function () {});
+    adPics = { key: key, feed: null, story: null, pdf: null, info: info };
+    // The stall's artwork (if it has any) first, so the picture is drawn once, in its final look.
+    SFL.loadArt().then(function (art) {
+      if (adPics.key !== key) return;
+      var withArt = art ? Object.assign({}, info, { art: art }) : info;
+      adPics.info = withArt;
+      ['feed', 'story'].forEach(function (kind) {
+        SFL.posterBlob(withArt, kind).then(function (b) {
+          if (adPics.key !== key) return;
+          adPics[kind] = b;
+          if (kind === 'feed') applyPosterImg();
+        }).catch(function () {});
+      });
+      if (art) SFL.posterPdf(withArt, 'feed').then(function (b) { if (adPics.key === key) adPics.pdf = b; }).catch(function () {});
     });
+  }
+  /** The designed poster, shown on screen and printed as the picture itself. */
+  var posterUrl = '';
+  function applyPosterImg() {
+    var im = document.getElementById('posterimg');
+    if (!im || !adPics.feed) return;
+    if (posterUrl) URL.revokeObjectURL(posterUrl);
+    posterUrl = URL.createObjectURL(adPics.feed);
+    im.src = posterUrl;
   }
   function adFileName(kind) {
     var shop = String((adPics.info && adPics.info.shop) || 'poster').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
     var what = String((adPics.info && (adPics.info.home ? 'order-any-time' : adPics.info.title)) || '')
       .toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 30);
-    return shop + '-' + what + '-' + (kind === 'story' ? 'status-1080x1920' : 'post-1080x1350') + '.png';
+    return shop + '-' + what + '-' + (kind === 'story' ? 'status-1080x1920' : adPics.info && adPics.info.art ? 'post-1080x1500' : 'post-1080x1350') + '.png';
   }
 
   /** Which market's poster: remembered on this phone, else the soonest. */
@@ -903,6 +921,7 @@
           (window.SFL && SFL.canShare() ? '<button class="ghost" onclick="SFA.sharePoster()">Share the picture</button>' : '') +
           '<button class="ghost" onclick="SFA.downloadPoster(\'feed\')">Download for Facebook and Instagram</button>' +
           '<button class="ghost" onclick="SFA.downloadPoster(\'story\')">Download for WhatsApp Status</button>' +
+          (window.STALLFLOW && STALLFLOW.posterArt ? '<button class="ghost" onclick="SFA.downloadPdf()">Download the PDF (the link taps through)</button>' : '') +
           '<button class="ghost" data-id="' + did + '" onclick="SF.closeSheet();SFA.openPoster(this.getAttribute(\'data-id\'))">Open the printable poster</button>' +
         '</div>' +
         '<button class="quiet block" style="margin-top:8px" onclick="SF.closeSheet()">Done</button>');
@@ -920,6 +939,13 @@
       if (!b) { SF.toast('One moment, the picture is being made. Tap again.'); return; }
       SFL.save(b, adFileName(kind));
       SF.toast('Saved. Post it from your gallery.');
+    },
+    /** The poster as a PDF: its QR and the link at the foot open the order page when tapped. */
+    downloadPdf: function () {
+      var b = adPics.pdf;
+      if (!b) { SF.toast('One moment, the PDF is being made. Tap again.'); return; }
+      SFL.save(b, adFileName('feed').replace(/\.png$/, '.pdf'));
+      SF.toast('Saved. The link opens when someone taps it.');
     },
     /** The picture itself into WhatsApp, Facebook and the rest, from the phone's share sheet. */
     sharePoster: function () {
@@ -1159,8 +1185,11 @@
             (window.SFL && SFL.canShare() ? '<button class="ghost" id="adshare" onclick="SFA.sharePoster()">Share the picture</button>' : '') +
             '<button class="ghost" onclick="SFA.downloadPoster(\'feed\')">Download for Facebook and Instagram</button>' +
             '<button class="ghost" onclick="SFA.downloadPoster(\'story\')">Download for WhatsApp Status</button>' +
+          (window.STALLFLOW && STALLFLOW.posterArt ? '<button class="ghost" onclick="SFA.downloadPdf()">Download the PDF (the link taps through)</button>' : '') +
           '</div></div>' +
-          '<div class="poster"><h1>' + esc(d.profile.name) + '</h1>' +
+          (window.STALLFLOW && STALLFLOW.posterArt
+            ? '<div class="poster designed"><img id="posterimg" alt="Poster for ' + esc(pick.name) + '"></div>'
+            : '<div class="poster"><h1>' + esc(d.profile.name) + '</h1>' +
           '<div class="tag2">' + esc(d.profile.tagline || '') + '</div>' +
           '<div class="mkt">' + (pick.home
             ? 'Order any time<br><span>We arrange the collection with you</span>'
@@ -1172,7 +1201,8 @@
           '<div class="sub2">' + (pick.home ? 'Reserve now — pay when you collect.'
                                             : 'Reserve now — pay at the stall.') +
             '<br>No app, no account.</div>' +
-          '<div class="url">' + esc(link) + '</div></div>';
+          '<div class="url">' + esc(link) + '</div></div>');
+        applyPosterImg();
         return;
       }
       var cards = [], n = 0;

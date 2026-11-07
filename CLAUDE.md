@@ -161,6 +161,11 @@ go through `SF.once` so a retried request never runs twice.
   (`sfDataFixes()`), run once by `SF.runDataFixes` on the first `boot` after an
   update. A fix changes only what is still exactly as it was (a hand edit
   wins) and a failing one never stops the app.
+- **Posters in a stall's own artwork**: a stall with `poster-header.jpg` and
+  `poster-meadow.jpg` in its folder gets the designed poster (`SFL.poster` →
+  `designed`, 1080 × 1500 feed, 1080 × 1920 story) and a PDF whose QR and link
+  bar are tappable (`SFL.posterPdf`); `build-site.sh` copies the pictures and
+  sets `posterArt` in config.js. Without them the plain poster is drawn.
 - **Uncooked stock** (the `Pantry` tab) is a plain count list, not a ledger:
   nothing is sold from it, so `savePantry` overwrites the amount.
 - Server code is plain Apps Script (V8, no modules). Every `.gs` shares one

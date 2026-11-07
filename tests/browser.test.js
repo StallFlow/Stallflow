@@ -111,7 +111,7 @@ function serveSite() {
   execFileSync('bash', [path.join(ROOT, 'scripts', 'build-site.sh'), 'test'], { cwd: ROOT, stdio: 'ignore' });
   const root = path.join(ROOT, '_site');
   const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json',
-                  '.webmanifest': 'application/manifest+json', '.png': 'image/png' };
+                  '.webmanifest': 'application/manifest+json', '.png': 'image/png', '.jpg': 'image/jpeg' };
   const srv = http.createServer((req, res) => {
     let p = decodeURIComponent(req.url.split('?')[0]);
     if (p.endsWith('/')) p += 'index.html';
@@ -207,7 +207,9 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
       const real = fs.readFileSync(path.join(ROOT, '_site', 'duxies', 'config.js'), 'utf8');
       await route.fulfill({ status: 200, contentType: 'text/javascript',
         body: real + (opts.maps ? '\nwindow.STALLFLOW.mapsKey = "test-key"; window.STALLFLOW.mapsRegion = "za";'
-                                : '\ndelete window.STALLFLOW.mapsKey;') });
+                                : '\ndelete window.STALLFLOW.mapsKey;') +
+          // the stall's poster artwork is off unless a test asks for it, so the plain poster stays covered
+          (opts.art ? '' : '\ndelete window.STALLFLOW.posterArt;') });
     });
     page.on('pageerror', (e) => { env.pageErrors = (env.pageErrors || []).concat(String(e)); });
     if (process.env.SF_DEBUG) page.on('console', (m) => { if (m.type() === 'error') console.log('console:', m.text().slice(0, 300)); });
@@ -2040,6 +2042,47 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
     assert.strictEqual(r.feed.qr, link); assert.strictEqual(r.story.qr, link);
     assert.strictEqual(r.home.qr, site + '?m=home');
     assert.strictEqual(r.long.qr, link, 'long names still leave room for a scannable QR');
+    await env.ctx.close();
+  });
+
+  await test('Poster in the stall\'s artwork: picture, QR and a PDF whose link taps through', async () => {
+    const env = await phone({ hash: '#labels', seed: adSeed, art: true });
+    const page = env.page;
+    await page.addScriptTag({ path: path.join(ROOT, 'web', 'core', 'vendor', 'jsQR.js') });
+    await page.waitForSelector('#tabP'); await page.click('#tabP');
+    await page.waitForSelector('#posterimg');
+    await page.waitForFunction(() => { const i = document.getElementById('posterimg'); return i && i.complete && i.naturalWidth > 0; }, null, { timeout: 8000 });
+    assert.deepStrictEqual(await page.$eval('#posterimg', (i) => [i.naturalWidth, i.naturalHeight]), [1080, 1500]);
+    const link = site + '?m=M02';
+    const r = await page.evaluate(async (link) => {
+      const art = await SFL.loadArt();
+      const base = { shop: "Duxie's Homemade", title: 'Monument Primary Market', when: 'Sun 8 Nov',
+        where: 'Domus Dei Campus, 39 Malcolm Road, Blairegowrie, Randburg, South Africa', link: link, art: art };
+      const out = { art: !!art };
+      [['feed', base, 'feed'], ['story', base, 'story'], ['home', Object.assign({}, base, { home: true, link: link.replace('M02', 'home') }), 'feed'],
+       ['long', Object.assign({}, base, { title: 'Blairgowrie Church Craft and Food Market Spring Edition', where: 'Fourways Gardens Residential Estate - Phase 2 & 3, Camdeboo Road, Fourways, Sandton, South Africa' }), 'feed']]
+        .forEach(([k, i, kind]) => {
+          const c = SFL.poster(i, kind), x = c.getContext('2d');
+          const q = window.jsQR(x.getImageData(0, 0, c.width, c.height).data, c.width, c.height);
+          out[k] = { w: c.width, h: c.height, qr: q && q.data, links: (c.links || []).length };
+        });
+      return out;
+    }, link);
+    assert.strictEqual(r.art, true, 'the artwork reached the phone');
+    assert.deepStrictEqual([r.feed.w, r.feed.h, r.story.w, r.story.h], [1080, 1500, 1080, 1920]);
+    assert.strictEqual(r.feed.qr, link); assert.strictEqual(r.story.qr, link);
+    assert.strictEqual(r.home.qr, site + '?m=home'); assert.strictEqual(r.long.qr, link);
+    assert.strictEqual(r.feed.links, 2, 'the QR and the link bar are both link areas');
+    await page.waitForTimeout(800);
+    const [dl] = await Promise.all([page.waitForEvent('download'), page.click('button:has-text("Download the PDF")')]);
+    assert.ok(/\.pdf$/.test(dl.suggestedFilename()), dl.suggestedFilename());
+    const pdf = fs.readFileSync(await dl.path()).toString('latin1');
+    assert.ok(pdf.startsWith('%PDF-1.4') && /%%EOF\s*$/.test(pdf), 'a whole PDF');
+    assert.strictEqual((pdf.match(/\/Subtype \/Link/g) || []).length, 2);
+    assert.strictEqual((pdf.match(/\/URI \(([^)]+)\)/g) || []).every((u) => u.indexOf(link) !== -1), true);
+    if (process.env.SF_SHOT) {
+      await page.locator('.poster').screenshot({ path: path.join(process.env.SF_SHOT, 'poster-designed.png') });
+    }
     await env.ctx.close();
   });
 

@@ -30,11 +30,16 @@ for dir in stalls/*/; do
 
   mkdir -p "$OUT/$slug"
   cp -r web/app web/core web/plugins web/guide web/index.html "$OUT/$slug/"
+  # A stall's own poster artwork (header and blurred backdrop), if it has any
+  if [ -f "$dir/poster-header.jpg" ] && [ -f "$dir/poster-meadow.jpg" ]; then
+    cp "$dir/poster-header.jpg" "$dir/poster-meadow.jpg" "$OUT/$slug/"
+  fi
   node -e '
     const fs = require("fs");
     const c = require(process.argv[1]);
     const pf = process.argv[3], p = fs.existsSync(pf) ? require(pf) : {};
     const cfg = { api: c.api, stall: process.argv[2], build: process.argv[4] };
+    if (fs.existsSync(require("path").join(require("path").dirname(process.argv[1]), "poster-header.jpg"))) cfg.posterArt = true;
     const maps = c.mapsKey || p.mapsKey;
     if (maps) { cfg.mapsKey = maps; cfg.mapsRegion = c.mapsRegion || p.mapsRegion || "za"; }
     process.stdout.write(
