@@ -622,6 +622,16 @@
           '<div class="muted small">owner: everything · manager: everything but PINs · ' +
             'cashier: sell and hand over · viewer: numbers only</div></div>') +
 
+        (SF.can('people')
+          ? '<div class="card"><h2>Claude as your helper</h2>' +
+            '<div class="sub">Connect Claude, so when a message comes in on WhatsApp to add stock, ' +
+            'remove something or sort out a problem, Claude can do it for you. It can only add or ' +
+            'take off stock, add products, change prices, switch products off and read problem ' +
+            'reports. Never money, orders, PINs or who has access, and everything it does is ' +
+            'recorded as Claude.</div>' +
+            '<button class="ghost block" onclick="SFA.claudeConnector()">Set up or switch off</button></div>'
+          : '') +
+
         '<div class="card"><h2>Plugins</h2>' +
           '<div class="sub">Switched on by the market type. Each one adds behaviour the ' +
             'core does not have.</div>' + (plugins || '<div class="empty">None on.</div>') +
@@ -1275,6 +1285,58 @@
       SF.load(SF.state.view);
     },
     forget1: function (opId) { SF.outbox.remove(opId); SF.render(); },
+
+    /** Claude as a connector: the owner makes (or ends) the key. It is shown once. */
+    claudeConnector: function () {
+      SF.get('assistantStatus').then(function (res) {
+        var st = res && res.data;
+        if (!st) { SF.toast('Could not reach the shop. This needs signal.', true); return; }
+        SF.openSheet('<h2>Claude as your helper</h2>' +
+          '<div class="sub">' + (st.on
+            ? 'On since ' + esc(st.since || '?') + (st.lastUsed ? ' \u00b7 last used ' + esc(String(st.lastUsed).slice(0, 16).replace('T', ' ')) + ' (UTC)' : ' \u00b7 not used yet')
+            : 'Off. Claude cannot see or change anything here.') + '</div>' +
+          '<div id="claudekey"></div><div id="claudebtns">' + SFA.claudeButtons(st.on) + '</div>' +
+          '<button class="quiet block" style="margin-top:8px" onclick="SF.closeSheet()">Close</button>');
+      }).catch(function () { SF.toast('Could not reach the shop. This needs signal.', true); });
+    },
+    claudeButtons: function (on) {
+      return '<button class="ok block" onclick="SFA.claudeKey(' + (on ? 'true' : 'false') + ')">' +
+          (on ? 'Make a new address (the old one stops working)' : 'Switch on and make the address') + '</button>' +
+        (on ? '<button class="bad block" style="margin-top:8px" onclick="SFA.claudeOff()">Switch off</button>' : '');
+    },
+    claudeKey: function (again) {
+      if (again && !window.confirm('The old address will stop working straight away. Make a new one?')) return;
+      SF.get('assistantKey').then(function (res) {
+        var d = res;                       // a change answers {ok, key} directly
+        if (!d || !d.ok || !d.key) throw new Error('refused');
+        var api = (window.STALLFLOW && STALLFLOW.api) || '';
+        var url = api + (api.indexOf('?') === -1 ? '?' : '&') + 'mcp=' + d.key;
+        var box = SF.el('claudekey');
+        if (box) box.innerHTML =
+          '<div class="card flat" style="border:2px solid var(--warn);margin:12px 0">' +
+          '<b>Your connector address. It is shown only now.</b>' +
+          '<div class="linkbox" id="claudeurl" style="margin-top:8px;overflow-wrap:anywhere">' + esc(url) + '</div>' +
+          '<button class="ok block" style="margin-top:8px" data-url="' + esc(url) + '" onclick="SFA.copyText(this.getAttribute(\'data-url\'))">Copy the address</button>' +
+          '<ol class="small" style="margin:10px 0 0 18px;line-height:1.5">' +
+            '<li>Open the Claude app, then Settings \u203a Connectors \u203a Add custom connector.</li>' +
+            '<li>Name it StallFlow and paste the address.</li>' +
+            '<li>Anyone with this address can change your stock, so do not post or forward it. ' +
+              'If it leaks, switch it off here.</li></ol></div>';
+        var bt = SF.el('claudebtns'); if (bt) bt.innerHTML = SFA.claudeButtons(true);
+      }).catch(function () { SF.toast('That did not go through. Try again with signal.', true); });
+    },
+    claudeOff: function () {
+      SF.get('assistantOff').then(function (res) {
+        if (!res || !res.ok) throw new Error('refused');
+        SF.closeSheet(); SF.toast('Claude is switched off.');
+      }).catch(function () { SF.toast('That did not go through. Try again with signal.', true); });
+    },
+    copyText: function (text) {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(function () { SF.toast('Copied'); },
+          function () { SF.toast('Press and hold the address to copy it.'); });
+      } else SF.toast('Press and hold the address to copy it.');
+    },
 
     backupNow: function () {
       var b = SF.el('backupnow');

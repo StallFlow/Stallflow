@@ -459,11 +459,27 @@ SF.lock = function (fn) {
 
 function doGet(e) {
   var p = (e && e.parameter) || {};
+  if (p.mcp) return SF.mcpReply(null, p.mcp);
   if (!p.action) return SF.engineRoom();
   return SF.reply(SF.safely(String(p.action), p));
 }
 
+/** The Claude connector: the address carries the key (?mcp=KEY). */
+SF.mcpReply = function (body, key) {
+  var r = SF.mcp(key, body);
+  if (r.error) return SF.reply({ jsonrpc: '2.0', id: null, error: r.error });
+  if (r.reply === null || r.reply === undefined || (Array.isArray(r.reply) && !r.reply.length)) {
+    return ContentService.createTextOutput('');
+  }
+  return SF.reply(r.reply);
+};
+
 function doPost(e) {
+  if (e && e.parameter && e.parameter.mcp) {
+    var mb;
+    try { mb = JSON.parse(e.postData.contents || '{}'); } catch (err) { mb = {}; }
+    return SF.mcpReply(mb, e.parameter.mcp);
+  }
   var body;
   try { body = JSON.parse(e.postData.contents || '{}'); }
   catch (err) { return SF.reply({ ok: false, message: 'Could not read that request.' }); }

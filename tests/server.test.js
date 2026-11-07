@@ -534,6 +534,84 @@ test('a new product can start with the stock she has on the shelf', () => {
   assert.strictEqual(p.length, 1); assert.strictEqual(p[0].onHand, 4, 'the same request sent twice adds once');
 });
 
+/* ---------- Claude as a connector ---------- */
+function claudeKit() {
+  const env = shop(day(3));
+  const { SF } = env;
+  SF.setPin('owner', '4321'); SF.setPin('manager', '5555');
+  env.owner = SF.dispatch('signIn', { pin: '4321', device: 'd' }).data.token;
+  env.manager = SF.dispatch('signIn', { pin: '5555', device: 'd' }).data.token;
+  env.key = SF.dispatch('assistantKey', { token: env.owner, opId: 'k' + Math.random() }).key;
+  env.rpc = (method, params, key, id) => {
+    const r = SF.mcp(key === undefined ? env.key : key, { jsonrpc: '2.0', id: id === undefined ? 1 : id, method, params });
+    return r;
+  };
+  env.call = (name, args) => {
+    const r = env.rpc('tools/call', { name, arguments: args }).reply;
+    return { isError: r.result.isError, data: JSON.parse(r.result.content[0].text) };
+  };
+  return env;
+}
+
+test('only the owner can make or end the connector key, and only its hash is kept', () => {
+  const { SF, owner, manager, props, key } = claudeKit();
+  assert.ok(key && key.length >= 32);
+  assert.strictEqual(SF.dispatch('assistantKey', { token: manager, opId: 'm1' }).code, 'forbidden');
+  assert.strictEqual(SF.dispatch('assistantOff', { token: manager, opId: 'm2' }).code, 'forbidden');
+  assert.strictEqual(SF.dispatch('assistantStatus', { token: owner }).data.on, true);
+  assert.ok(!JSON.stringify(props).includes(key) && !JSON.stringify(SF.rows('settings')).includes(key), 'the key itself is not stored');
+});
+
+test('the connector: wrong key, then the protocol, then a fixed list of tools', () => {
+  const env = claudeKit();
+  assert.strictEqual(env.rpc('tools/list', {}, 'nope').error.code, -32001);
+  const init = env.rpc('initialize', { protocolVersion: '2025-06-18' }).reply.result;
+  assert.strictEqual(init.protocolVersion, '2025-06-18'); assert.ok(init.capabilities.tools);
+  const tools = env.rpc('tools/list', {}).reply.result.tools.map((t) => t.name).sort();
+  assert.strictEqual(tools.join(), 'stallflow_add_product,stallflow_adjust_stock,stallflow_problems,stallflow_set_price,stallflow_stock,stallflow_switch_product');
+  assert.strictEqual(env.SF.mcp(env.key, { jsonrpc: '2.0', method: 'notifications/initialized' }).reply, null, 'a notification gets no answer');
+  assert.strictEqual(env.call('sell', { lines: [] }).data.ok, false, 'no tool outside the list');
+  assert.strictEqual(env.call('setPin', { role: 'owner', pin: '1' }).data.ok, false);
+});
+
+test('the connector adds, prices, restocks and switches off, and records each as Claude', () => {
+  const env = claudeKit(), { SF } = env;
+  const added = env.call('stallflow_add_product', { name: 'Lizard resin ornament', category: 'Resin', price: 105, qty: 4, request_id: 'r1' });
+  assert.ok(added.data.ok, JSON.stringify(added));
+  env.call('stallflow_add_product', { name: 'Lizard resin ornament', category: 'Resin', price: 105, qty: 4, request_id: 'r1' });
+  const find = () => env.call('stallflow_stock', {}).data.products.filter((p) => p.name === 'Lizard resin ornament');
+  assert.strictEqual(find().length, 1, 'the same request id changes things once');
+  assert.strictEqual(find()[0].onHand, 4); assert.strictEqual(find()[0].price, 105);
+  const id = find()[0].id;
+  assert.ok(env.call('stallflow_adjust_stock', { product_id: id, qty: -1, reason: 'damaged' }).data.ok);
+  assert.ok(env.call('stallflow_adjust_stock', { product_id: id, qty: 10, reason: 'delivery' }).data.ok);
+  assert.strictEqual(find()[0].onHand, 13);
+  assert.strictEqual(env.call('stallflow_adjust_stock', { product_id: id, qty: 501 }).data.ok, false, 'a huge change is left to the owner');
+  assert.strictEqual(env.call('stallflow_adjust_stock', { product_id: 'P99', qty: 1 }).data.ok, false);
+  assert.ok(env.call('stallflow_set_price', { product_id: id, price: 110 }).data.ok);
+  assert.strictEqual(find()[0].price, 110);
+  assert.ok(env.call('stallflow_switch_product', { product_id: id, on: false }).data.ok);
+  assert.strictEqual(find()[0].active, false, 'switched off, still there');
+  assert.ok(env.call('stallflow_switch_product', { product_id: id, on: true }).data.ok);
+  const mine = SF.rows('audit').filter((r) => r.Actor === 'Claude (connector)').map((r) => r.Action);
+  assert.ok(['stallflow_add_product', 'stallflow_adjust_stock', 'stallflow_set_price', 'stallflow_switch_product'].every((a) => mine.indexOf(a) !== -1), mine.join());
+  assert.strictEqual(env.call('stallflow_add_product', { name: 'x', price: 0 }).data.ok, false);
+  assert.ok(env.call('stallflow_problems', {}).data.ok, 'support read works');
+});
+
+test('a new key replaces the old one, switching off ends it, and the hourly limit holds', () => {
+  const env = claudeKit(), { SF } = env;
+  const old = env.key;
+  const fresh = SF.dispatch('assistantKey', { token: env.owner, opId: 'k2' }).key;
+  assert.strictEqual(SF.mcp(old, { jsonrpc: '2.0', id: 1, method: 'tools/list' }).error.code, -32001);
+  assert.ok(SF.mcp(fresh, { jsonrpc: '2.0', id: 1, method: 'tools/list' }).reply.result);
+  for (let i = 0; i < SF.ASSISTANT_PER_HOUR; i++) SF.mcp(fresh, { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'stallflow_stock', arguments: {} } });
+  const over = SF.mcp(fresh, { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'stallflow_stock', arguments: {} } }).reply.result;
+  assert.strictEqual(over.isError, true);
+  SF.dispatch('assistantOff', { token: env.owner, opId: 'off' });
+  assert.strictEqual(SF.mcp(fresh, { jsonrpc: '2.0', id: 1, method: 'tools/list' }).error.code, -32001);
+});
+
 test('uncooked stock is a list she can add to and update', () => {
   const { SF } = shop(day(3));
   SF.setPin('owner', '4321');
