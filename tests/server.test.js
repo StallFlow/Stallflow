@@ -489,6 +489,7 @@ test('markets running at the same time stay apart: sales, pre-orders and numbers
   assert.strictEqual(t1.unpaid.map((o) => o.customer).join(), 'Anna');
   assert.strictEqual(t2.unpaid.map((o) => o.customer).join(), 'Bea');
   assert.strictEqual(th.unpaid.length, 0);
+  assert.strictEqual(t1.running.map((m) => m.id + ':' + m.count).sort().join(), 'M01:1,M02:1', 'every market on today\'s date is listed with its own count');
   const n1 = SF.dispatch('dashboard', { token: tok, marketId: 'M01' }).data;
   const n2 = SF.dispatch('dashboard', { token: tok, marketId: 'M02' }).data;
   assert.strictEqual(n2.summary.revenue, 3 * n1.summary.revenue, 'Numbers are per market too');

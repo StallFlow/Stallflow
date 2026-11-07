@@ -1043,6 +1043,36 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
     await env.ctx.close();
   });
 
+  await test('Markets today: each can be started from the till, and every one keeps its own sales', async () => {
+    const env = await phone({ hash: '#till', seed: (SF) => {
+      SF.append('markets', { MarketId: 'M02', Name: 'Blairegowrie', Date: day(0), Status: 'planned' });
+      SF.append('markets', { MarketId: 'M03', Name: 'Monument', Date: day(0), Status: 'planned' });
+      SF.append('markets', { MarketId: 'M04', Name: 'Next Week', Date: day(7), Status: 'planned' });
+    } });
+    const page = env.page;
+    await page.evaluate(() => SF.ls.set('sf.sellAt', 'M02'));
+    await page.goto('about:blank'); await page.goto(base + '#till');
+    await page.waitForSelector('.todaymk');
+    const rows = () => page.$$eval('.todaymk .mk', (r) => r.map((x) => x.innerText.replace(/\s+/g, ' ').trim()));
+    let r = await rows();
+    assert.strictEqual(r.length, 2, 'only markets on today\'s date: ' + r.join(' | '));
+    assert.ok(/Blairegowrie Selling here/.test(r[0] + ' ' + r[1]) || /Selling here/.test(r.join()), r.join(' | '));
+    assert.ok(/Monument.*Not started yet.*Start/.test(r.join(' | ')), r.join(' | '));
+    // sell one jar here, then start the next market and sell there
+    await page.evaluate(() => SFT.tap(SF.state.data.till.products[0].id));
+    await page.evaluate(() => SFT.take());
+    await page.click('#cashbits button:has-text("Exact")').catch(() => {});
+    await page.evaluate(() => { const b = document.querySelector('.sheet .ok'); if (b) b.click(); });
+    await page.waitForFunction(() => !(SF.state.outbox && SF.state.outbox.length) && SF.state.data.till.totals.tillCount === 1, null, { timeout: 8000 }).catch(() => {});
+    await page.click('.todaymk button:has-text("Start")');
+    await page.waitForFunction(() => /Monument/.test(document.querySelector('.rail .meta').textContent));
+    const tc = await page.evaluate(() => SF.state.data.till.totals.tillCount);
+    assert.strictEqual(tc, 0, 'the new market starts with none of the other market\'s sales');
+    r = (await rows()).join(' | ');
+    assert.ok(/Blairegowrie.*Switch/.test(r) && /Monument.*Selling here/.test(r), r);
+    await env.ctx.close();
+  });
+
   await test('All markets: Show Coming up and sort by profit', async () => {
     const env = await phone({ hash: '#numbers', seed: (SF) => {
       [['M02', 'Spring Fair', 5], ['M03', 'Winter Fair', -40], ['M04', 'Craft Night', 12], ['M05', 'Easter Market', -200],

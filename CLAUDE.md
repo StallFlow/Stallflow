@@ -152,6 +152,11 @@ go through `SF.once` so a retried request never runs twice.
   never a token, an email or free text. Health shows the recent ones.
 - **The staff app is not locked to portrait** (manifest `orientation: any`);
   short landscape screens have their own rules at the end of components.css.
+- **Several markets can trade on the same day.** Each phone sells at the market
+  it chose (`sf.sellAt`); the top bar and the "You are selling at" banner
+  (`SF.sellingAt()`) name it, amber when it is not today's. The till's
+  `running` list feeds the "Markets today" card (Start / Switch). Keep every
+  sale, pre-order and number filed under its own market.
 - **Uncooked stock** (the `Pantry` tab) is a plain count list, not a ledger:
   nothing is sold from it, so `savePantry` overwrites the amount.
 - Server code is plain Apps Script (V8, no modules). Every `.gs` shares one

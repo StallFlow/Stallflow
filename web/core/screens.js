@@ -94,6 +94,28 @@
         : '') + '</div>';
   }
 
+  /** Markets trading today. Each one can be started from this phone with a tap, and every
+      phone chooses its own, so all of them can run at once. Only shown when there is more
+      than one, or the one this phone is not on. */
+  function marketsToday(d) {
+    var run = d.running || [];
+    if (!run.length) return '';
+    var here = SF.sellingAt();
+    if (run.length === 1 && here && here.id === run[0].id) return '';
+    return '<div class="card todaymk"><h3>Markets today</h3>' +
+      '<div class="sub">Each phone sells at one market. Start the others on their own phones, ' +
+      'or tap one here to switch this phone.</div>' +
+      run.map(function (m) {
+        var mine = here && here.id === m.id;
+        return '<div class="mk' + (mine ? ' on' : '') + '"><div class="who"><b>' + esc(m.name) + '</b>' +
+          '<span>' + (mine ? 'Selling here' : m.count ? m.count + (m.count === 1 ? ' sale' : ' sales') + ' so far · ' + money(m.total)
+                                                       : 'Not started yet') + '</span></div>' +
+          (mine ? '<span class="tick">\u2713</span>'
+                : '<button class="ghost sm" data-id="' + esc(m.id) + '" onclick="SFT.sellAt(this.getAttribute(\'data-id\'))">' +
+                  (m.count ? 'Switch' : 'Start') + '</button>') + '</div>';
+      }).join('') + '</div>';
+  }
+
   /** The last sale, with a way to send the customer a receipt on WhatsApp. */
   function lastSaleBar() {
     if (!lastSale) return '';
@@ -182,7 +204,7 @@
           figure('Walk-ups', moneyShort(t.tillTotal), t.tillCount + ' sold'),
           figure('Still to pay', moneyShort(owed), d.unpaid.length + (d.unpaid.length === 1 ? ' order' : ' orders'))
         ]) +
-        SF.slot('till.figures', ctx) + sellingBanner(d) + staleMarket(d) + SF.slot('till.top', ctx) + tb.html +
+        SF.slot('till.figures', ctx) + sellingBanner(d) + marketsToday(d) + staleMarket(d) + SF.slot('till.top', ctx) + tb.html +
         (tb.on === 'sell'
           ? lastSaleBar() + '<div class="card"><div style="display:flex;gap:10px;align-items:center">' +
               '<h2 style="flex:1">Ring up a sale</h2>' +
