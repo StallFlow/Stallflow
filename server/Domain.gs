@@ -1160,10 +1160,13 @@ SF.runDataFixes = function () {
   var done = [];
   sfDataFixes().forEach(function (f) {
     var key = 'fix.' + f.id;
-    if (SF.get(key, '')) return;
+    // A fix with an `until` date is safe to repeat (it only changes what is still wrong) and
+    // runs on every open until then; any other fix runs once.
+    if (f.until) { if (SF.today() > f.until) return; }
+    else if (SF.get(key, '')) return;
     try {
       var changed = f.run();
-      SF.set(key, SF.today());
+      if (!f.until) SF.set(key, SF.today());
       if (changed) { done.push(f.what); SF.audit({ role: 'system' }, 'datafix', f.id, f.what, 'ok'); }
     } catch (e) { /* tried again at the next open */ }
   });

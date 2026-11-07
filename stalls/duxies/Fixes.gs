@@ -22,6 +22,47 @@ function sfDataFixes() {
       return true;
     }
   }, {
+    id: 'lizard-sales',
+    until: '2026-11-14',
+    what: 'Sales of the lizard ornament that were recorded as Apricot Jam were put right',
+    // While the ornament shared P01 with Apricot Jam, the till recorded its sales as Apricot Jam
+    // (priced R70-80 and taken off Apricot's stock). For every such sale since the ornament was
+    // added, make the order the ornament at its own price and cost, and move the stock back with
+    // two correcting lines (the ledger is only ever added to). Safe to repeat. Apricot Jam 340g
+    // is not otherwise sold at present; if it ever is, check Numbers.
+    run: function () {
+      var liz = SF.products({ all: true }).filter(function (p) { return /^lizard resin ornament$/i.test(String(p.name).trim()); })[0];
+      if (!liz || liz.id === 'P01') return false;
+      var open = SF.rows('movements').filter(function (m) { return String(m.ProductId) === liz.id && String(m.Ref) === 'Opening stock'; })[0];
+      if (!open || !(open.When instanceof Date)) return false;
+      var since = open.When.getTime(), changed = false;
+      SF.rows('orders').forEach(function (o) {
+        if (!(o.When instanceof Date) || o.When.getTime() < since || String(o.Status) === 'cancelled') return;
+        var lines = SF.json(o.Lines, []);
+        if (!lines.some(function (l) { return String(l.id) === 'P01'; })) return;
+        var fixed = [], units = 0, total = 0, cost = 0, moved = 0;
+        lines.forEach(function (l) {
+          var keep = l;
+          if (String(l.id) === 'P01') {
+            keep = SF.priceLine(liz, { qty: l.qty, note: l.note }, { role: 'system' });
+            moved += keep.units;
+          }
+          fixed.push(keep);
+          units += SF.num(keep.units); total += SF.num(keep.total); cost += SF.num(keep.cost);
+        });
+        SF.setCell('orders', o._row, 'Lines', JSON.stringify(fixed));
+        SF.setCell('orders', o._row, 'Units', Math.round(units * 1000) / 1000);
+        SF.setCell('orders', o._row, 'Total', Math.round(total * 100) / 100);
+        SF.setCell('orders', o._row, 'Cost', Math.round(cost * 100) / 100);
+        var why = 'Correction ' + o.OrderNo + ': it was the lizard ornament';
+        SF.move('P01', moved, 'adjust', why, String(o.MarketId || ''));
+        SF.move(liz.id, -moved, 'adjust', why, String(o.MarketId || ''));
+        SF.audit({ role: 'system' }, 'datafix', String(o.OrderNo), 'lizard ornament was recorded as Apricot Jam; corrected', 'ok');
+        changed = true;
+      });
+      return changed;
+    }
+  }, {
     id: 'lizard-resin-ornament',
     what: 'Added Lizard resin ornament, R105, with 1 in stock',
     // Asked for by the owner: one lizard ornament on the shelf. Skipped if one is already there.

@@ -642,6 +642,37 @@ test('the shared-id mistake is repaired: the ornament gets its own id and takes 
   assert.strictEqual(fixes[0].run(), false, 'nothing left to repair');
 });
 
+test('a lizard sale recorded as Apricot Jam is put right: the order, the money, and both stocks', () => {
+  const env = shop(day(0));
+  const { SF, ctx } = env;
+  SF.setPin('owner', '4321');
+  const tok = SF.dispatch('signIn', { pin: '4321', device: 'd' }).data.token;
+  const wait = (ms) => { const t = Date.now() + ms; while (Date.now() < t); };
+  // an Apricot Jam sale from before the ornament existed: must be left alone
+  assert.ok(SF.dispatch('sell', { token: tok, opId: 's0', lines: [{ id: 'P01', qty: 1 }], paid: 'cash' }).ok);
+  wait(5);
+  SF.append('products', { ProductId: 'P01', Name: 'Lizard resin ornament', Category: 'Resin', Type: 'stocked', Unit: 'each', Price: 105, Active: 'Yes', Sort: 20 });
+  SF.move('P01', 1, 'adjust', 'Opening stock');
+  wait(5);
+  // the lizard rung up at the till: recorded under P01, so as Apricot Jam
+  const sale = SF.dispatch('sell', { token: tok, opId: 's1', lines: [{ id: 'P01', qty: 1 }], paid: 'cash' });
+  assert.ok(sale.ok, JSON.stringify(sale));
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'stalls', 'duxies', 'Fixes.gs'), 'utf8'), ctx);
+  const fixes = vm.runInContext('sfDataFixes()', ctx);
+  fixes.filter((f) => f.id === 'lizard-own-id')[0].run();
+  const sales = fixes.filter((f) => f.id === 'lizard-sales')[0];
+  assert.strictEqual(sales.run(), true);
+  const orders = SF.orders().filter((o) => o.status !== 'cancelled');
+  const early = orders.filter((o) => o.no === orders[0].no)[0], late = orders[orders.length - 1];
+  assert.strictEqual(early.lines[0].name, 'Apricot Jam', 'the earlier sale is untouched');
+  assert.strictEqual(late.lines[0].name, 'Lizard resin ornament'); assert.strictEqual(late.total, 105); assert.strictEqual(late.units, 1);
+  const stock = (re) => SF.products({ all: true }).filter((x) => re.test(x.name))[0].onHand;
+  assert.strictEqual(stock(/Apricot/), 9, 'Apricot Jam: 10, less its own one sale');
+  assert.strictEqual(stock(/Lizard/), 0, 'the one ornament is sold');
+  assert.strictEqual(sales.run(), false, 'repeating changes nothing');
+  assert.strictEqual(stock(/Lizard/), 0);
+});
+
 test('uncooked stock is a list she can add to and update', () => {
   const { SF } = shop(day(3));
   SF.setPin('owner', '4321');
