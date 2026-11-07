@@ -2167,6 +2167,49 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
     await env.ctx.close();
   });
 
+  await test('Stock: a card offers to add the missing jam sizes, one tap adds them, and the card goes', async () => {
+    const env = await phone({ hash: '#stock', seed: (SF) => {
+      SF.append('products', { ProductId: 'P20', Name: 'Apricot', Variant: '352 ml', Type: 'stocked', Category: 'Jams', Unit: 'each', Price: 70, Active: 'Yes', Sort: 1 });
+      // what the stall's own file does, in miniature
+      const want = ['352 ml', 'Medium (odd bottle)', '125 ml'];
+      SF.missingSizes = () => want.filter((v) => !SF.rows('products').some((p) => p.Name === 'Apricot' && p.Variant === v)).map((v) => ({ name: 'Apricot', size: v }));
+      SF.addJamSizes = () => { const m = SF.missingSizes(); m.forEach((x, i) => SF.append('products', { ProductId: 'P3' + i, Name: 'Apricot', Variant: x.size, Type: 'stocked', Category: 'Jams', Unit: 'each', Price: 50, Active: 'Yes', Sort: 20 + i })); return { added: m.length, costed: 0 }; };
+    } });
+    const page = env.page;
+    await page.waitForSelector('#addsizes');
+    assert.ok(/2 jam sizes are missing/.test(await page.textContent('.card.stale')), await page.textContent('.card.stale'));
+    await page.click('#addsizes');
+    await page.waitForFunction(() => !document.getElementById('addsizes'), null, { timeout: 15000 });
+    const apricots = env.SF.products({ all: true }).filter((p) => p.name === 'Apricot');
+    assert.strictEqual(apricots.length, 3);
+    assert.ok(apricots.filter((p) => p.variant !== '352 ml').every((p) => p.onHand === 0), 'the new sizes start with none');
+    await env.ctx.close();
+  });
+
+  await test('Order page: a size that is gone is left off while another size is there; a jam with every size gone shows as sold out', async () => {
+    const env = await phone({ hash: '#till', seed: (SF) => {
+      SF.append('markets', { MarketId: 'M02', Name: 'Spring Fair', Date: day(3), Status: 'planned' });
+      SF.set('activeMarket', 'M02');
+      [['P30', 'Apricot', '352 ml', 4], ['P31', 'Apricot', 'Medium (odd bottle)', 0], ['P32', 'Apricot', '125 ml', 0],
+       ['P33', 'Mulberry', '352 ml', 0], ['P34', 'Mulberry', 'Medium (odd bottle)', 0], ['P35', 'Mulberry', '125 ml', 0]].forEach((x, i) => {
+        SF.append('products', { ProductId: x[0], Name: x[1], Variant: x[2], Type: 'stocked', Category: 'Jams', Unit: 'each', Price: 60, Active: 'Yes', Sort: 100 + i });
+        if (x[3]) SF.move(x[0], x[3], 'adjust', 't');
+      });
+    } });
+    const page = await customer(env, '?m=M02');
+    const rows = async () => page.$$eval('.item', (r) => r.map((x) => x.querySelector('b,.nm,.name') ? x.textContent.replace(/\s+/g, ' ').trim() : x.textContent.trim()));
+    const apricot = (await rows()).filter((t) => /^Apricot (352|Medium|125)/.test(t));
+    assert.strictEqual(apricot.length, 1, 'only the Apricot size that is there: ' + apricot.join(' | '));
+    assert.ok(/352 ml/.test(apricot[0]));
+    const mul = (await rows()).filter((t) => /^Mulberry/.test(t));
+    assert.strictEqual(mul.length, 3, 'every Mulberry size shows, sold out: ' + mul.join(' | '));
+    assert.ok(mul.every((t) => /Sold out/.test(t)));
+    // a scanned jar that is gone is still shown, so the customer is told why
+    const scanned = await customer(env, '?m=M02&p=P31');
+    assert.ok((await scanned.$$eval('.item', (r) => r.map((x) => x.id))).indexOf('it-P31') !== -1, 'the scanned size is shown');
+    await env.ctx.close();
+  });
+
   await test('How-to videos: anyone signed in finds them in More, and every video is published', async () => {
     const env = await phone({ hash: '#till', seed: (SF) => SF.setPin('cashier', '1111') });
     const page = env.page;

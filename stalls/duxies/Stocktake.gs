@@ -33,7 +33,11 @@ var STOCKTAKE = {
     'Strawberry Gin':          { L: 80, S: 50 }
   },
 
-  // name, 352 ml, medium, 125 ml   (null = that size is not made)
+  // What a premium jam costs in a size its own list above does not name.
+  premiumDefault: { L: 80, M: 60, S: 50 },
+
+  // name, 352 ml, medium, 125 ml. Every jam comes in all three sizes. null =
+  // not counted: the size is on the list at 0 and the stocktake leaves its stock alone.
   jams: [
     ['3 Fruit Marmalade',               12, 1, 7],
     ['Apricot',                          2, null, 1],
@@ -105,18 +109,23 @@ var STOCKTAKE = {
   ]
 };
 
-/** Every product on the list as one flat row: [name, variant, category, type, price, count]. */
+/** The usual price of one jam in one size (L, M or S): its own premium price, else the standard. */
+function sfJamPrice(name, size) {
+  var prem = STOCKTAKE.premium[name];
+  if (prem && prem[size]) return prem[size];
+  return (prem ? STOCKTAKE.premiumDefault : STOCKTAKE.price)[size];
+}
+
+function sfJamCategory(name) {
+  return /marmalade/i.test(name) ? 'Marmalades' : /tomato/i.test(name) ? 'Chutney-style jams' : 'Jams';
+}
+
+/** Every product on the list as one flat row: [name, variant, category, type, price, count, size]. */
 function sfStocktakeRows() {
   var out = [];
   STOCKTAKE.jams.forEach(function (j) {
     ['L', 'M', 'S'].forEach(function (size, i) {
-      var count = j[i + 1];
-      if (count === null) return;
-      var prem = STOCKTAKE.premium[j[0]] || {};
-      var price = prem[size] || STOCKTAKE.price[size];
-      var category = /marmalade/i.test(j[0]) ? 'Marmalades'
-                   : /tomato/i.test(j[0]) ? 'Chutney-style jams' : 'Jams';
-      out.push([j[0], STOCKTAKE.sizes[size], category, 'stocked', price, count, size]);
+      out.push([j[0], STOCKTAKE.sizes[size], sfJamCategory(j[0]), 'stocked', sfJamPrice(j[0], size), j[i + 1], size]);
     });
   });
   STOCKTAKE.biscuits.forEach(function (b) {

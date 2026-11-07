@@ -1104,7 +1104,7 @@
       (cook.isNew || !cook.pot.sizes.length
         ? '<div class="notice" style="border-radius:10px;margin-top:14px"><span>This is a new jam. Put in ' +
           'what goes into one pot, then tap <strong>Save as the usual recipe</strong>. It is added to your ' +
-          'shelf list as 352 ml at R70 and 125 ml at R40, and then you can cook it.</span></div>'
+          'shelf list in all three sizes (352 ml R70, medium R50, 125 ml R40), and then you can cook it.</span></div>'
         : '<h3 class="step">2. How many jars did you fill?</h3>' + sizes +
           '<div id="cookanswer"></div>' +
           '<button class="block bigbtn" id="cookgo" onclick="SFS.cookSave()"></button>');
@@ -1156,7 +1156,15 @@
       : on === 'cupboard' ? pantryCard(s)
       : on === 'count' ? (window.SFCount ? SFCount.render() : '')
       : runHistory(s, v);
-    return nudge + tb.html + body;
+    // Every jam in all three sizes (352 ml, medium, 125 ml), so each can be counted and cooked.
+    var sizesCard = s.sizesMissing > 0 && on !== 'count'
+      ? '<div class="card stale"><b>' + s.sizesMissing + ' jam size' + (s.sizesMissing === 1 ? ' is' : 's are') +
+          ' missing.</b> Every jam should come in all three sizes: 352 ml, medium and 125 ml. This adds the ' +
+          'missing ones at the usual prices with none in stock, ready to count or cook. Sizes already there ' +
+          'are not touched.<button class="block" id="addsizes" style="margin-top:10px" onclick="SFS.addSizes()">' +
+          'Add the missing sizes</button></div>'
+      : '';
+    return sizesCard + nudge + tb.html + body;
   }
 
   function pantryCard(s) {
@@ -1469,6 +1477,22 @@
     },
 
     toggle: function (id, on) { SF.write('setActive', { productId: id, active: on }); },
+
+    /** Add every missing jam size. It can take a little while, so say so, then show the result. */
+    addSizes: function () {
+      var b = SF.el('addsizes');
+      if (b) { b.disabled = true; b.textContent = 'Adding the sizes\u2026'; }
+      SF.write('addJamSizes', {});
+      SF.toast('Adding the sizes. This can take a minute.');
+      var tries = 0;
+      (function wait() {
+        if (SF.outbox.pending().length && ++tries < 120) { setTimeout(wait, 1000); return; }
+        SF.load('stock').then(function () {
+          var d = SF.state.data.stock;
+          SF.toast(d && d.sizesMissing === 0 ? 'Done. Every jam has all three sizes.' : 'Not finished yet. Open Stock again in a moment.');
+        });
+      })();
+    },
 
     adjust: function (id) {
       var p = SF.find(SF.state.data.stock.products, id);

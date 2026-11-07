@@ -626,7 +626,7 @@ SF.action('stock', 'stock', 'read', function () {
   ps.forEach(function (p) { if (p.type !== 'made') value += p.onHand * p.cost; });
 
   return { products: ps, batches: batches, stockValue: value, units: SF.UNITS,
-           pantry: SF.pantry(), pots: SF.pots(),
+           pantry: SF.pantry(), pots: SF.pots(), sizesMissing: SF.missingSizes().length,
            stocktake: typeof STOCKTAKE !== 'undefined'
              ? { ref: STOCKTAKE.ref, loaded: String(SF.get('stocktakeLoaded', '')) === STOCKTAKE.ref + ' v' + STOCKTAKE.version }
              : null };
@@ -665,6 +665,16 @@ SF.recipe = function (name) {
 
 SF.RECIPE_UNITS = ['kg', 'g', 'litre', 'each', 'pot'];
 SF.newPot = function (name) { if (typeof sfNewPot === 'function') sfNewPot(name); };
+/** Jam sizes not on the shelf list yet (a stall may define sfMissingSizes). */
+SF.missingSizes = function () { return typeof sfMissingSizes === 'function' ? sfMissingSizes() : []; };
+SF.addJamSizes = function () { return typeof sfAddJamSizes === 'function' ? sfAddJamSizes() : null; };
+
+/** Put every jam on the shelf list in all three sizes, none in stock. Adds only what is missing. */
+SF.action('addJamSizes', 'stock', 'write', function () {
+  var r = SF.addJamSizes();
+  if (!r) return { ok: false, message: 'This stall has no jam sizes to add.' };
+  return { ok: true, added: r.added, costed: r.costed };
+});
 
 /**
  * Save the usual recipe for a pot. A name the stall has no product for yet

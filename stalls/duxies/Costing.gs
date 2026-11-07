@@ -176,10 +176,7 @@ function sfPots() {
   var products = SF.rows('products').filter(function (p) {
     return String(p.Active).toLowerCase() !== 'no';
   });
-  var names = STOCKTAKE.jams.map(function (j) { return j[0]; });
-  SF.rows('recipes').forEach(function (r) {
-    if (names.indexOf(String(r.Name)) === -1) names.push(String(r.Name));
-  });
+  var names = sfJamNames();
   return names.map(function (n) { return [n]; }).map(function (j) {
     var pot = sfPotLines(j[0]);
     var sizes = [];
@@ -240,12 +237,60 @@ function sfCostProduct(productId, row) {
  */
 function sfNewPot(name) {
   var n = SF.rows('products').length;
-  [['L', 70], ['S', 40]].forEach(function (z) {
+  ['L', 'M', 'S'].forEach(function (size) {
     n++;
     SF.append('products', {
-      ProductId: 'P' + ('00' + n).slice(-2), Name: name, Variant: STOCKTAKE.sizes[z[0]],
-      Type: 'stocked', Category: /marmalade/i.test(name) ? 'Marmalades' : 'Jams',
-      Unit: 'each', Price: z[1], Capacity: 0, Options: '[]', Active: 'Yes', Sort: n * 10
+      ProductId: 'P' + ('00' + n).slice(-2), Name: name, Variant: STOCKTAKE.sizes[size],
+      Type: 'stocked', Category: sfJamCategory(name),
+      Unit: 'each', Price: STOCKTAKE.price[size], Capacity: 0, Options: '[]', Active: 'Yes', Sort: n * 10
     });
   });
+}
+
+/** Every jam the stall makes: the list above, plus any she has added with a recipe. */
+function sfJamNames() {
+  var names = STOCKTAKE.jams.map(function (j) { return j[0]; });
+  SF.rows('recipes').forEach(function (r) {
+    var n = String(r.Name);
+    if (n && names.indexOf(n) === -1) names.push(n);
+  });
+  return names;
+}
+
+/**
+ * The jam sizes that are not on the shelf list yet: [{name, size}]. A size
+ * that is there but switched off counts as there: somebody chose that.
+ */
+function sfMissingSizes() {
+  var have = {};
+  SF.rows('products').forEach(function (p) { have[(String(p.Name) + '|' + String(p.Variant)).toLowerCase()] = true; });
+  var out = [];
+  sfJamNames().forEach(function (name) {
+    ['L', 'M', 'S'].forEach(function (size) {
+      if (!have[(name + '|' + STOCKTAKE.sizes[size]).toLowerCase()]) out.push({ name: name, size: size });
+    });
+  });
+  return out;
+}
+
+/**
+ * Put every jam on the shelf list in all three sizes, at the usual prices
+ * and with none on the shelf, ready to be counted or cooked. It only adds
+ * what is missing: sizes already there keep their stock and their price.
+ * Running it again adds nothing.
+ */
+function sfAddJamSizes() {
+  var missing = sfMissingSizes(), n = SF.rows('products').length, costed = 0;
+  var top = SF.rows('products').reduce(function (m, p) { return Math.max(m, SF.num(p.Sort)); }, 0);
+  missing.forEach(function (m, i) {
+    n++;
+    var id = 'P' + ('00' + n).slice(-2), price = sfJamPrice(m.name, m.size);
+    SF.append('products', {
+      ProductId: id, Name: m.name, Variant: STOCKTAKE.sizes[m.size], Type: 'stocked',
+      Category: sfJamCategory(m.name), Unit: 'each', Price: price, Capacity: 0, Options: '[]',
+      Active: 'Yes', Sort: top + (i + 1) * 10
+    });
+    if (sfCostProduct(id, [m.name, STOCKTAKE.sizes[m.size], sfJamCategory(m.name), 'stocked', price, null, m.size])) costed++;
+  });
+  return { added: missing.length, costed: costed };
 }
