@@ -166,6 +166,10 @@ go through `SF.once` so a retried request never runs twice.
   `designed`, 1080 × 1500 feed, 1080 × 1920 story) and a PDF whose QR and link
   bar are tappable (`SFL.posterPdf`); `build-site.sh` copies the pictures and
   sets `posterArt` in config.js. Without them the plain poster is drawn.
+- **Sheets (pop-ups) remove their boxes when closed**: read every field into a
+  variable *before* `SF.closeSheet()`. New product takes its category from a
+  list of those in use (or a new one) and an opening stock count, which goes in
+  as the first `adjust` line of the ledger.
 - **Uncooked stock** (the `Pantry` tab) is a plain count list, not a ledger:
   nothing is sold from it, so `savePantry` overwrites the amount.
 - Server code is plain Apps Script (V8, no modules). Every `.gs` shares one

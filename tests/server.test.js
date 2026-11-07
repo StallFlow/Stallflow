@@ -513,6 +513,23 @@ test('a stall data fix runs once, only changes what is still as it was, and neve
   assert.deepStrictEqual(Array.from(SF.runDataFixes()), []);
 });
 
+test('a new product can start with the stock she has on the shelf', () => {
+  const { SF } = shop(day(3));
+  SF.setPin('owner', '4321');
+  const tok = SF.dispatch('signIn', { pin: '4321', device: 'd' }).data.token;
+  const r = SF.dispatch('saveProduct', { token: tok, opId: 'np1', name: 'Lizard resin ornament', category: 'Resin', type: 'stocked', unit: 'each', price: 105, qty: 4 });
+  assert.ok(r.ok, JSON.stringify(r));
+  let p = SF.dispatch('stock', { token: tok }).data.products.filter((x) => x.name === 'Lizard resin ornament')[0];
+  assert.strictEqual(p.onHand, 4); assert.strictEqual(p.price, 105);
+  const r2 = SF.dispatch('saveProduct', { token: tok, opId: 'np2', name: 'Pot of cakes', category: 'Baking', type: 'made', unit: 'each', price: 20, qty: 9, capacity: 10 });
+  assert.ok(r2.ok);
+  p = SF.dispatch('stock', { token: tok }).data.products.filter((x) => x.name === 'Pot of cakes')[0];
+  assert.ok(!p.onHand, 'made-to-order items have no stock count');
+  const again = SF.dispatch('saveProduct', { token: tok, opId: 'np1', name: 'Lizard resin ornament', category: 'Resin', type: 'stocked', unit: 'each', price: 105, qty: 4 });
+  p = SF.dispatch('stock', { token: tok }).data.products.filter((x) => x.name === 'Lizard resin ornament');
+  assert.strictEqual(p.length, 1); assert.strictEqual(p[0].onHand, 4, 'the same request sent twice adds once');
+});
+
 test('uncooked stock is a list she can add to and update', () => {
   const { SF } = shop(day(3));
   SF.setPin('owner', '4321');

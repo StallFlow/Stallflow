@@ -890,6 +890,9 @@ SF.action('saveProduct', 'stock', 'write', function (p) {
   fields.ProductId = 'P' + ('00' + (count + 1)).slice(-2);
   fields.Sort = (count + 1) * 10;
   SF.append('products', fields);
+  // What she has on the shelf right now goes in as the first line of the ledger.
+  var opening = type === 'made' ? 0 : SF.num(p.qty);
+  if (opening > 0) SF.move(fields.ProductId, Math.round(opening * 100) / 100, 'adjust', 'Opening stock');
   return { ok: true, id: fields.ProductId };
 });
 

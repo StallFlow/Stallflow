@@ -1075,6 +1075,37 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
     await env.ctx.close();
   });
 
+  await test('New product: pick the category from a list, give the stock, and it lands on the shelf', async () => {
+    const env = await phone({ hash: '#stock', seed: shop10 });
+    const page = env.page;
+    await page.waitForFunction(() => SF.state.data.stock);
+    await page.evaluate(() => SFS.newProduct());
+    await page.waitForSelector('select#pc');
+    const cats = await page.$$eval('select#pc option', (o) => o.map((x) => x.textContent));
+    assert.deepStrictEqual(cats, ['Dolls', 'Jams', 'Resin', 'New category\u2026'], 'the categories already in use, then New');
+    assert.strictEqual(await page.isVisible('#pcn'), false);
+    await page.fill('#pn', 'Lizard resin ornament');
+    await page.selectOption('#pc', 'Resin');
+    await page.fill('#pp', '105'); await page.fill('#pq', '4');
+    await page.click('.sheet button:has-text("Add it")');
+    await page.waitForFunction(() => !(SF.state.outbox && SF.state.outbox.length) && SF.state.data.stock.products.some((p) => /Lizard/.test(p.name)), null, { timeout: 8000 });
+    const row = env.SF.rows('products').filter((p) => p.Name === 'Lizard resin ornament')[0];
+    assert.ok(row && row.Category === 'Resin' && Number(row.Price) === 105, JSON.stringify(row));
+    const onHand = await page.evaluate(() => SF.state.data.stock.products.filter((p) => /Lizard/.test(p.name))[0].onHand);
+    assert.strictEqual(onHand, 4, 'the stock she typed is in stock');
+    // a brand-new category: the name box appears and is required
+    await page.evaluate(() => SFS.newProduct());
+    await page.selectOption('#pc', '__new__');
+    assert.strictEqual(await page.isVisible('#pcn'), true);
+    await page.fill('#pn', 'Crochet frog'); await page.fill('#pp', '90');
+    await page.click('.sheet button:has-text("Add it")');
+    assert.ok(await page.isVisible('select#pc'), 'the sheet stays open until the new category has a name');
+    await page.fill('#pcn', 'Crochet'); await page.click('.sheet button:has-text("Add it")');
+    await page.waitForFunction(() => !(SF.state.outbox && SF.state.outbox.length));
+    assert.strictEqual(env.SF.rows('products').filter((p) => p.Name === 'Crochet frog')[0].Category, 'Crochet');
+    await env.ctx.close();
+  });
+
   await test('All markets: Show Coming up and sort by profit', async () => {
     const env = await phone({ hash: '#numbers', seed: (SF) => {
       [['M02', 'Spring Fair', 5], ['M03', 'Winter Fair', -40], ['M04', 'Craft Night', 12], ['M05', 'Easter Market', -200],
