@@ -73,6 +73,27 @@
       '</div>';
   }
 
+  /** Says plainly which market this phone's sales and pre-orders go to, and warns when it is
+      not today's. Every market is kept apart; several phones can sell at different markets
+      at the same moment. */
+  function sellingBanner(d) {
+    var at = SF.sellingAt();
+    if (!at) return '';
+    var today = (d.allMarkets || []).filter(function (m) { return m.date === d.today && m.id !== at.id; })[0];
+    var line, cls = 'ok';
+    if (at.state === 'home') line = 'Between markets: sales are not for a market day.';
+    else if (at.state === 'today') line = 'Today \u00b7 ' + esc(at.date);
+    else if (at.state === 'past') { cls = 'warn'; line = 'This market was on ' + esc(at.date) + ': not today!'; }
+    else if (at.state === 'soon') { cls = 'warn'; line = 'This market is on ' + esc(at.date) + ': not today!'; }
+    else line = 'No date set';
+    return '<div class="sellbanner ' + cls + '" role="status"><span class="k">You are selling at</span>' +
+      '<b class="n">' + esc(at.name) + '</b><span class="d">' + line + '</span>' +
+      (cls === 'warn' && today
+        ? '<button class="block" data-id="' + esc(today.id) + '" onclick="SFT.sellAt(this.getAttribute(\'data-id\'))">' +
+          'Switch to ' + esc(today.name) + ' (today)</button>'
+        : '') + '</div>';
+  }
+
   /** The last sale, with a way to send the customer a receipt on WhatsApp. */
   function lastSaleBar() {
     if (!lastSale) return '';
@@ -161,7 +182,7 @@
           figure('Walk-ups', moneyShort(t.tillTotal), t.tillCount + ' sold'),
           figure('Still to pay', moneyShort(owed), d.unpaid.length + (d.unpaid.length === 1 ? ' order' : ' orders'))
         ]) +
-        SF.slot('till.figures', ctx) + staleMarket(d) + SF.slot('till.top', ctx) + tb.html +
+        SF.slot('till.figures', ctx) + sellingBanner(d) + staleMarket(d) + SF.slot('till.top', ctx) + tb.html +
         (tb.on === 'sell'
           ? lastSaleBar() + '<div class="card"><div style="display:flex;gap:10px;align-items:center">' +
               '<h2 style="flex:1">Ring up a sale</h2>' +
@@ -184,7 +205,13 @@
 
   function marketPicker(d) {
     var at = sellAt() || d.marketId;
-    var opts = (d.markets || []).map(function (m) {
+    var list = (d.markets || []).slice();
+    // A market that has been and gone stays listed while this phone is still set to it,
+    // so the box never shows a different market from the one sales are going to.
+    if (at && !list.some(function (m) { return m.id === at; })) {
+      (d.allMarkets || []).forEach(function (m) { if (m.id === at) list.push(m); });
+    }
+    var opts = list.map(function (m) {
       var label = m.id === 'HOME' ? 'Between markets (home, friends, WhatsApp)'
         : m.name + (m.date ? ' · ' + m.date : '');
       if (m.pending) label = m.name + ' · saving…';
@@ -736,7 +763,7 @@
       var snapshot = cart.slice();
       cart = [];
       var till = SF.state.data.till || {};
-      var at = SF.find(till.markets || [], sellAt() || till.marketId);
+      var at = SF.sellingAt();
       lastSale = { total: t.total, method: how, when: new Date(),
                    methodName: { cash: 'cash', card: 'card', eft: 'EFT' }[how],
                    market: at && at.id !== 'HOME' ? at.name : '',
@@ -767,12 +794,14 @@
       if (change > 0) {
         SF.openSheet(
           '<div class="give"><i>Give change</i><b>' + money(change) + '</b>' +
-          '<span>' + money(t.total) + ' sale · ' + money(tendered) + ' received</span></div>' +
+          '<span>' + money(t.total) + ' sale · ' + money(tendered) + ' received</span>' +
+          (lastSale.market ? '<span>at ' + esc(lastSale.market) + '</span>' : '') + '</div>' +
           '<button class="block" onclick="SF.closeSheet()">Next sale</button>');
       } else {
         SF.closeSheet();
-        SF.toast(SF.state.online ? 'Sold — ' + money(t.total)
-                                 : 'Sold — will sync when signal returns');
+        SF.toast((SF.state.online ? 'Sold — ' + money(t.total)
+                                  : 'Sold — will sync when signal returns') +
+                 (lastSale.market ? ' · ' + lastSale.market : ''));
       }
     },
 

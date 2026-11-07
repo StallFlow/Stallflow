@@ -1015,6 +1015,33 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
     await env.ctx.close();
   });
 
+  await test('The till says which market this phone sells at, and warns when it is not today\'s', async () => {
+    const env = await phone({ hash: '#till', seed: (SF) => {
+      SF.append('markets', { MarketId: 'M02', Name: 'Blairegowrie Church Market', Date: day(0), Status: 'planned' });
+    } });
+    const page = env.page;
+    await page.evaluate(() => SF.ls.set('sf.sellAt', 'M02'));
+    await page.goto('about:blank'); await page.goto(base + '#till');
+    await page.waitForSelector('.sellbanner');
+    const rail = () => page.evaluate(() => document.querySelector('.rail .meta').textContent);
+    assert.strictEqual(await rail(), 'Blairegowrie Church Market', 'the top bar names the market sales go to');
+    let b = await page.textContent('.sellbanner');
+    assert.ok(/You are selling at/.test(b) && /Blairegowrie Church Market/.test(b) && /Today/.test(b), b);
+    assert.strictEqual(await page.evaluate(() => document.querySelector('.sellbanner').className), 'sellbanner ok');
+    // set to a market that has been: amber, still named, still shown in the box, one tap to today's
+    await page.selectOption('#sellat', 'M01');
+    await page.waitForSelector('.sellbanner.warn');
+    b = await page.textContent('.sellbanner');
+    assert.ok(/Test Market/.test(b) && /not today/.test(b), b);
+    assert.strictEqual(await rail(), 'Test Market');
+    assert.strictEqual(await page.inputValue('#sellat'), 'M01');
+    await page.click('.sellbanner button');
+    await page.waitForSelector('.sellbanner.ok');
+    assert.strictEqual(await rail(), 'Blairegowrie Church Market');
+    assert.strictEqual(await page.inputValue('#sellat'), 'M02');
+    await env.ctx.close();
+  });
+
   await test('All markets: Show Coming up and sort by profit', async () => {
     const env = await phone({ hash: '#numbers', seed: (SF) => {
       [['M02', 'Spring Fair', 5], ['M03', 'Winter Fair', -40], ['M04', 'Craft Night', 12], ['M05', 'Easter Market', -200],
