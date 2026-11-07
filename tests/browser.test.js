@@ -808,14 +808,15 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
     await page.evaluate(() => { SF.ls.set('sf.tillcat', 'Resin'); SF.render(); });
     const bar = await page.$eval('.cart', (c) => c.getBoundingClientRect().height);
     assert.ok(bar < 640 * 0.25, 'the bar is slim: ' + Math.round(bar) + 'px of 640');
-    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+    // far past the end: the browser stops at the real bottom (scrollHeight is not in zoomed units)
+    await page.evaluate(() => window.scrollTo(0, 1e6));
     const gap = await page.evaluate(() => {
       const tiles = document.querySelectorAll('#tilesbox .tile');
       const lastTile = tiles[tiles.length - 1].getBoundingClientRect();
       return document.querySelector('.cart').getBoundingClientRect().top - lastTile.bottom;
     });
-    assert.ok(gap >= 0, 'the last product sits above the basket, not under it (' + Math.round(gap) + 'px)');
     if (process.env.SF_SHOT) await page.screenshot({ path: path.join(process.env.SF_SHOT, 'till-zoomed.png') });
+    assert.ok(gap >= 0, 'the last product sits above the basket, not under it (' + Math.round(gap) + 'px)');
     await openBasket(page);
     if (process.env.SF_SHOT) await page.screenshot({ path: path.join(process.env.SF_SHOT, 'till-basket-open.png') });
     await env.ctx.close();
@@ -1012,6 +1013,63 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
     assert.deepStrictEqual(await shownNames(page, 'collect'), ['Thabo Nkosi'], 'by order number ' + placed['Thabo Nkosi']);
     await page.fill('#fq-collect', 'zzz');
     assert.strictEqual(await page.isVisible('[data-fempty="collect"]'), true);
+    await env.ctx.close();
+  });
+
+  await test('The till says which market this phone sells at, and warns when it is not today\'s', async () => {
+    const env = await phone({ hash: '#till', seed: (SF) => {
+      SF.append('markets', { MarketId: 'M02', Name: 'Blairegowrie Church Market', Date: day(0), Status: 'planned' });
+    } });
+    const page = env.page;
+    await page.evaluate(() => SF.ls.set('sf.sellAt', 'M02'));
+    await page.goto('about:blank'); await page.goto(base + '#till');
+    await page.waitForSelector('.sellbanner');
+    const rail = () => page.evaluate(() => document.querySelector('.rail .meta').textContent);
+    assert.strictEqual(await rail(), 'Blairegowrie Church Market', 'the top bar names the market sales go to');
+    let b = await page.textContent('.sellbanner');
+    assert.ok(/You are selling at/.test(b) && /Blairegowrie Church Market/.test(b) && /Today/.test(b), b);
+    assert.strictEqual(await page.evaluate(() => document.querySelector('.sellbanner').className), 'sellbanner ok');
+    // set to a market that has been: amber, still named, still shown in the box, one tap to today's
+    await page.selectOption('#sellat', 'M01');
+    await page.waitForSelector('.sellbanner.warn');
+    b = await page.textContent('.sellbanner');
+    assert.ok(/Test Market/.test(b) && /not today/.test(b), b);
+    assert.strictEqual(await rail(), 'Test Market');
+    assert.strictEqual(await page.inputValue('#sellat'), 'M01');
+    await page.click('.sellbanner button');
+    await page.waitForSelector('.sellbanner.ok');
+    assert.strictEqual(await rail(), 'Blairegowrie Church Market');
+    assert.strictEqual(await page.inputValue('#sellat'), 'M02');
+    await env.ctx.close();
+  });
+
+  await test('Markets today: each can be started from the till, and every one keeps its own sales', async () => {
+    const env = await phone({ hash: '#till', seed: (SF) => {
+      SF.append('markets', { MarketId: 'M02', Name: 'Blairegowrie', Date: day(0), Status: 'planned' });
+      SF.append('markets', { MarketId: 'M03', Name: 'Monument', Date: day(0), Status: 'planned' });
+      SF.append('markets', { MarketId: 'M04', Name: 'Next Week', Date: day(7), Status: 'planned' });
+    } });
+    const page = env.page;
+    await page.evaluate(() => SF.ls.set('sf.sellAt', 'M02'));
+    await page.goto('about:blank'); await page.goto(base + '#till');
+    await page.waitForSelector('.todaymk');
+    const rows = () => page.$$eval('.todaymk .mk', (r) => r.map((x) => x.innerText.replace(/\s+/g, ' ').trim()));
+    let r = await rows();
+    assert.strictEqual(r.length, 2, 'only markets on today\'s date: ' + r.join(' | '));
+    assert.ok(/Blairegowrie Selling here/.test(r[0] + ' ' + r[1]) || /Selling here/.test(r.join()), r.join(' | '));
+    assert.ok(/Monument.*Not started yet.*Start/.test(r.join(' | ')), r.join(' | '));
+    // sell one jar here, then start the next market and sell there
+    await page.evaluate(() => SFT.tap(SF.state.data.till.products[0].id));
+    await page.evaluate(() => SFT.take());
+    await page.click('#cashbits button:has-text("Exact")').catch(() => {});
+    await page.evaluate(() => { const b = document.querySelector('.sheet .ok'); if (b) b.click(); });
+    await page.waitForFunction(() => !(SF.state.outbox && SF.state.outbox.length) && SF.state.data.till.totals.tillCount === 1, null, { timeout: 8000 }).catch(() => {});
+    await page.click('.todaymk button:has-text("Start")');
+    await page.waitForFunction(() => /Monument/.test(document.querySelector('.rail .meta').textContent));
+    const tc = await page.evaluate(() => SF.state.data.till.totals.tillCount);
+    assert.strictEqual(tc, 0, 'the new market starts with none of the other market\'s sales');
+    r = (await rows()).join(' | ');
+    assert.ok(/Blairegowrie.*Switch/.test(r) && /Monument.*Selling here/.test(r), r);
     await env.ctx.close();
   });
 

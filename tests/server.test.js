@@ -466,6 +466,35 @@ test('two markets on the same day keep their own sales', () => {
   assert.ok(t1.markets.some((m) => m.id === 'M02') && t1.markets.some((m) => m.id === 'HOME'));
 });
 
+test('markets running at the same time stay apart: sales, pre-orders and numbers', () => {
+  const { SF } = shop(day(0));
+  SF.append('markets', { MarketId: 'M02', Name: 'RNW', Date: day(0), Status: 'planned' });
+  SF.set('preorders', 'yes');
+  SF.setPin('owner', '4321');
+  const tok = SF.dispatch('signIn', { pin: '4321', device: 'd' }).data.token;
+  const o1 = SF.dispatch('placeOrder', { opId: 'o1', name: 'Anna', phone: '082 000 0001', consent: true,
+    lines: [{ id: 'P01', qty: 1 }], market: 'M01' });
+  const o2 = SF.dispatch('placeOrder', { opId: 'o2', name: 'Bea', phone: '082 000 0002', consent: true,
+    lines: [{ id: 'P01', qty: 1 }], market: 'M02' });
+  assert.ok(o1.ok && o2.ok, JSON.stringify([o1, o2]));
+  SF.dispatch('sell', { token: tok, opId: 's1', marketId: 'M01', lines: [{ id: 'P01', qty: 1 }] });
+  SF.dispatch('sell', { token: tok, opId: 's2', marketId: 'M02', lines: [{ id: 'P01', qty: 3 }] });
+  SF.dispatch('sell', { token: tok, opId: 's3', marketId: 'home', lines: [{ id: 'P01', qty: 1 }] });
+  const t1 = SF.dispatch('till', { token: tok, marketId: 'M01' }).data;
+  const t2 = SF.dispatch('till', { token: tok, marketId: 'M02' }).data;
+  const th = SF.dispatch('till', { token: tok, marketId: 'home' }).data;
+  assert.strictEqual(t1.totals.tillCount, 1); assert.strictEqual(t2.totals.tillCount, 1);
+  assert.strictEqual(t2.totals.tillTotal, 3 * t1.totals.tillTotal, 'each market has only its own sales');
+  assert.strictEqual(th.totals.tillCount, 1);
+  assert.strictEqual(t1.unpaid.map((o) => o.customer).join(), 'Anna');
+  assert.strictEqual(t2.unpaid.map((o) => o.customer).join(), 'Bea');
+  assert.strictEqual(th.unpaid.length, 0);
+  assert.strictEqual(t1.running.map((m) => m.id + ':' + m.count).sort().join(), 'M01:1,M02:1', 'every market on today\'s date is listed with its own count');
+  const n1 = SF.dispatch('dashboard', { token: tok, marketId: 'M01' }).data;
+  const n2 = SF.dispatch('dashboard', { token: tok, marketId: 'M02' }).data;
+  assert.strictEqual(n2.summary.revenue, 3 * n1.summary.revenue, 'Numbers are per market too');
+});
+
 test('uncooked stock is a list she can add to and update', () => {
   const { SF } = shop(day(3));
   SF.setPin('owner', '4321');

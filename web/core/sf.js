@@ -552,6 +552,19 @@ window.SF = (function () {
 
   var TABS = ['till', 'collect', 'stock', 'numbers'];
 
+  /** Where this phone's sales are going: { id, name, date, state } or null before the Till has loaded.
+      state: 'today', 'past', 'soon' (a later day), 'home' (between markets), 'none' (no date). */
+  function sellingAt() {
+    var t = S.data.till;
+    if (!t || !t.marketId) return null;
+    if (t.marketId === 'HOME') return { id: 'HOME', name: 'Between markets', date: '', state: 'home' };
+    var m = null;
+    (t.allMarkets || []).concat(t.markets || []).forEach(function (x) { if (x.id === t.marketId) m = x; });
+    if (!m) return null;
+    var state = !m.date ? 'none' : m.date === t.today ? 'today' : m.date < t.today ? 'past' : 'soon';
+    return { id: m.id, name: m.name, date: m.date || '', state: state };
+  }
+
   function paintRail() {
     var p = S.boot.profile;
     var queued = Outbox.pending().length;
@@ -563,10 +576,14 @@ window.SF = (function () {
         ? { cls: 'chip off', text: queued ? queued + ' waiting' : 'No signal' }
         : { cls: 'chip', text: queued ? queued + ' waiting' : 'Online' };
 
-    var market = '';
-    var d = S.data.numbers;
-    if (d && d.markets) {
-      d.markets.forEach(function (m) { if (m.id === d.marketId) market = m.name; });
+    // The market this phone is selling at (what the Till is using), not the one
+    // last looked at on Numbers: the cashier must see where her sales go.
+    var at = sellingAt(), market = at ? at.name : '';
+    if (!market) {
+      var d = S.data.numbers;
+      if (d && d.markets) {
+        d.markets.forEach(function (m) { if (m.id === d.marketId) market = m.name; });
+      }
     }
 
     el('rail').innerHTML =
@@ -1219,7 +1236,7 @@ window.SF = (function () {
     slot: slot, apply: apply, fire: fire, pluginOn: pluginOn, settingsOf: settingsOf,
     // helpers
     el: el, esc: esc, money: money, moneyShort: moneyShort, qty: qty, countOf: countOf,
-    clock: clock, uid: uid, find: find, toast: toast, can: can, units: UNITS,
+    clock: clock, uid: uid, find: find, sellingAt: sellingAt, toast: toast, can: can, units: UNITS,
     openSheet: openSheet, closeSheet: closeSheet, openMore: openMore, collectOn: collectOn,
     install: install, dismissInstall: dismissInstall, applyUpdate: applyUpdate,
     checkUpdate: checkUpdate, repairUpdate: repairUpdate

@@ -526,7 +526,17 @@ SF.action('till', 'sell', 'read', function (p) {
     // So the till can say when the live market is one that is already over.
     liveId: SF.activeMarket(), today: SF.today(),
     allMarkets: SF.markets().filter(function (m) { return m.id !== SF.HOME; })
-                  .map(function (m) { return { id: m.id, name: m.name, date: m.date }; })
+                  .map(function (m) { return { id: m.id, name: m.name, date: m.date }; }),
+    // Every market on today's date with what it has taken so far, so a phone can be
+    // pointed at any of them: several markets can trade at the same moment.
+    running: SF.markets().filter(function (m) { return m.id !== SF.HOME && m.date && m.date === SF.today(); })
+      .map(function (m) {
+        var sold = SF.orders().filter(function (o) {
+          return o.marketId === m.id && (o.status === 'paid' || o.status === 'collected');
+        });
+        return { id: m.id, name: m.name, count: sold.length,
+                 total: Math.round(sold.reduce(function (a, o) { return a + o.total; }, 0) * 100) / 100 };
+      })
   };
 });
 
