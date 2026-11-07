@@ -17,8 +17,8 @@ W, H = 1080, 1500
 BASE = 'https://stallflow.github.io/Stallflow/duxies/'
 
 MARKETS = [
-    dict(id='M03', name='Blairegowrie Church Market', date='2026-11-07', time='From 09:00',
-         venue='Christ Church Blairgowrie', addr='32 Gordon Avenue, Blairgowrie, Randburg'),
+    dict(id='M03', name='Blairegowrie Craft Market', date='2026-11-07', time='9:00 \u2013 15:00',
+         venue='Domus Dei Campus', addr='39 Malcolm Road, Blairegowrie, Randburg'),
     dict(id='M05', name='Tin Road Market', date='2026-11-07', time='',
          venue='Bromhof', addr='Randburg'),
     dict(id='M06', name='Fourways Gardens Market', date='2026-11-07', time='',
@@ -71,7 +71,7 @@ def pill(im, box, fill=CREAM, r=44, shadow=True):
     ImageDraw.Draw(im).rounded_rectangle(box, r, fill=fill)
 
 
-def poster(m, art, svg, path):
+def poster(m, art, svg, path, hits):
     sc = W / art.width
     head = art.crop((0, 0, art.width, 548)).resize((W, int(548 * sc)), Image.LANCZOS)
     # meadow: the artwork's own blurred lower half
@@ -129,6 +129,7 @@ def poster(m, art, svg, path):
     qx, qy = W - 46 - 28 - qs, top + (bottom - top - qs) // 2
     pill(im, (qx - 14, qy - 14, qx + qs + 14, qy + qs + 14), fill='white', r=26, shadow=False)
     im.paste(qr_img(svg, qs), (qx, qy))
+    hits.append((qx - 14, qy - 14, qx + qs + 14, qy + qs + 14))
     tx = 46 + 36
     tw = qx - 14 - 24 - tx
     cy = top + (bottom - top) // 2
@@ -141,6 +142,7 @@ def poster(m, art, svg, path):
     # link
     link = BASE + '?m=' + m['id']
     pill(im, (46, H - 82, W - 46, H - 24), fill=CREAM, r=29); d = ImageDraw.Draw(im)
+    hits.append((46, H - 82, W - 46, H - 24))
     d.text((W // 2, H - 53), link, font=fit(d, link, 'Inter-SemiBold', 30, W - 150, 20), fill=PURPLE, anchor='mm')
     im.convert('RGB').save(path, quality=92)
 
@@ -149,4 +151,14 @@ art = Image.open(ART).convert('RGB')
 qr = json.load(open(QRJ))
 for m in MARKETS:
     p = '%s/Duxies-%s-%s.png' % (OUT, m['id'], re.sub(r'[^a-z0-9]+', '-', m['name'].lower()).strip('-'))
-    poster(m, art, qr[m['id']], p); print(p)
+    hits = []
+    poster(m, art, qr[m['id']], p, hits); print(p)
+    # A picture cannot hold a link; the PDF copy makes the QR and the bar at the foot tap-through.
+    from reportlab.pdfgen import canvas
+    pdf = p[:-4] + '.pdf'
+    c = canvas.Canvas(pdf, pagesize=(W * .75, H * .75))
+    c.setTitle(m['name'] + ' \u2013 Duxie\'s Homemade')
+    c.drawImage(p, 0, 0, W * .75, H * .75)
+    for x0, y0, x1, y1 in hits:
+        c.linkURL(BASE + '?m=' + m['id'], (x0 * .75, (H - y1) * .75, x1 * .75, (H - y0) * .75), relative=0, thickness=0)
+    c.save(); print(pdf)
