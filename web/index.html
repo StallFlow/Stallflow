@@ -253,7 +253,7 @@ function draw(){
   }
 
   var groups = {};
-  DATA.products.forEach(function(p){ (groups[p.category||''] = groups[p.category||'']||[]).push(p); });
+  shownProducts().forEach(function(p){ (groups[p.category||''] = groups[p.category||'']||[]).push(p); });
   var cats = Object.keys(groups).sort();
   var list = cats.map(function(cat){
     return '<div class="catgroup" data-cat="' + esc(cat) + '">' +
@@ -335,6 +335,23 @@ function pickCat(c){
   applyFind();
 }
 function findReset(){ FIND = ''; var f = el('find'); if (f) f.value = ''; pickCat('all'); }
+
+/**
+ * What a customer is offered. A size that is gone is left off while another size of the
+ * same product is available (a jam comes in three sizes, and not every size is on the
+ * table every time). Once every size of it is gone, they are all shown as sold out, so
+ * the customer sees it exists. A scanned product is always shown.
+ */
+function shownProducts(){
+  var has = {};
+  DATA.products.forEach(function(p){
+    if (p.available === null || p.available > 0) has[p.name] = true;
+  });
+  return DATA.products.filter(function(p){
+    var out = p.available !== null && p.available <= 0;
+    return !out || !has[p.name] || p.id === PID || (CART[p.id] || 0) > 0;
+  });
+}
 
 function itemRow(p){
   var have = CART[p.id] || 0;
