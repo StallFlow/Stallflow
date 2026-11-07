@@ -808,14 +808,15 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
     await page.evaluate(() => { SF.ls.set('sf.tillcat', 'Resin'); SF.render(); });
     const bar = await page.$eval('.cart', (c) => c.getBoundingClientRect().height);
     assert.ok(bar < 640 * 0.25, 'the bar is slim: ' + Math.round(bar) + 'px of 640');
-    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+    // far past the end: the browser stops at the real bottom (scrollHeight is not in zoomed units)
+    await page.evaluate(() => window.scrollTo(0, 1e6));
     const gap = await page.evaluate(() => {
       const tiles = document.querySelectorAll('#tilesbox .tile');
       const lastTile = tiles[tiles.length - 1].getBoundingClientRect();
       return document.querySelector('.cart').getBoundingClientRect().top - lastTile.bottom;
     });
-    assert.ok(gap >= 0, 'the last product sits above the basket, not under it (' + Math.round(gap) + 'px)');
     if (process.env.SF_SHOT) await page.screenshot({ path: path.join(process.env.SF_SHOT, 'till-zoomed.png') });
+    assert.ok(gap >= 0, 'the last product sits above the basket, not under it (' + Math.round(gap) + 'px)');
     await openBasket(page);
     if (process.env.SF_SHOT) await page.screenshot({ path: path.join(process.env.SF_SHOT, 'till-basket-open.png') });
     await env.ctx.close();
