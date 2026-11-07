@@ -372,6 +372,7 @@ var SFL = (function () {
    * info: { shop, tagline, title, when, where, link, home, colour, ink, paper }
    */
   function poster(info, kind) {
+    if (info.art) return designed(info, kind);
     var W = 1080, H = kind === 'story' ? 1920 : 1350;
     var cv = document.createElement('canvas'); cv.width = W; cv.height = H;
     var ctx = cv.getContext('2d');
@@ -427,6 +428,151 @@ var SFL = (function () {
     return cv;
   }
 
+  /* ---- the stall's own artwork: loaded once, only where the stall has some ---- */
+  var artLoad = null;
+  function loadArt() {
+    var cfg = window.STALLFLOW || {};
+    if (!cfg.posterArt) return Promise.resolve(null);
+    if (!artLoad) {
+      var img = function (src) {
+        return new Promise(function (ok, fail) {
+          var i = new Image(); i.onload = function () { ok(i); }; i.onerror = fail; i.src = src;
+        });
+      };
+      artLoad = Promise.all([img('../poster-header.jpg'), img('../poster-meadow.jpg')])
+        .then(function (r) { return { head: r[0], meadow: r[1] }; })
+        .catch(function () { return null; });     // no artwork reached the phone: the plain poster
+    }
+    return artLoad;
+  }
+
+  function pill(ctx, x, y, w, h, fill, shadow) {
+    ctx.save();
+    if (shadow !== false) { ctx.shadowColor = 'rgba(0,0,0,.28)'; ctx.shadowBlur = 16; ctx.shadowOffsetY = 6; }
+    ctx.fillStyle = fill; roundRect(ctx, x, y, w, h, Math.min(46, h / 2)); ctx.fill();
+    ctx.restore();
+  }
+
+  /** "Domus Dei Campus, 39 Malcolm Road, Blairegowrie, Randburg" → the venue, then the rest. */
+  function splitWhere(where) {
+    var parts = String(where || '').split(',').map(function (x) { return x.trim(); }).filter(Boolean);
+    if (parts.length && /^south africa$/i.test(parts[parts.length - 1])) parts.pop();
+    return { venue: parts[0] || '', addr: parts.slice(1).join(', ') };
+  }
+
+  /** The poster in the stall's artwork: header picture, name plate, date, venue, QR, link. */
+  function designed(info, kind) {
+    var W = 1080, story = kind === 'story', H = story ? 1920 : 1500, k = story ? 1.25 : 1;
+    var cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+    var ctx = cv.getContext('2d'), art = info.art, links = [];
+    var PURPLE = '#701E6E', DEEP = '#4E124E', CREAM = '#FCF6EC', INK = '#3C163E';
+    ctx.imageSmoothingQuality = 'high';
+    ctx.fillStyle = CREAM; ctx.fillRect(0, 0, W, H);
+    var hh = Math.round(W * art.head.height / art.head.width);
+    ctx.drawImage(art.meadow, 0, hh - 160, W, H - hh + 160);
+    ctx.drawImage(art.head, 0, 0, W, hh);
+    ctx.textBaseline = 'top'; ctx.textAlign = 'center';
+    var cx = W / 2, y = hh - 8, inner = W - 150;
+
+    // the name plate
+    var title = info.home ? 'Duxie\u2019s order page' : info.title;
+    var nf = fitBox(ctx, title, inner, 150 * k, 78, 40, 2, 'italic 900');
+    var label = info.home ? 'Order ahead, any day' : 'Join us at the';
+    var nameH = nf.lines.length * nf.size * 1.08, plateH = Math.round(64 * k + nameH + 40 * k);
+    pill(ctx, 46, y, W - 92, plateH, PURPLE);
+    var lf = { size: 34, lines: [label], weight: 'italic 600' };
+    lines(ctx, lf, cx, y + 26 * k, '#F0D6F0');
+    lines(ctx, nf, cx, y + 26 * k + 52, '#fff');
+    y += plateH + 22 * k;
+
+    // when
+    if (!info.home && info.when) {
+      var dh = Math.round(92 * k), df = fit(ctx, info.when, W - 190, 46, 30, 1, '700');
+      pill(ctx, 66, y, W - 132, dh, CREAM);
+      lines(ctx, df, cx, y + (dh - df.size) / 2 - 2, INK);
+      y += dh + 18 * k;
+    }
+
+    // where
+    var wh = splitWhere(info.home ? '' : info.where);
+    var venue = info.home ? 'Between markets' : wh.venue, addr = info.home ? 'We arrange the collection with you' : wh.addr;
+    if (venue) {
+      var vh = Math.round((addr ? 150 : 100) * k);
+      pill(ctx, 66, y, W - 132, vh, CREAM);
+      var vf = fit(ctx, venue, W - 190, 50, 28, 1, '800'), af = addr ? fit(ctx, addr, W - 190, 31, 22, 2, '600') : null;
+      var bh = vf.size * 1.08 + (af ? 12 + af.lines.length * af.size * 1.08 : 0), vy = y + (vh - bh) / 2;
+      vy = lines(ctx, vf, cx, vy, PURPLE);
+      if (af) lines(ctx, af, cx, vy + 12, INK);
+      y += vh + 18 * k;
+    }
+
+    // scan to order: the rest of the page
+    var bottom = H - 96, top = y, box = bottom - top, qs = Math.max(200, Math.min(box - 44, story ? 420 : 330));
+    pill(ctx, 46, top, W - 92, box, DEEP);
+    var qx = W - 46 - 28 - qs, qy = Math.round(top + (box - qs) / 2);
+    ctx.fillStyle = '#fff'; roundRect(ctx, qx - 14, qy - 14, qs + 28, qs + 28, 26); ctx.fill();
+    drawQR(ctx, info.link, qx, qy, qs, 'H');
+    links.push([qx - 14, qy - 14, qx + qs + 14, qy + qs + 14]);
+    var tx = 46 + 36, tw = qx - 14 - 24 - tx, cy = top + box / 2;
+    ctx.textAlign = 'left';
+    var c1 = { size: 50, lines: ['SCAN TO'], weight: 'italic 900' }, c2 = { size: 50, lines: [info.home ? 'ORDER' : 'ORDER AHEAD'], weight: 'italic 900' };
+    lines(ctx, c1, tx, cy - 100, '#fff'); lines(ctx, c2, tx, cy - 46, '#fff');
+    var sub = info.home ? 'Reserve now \u2013 pay when you collect.' : 'Reserve now \u2013 pay at the stall.';
+    var sf = fit(ctx, sub, tw, 30, 22, 2, '500'), nf2 = fit(ctx, 'No app, no account.', tw, 30, 22, 1, '500');
+    var sy = lines(ctx, sf, tx, cy + 22, '#F0DCF0');
+    lines(ctx, nf2, tx, sy + 6, '#F0DCF0');
+    ctx.textAlign = 'center';
+
+    // the link: also tappable in the PDF
+    pill(ctx, 46, H - 82, W - 92, 58, CREAM);
+    var uf = fit(ctx, info.link, W - 150, 30, 18, 1, '600');
+    lines(ctx, uf, cx, H - 82 + (58 - uf.size) / 2 - 1, PURPLE);
+    links.push([46, H - 82, W - 46, H - 24]);
+    cv.links = links;
+    return cv;
+  }
+
+  /** The poster as a one-page PDF whose QR and link bar open the order page when tapped. */
+  function posterPdf(info, kind) {
+    var cv = poster(info, kind);
+    return new Promise(function (ok, fail) {
+      cv.toBlob(function (jb) {
+        if (!jb) return fail(new Error('could not draw the poster'));
+        var fr = new FileReader();
+        fr.onload = function () {
+          var jpeg = new Uint8Array(fr.result), enc = new TextEncoder(), parts = [], offs = [], len = 0;
+          var put = function (x) { var b = typeof x === 'string' ? enc.encode(x) : x; parts.push(b); len += b.length; };
+          var obj = function (n, body) { offs[n] = len; put(n + ' 0 obj\n' + body + '\nendobj\n'); };
+          var pw = cv.width * 0.75, ph = cv.height * 0.75, n = (cv.links || []).length;
+          var url = String(info.link).replace(/[\\()]/g, '\\$&');
+          var refs = (cv.links || []).map(function (l, i) { return (6 + i) + ' 0 R'; }).join(' ');
+          put('%PDF-1.4\n');
+          obj(1, '<< /Type /Catalog /Pages 2 0 R >>');
+          obj(2, '<< /Type /Pages /Kids [3 0 R] /Count 1 >>');
+          obj(3, '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ' + pw + ' ' + ph + '] /Resources << /XObject << /Im0 5 0 R >> >> ' +
+                 '/Contents 4 0 R /Annots [' + refs + '] >>');
+          var cs = 'q ' + pw + ' 0 0 ' + ph + ' 0 0 cm /Im0 Do Q';
+          obj(4, '<< /Length ' + cs.length + ' >>\nstream\n' + cs + '\nendstream');
+          offs[5] = len;
+          put('5 0 obj\n<< /Type /XObject /Subtype /Image /Width ' + cv.width + ' /Height ' + cv.height +
+              ' /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ' + jpeg.length + ' >>\nstream\n');
+          put(jpeg); put('\nendstream\nendobj\n');
+          (cv.links || []).forEach(function (l, i) {
+            obj(6 + i, '<< /Type /Annot /Subtype /Link /Rect [' + [l[0] * 0.75, (cv.height - l[3]) * 0.75, l[2] * 0.75,
+              (cv.height - l[1]) * 0.75].map(function (v) { return v.toFixed(2); }).join(' ') + '] /Border [0 0 0] ' +
+              '/A << /S /URI /URI (' + url + ') >> >>');
+          });
+          var total = 6 + n, xref = len, x = 'xref\n0 ' + total + '\n0000000000 65535 f \n';
+          for (var i = 1; i < total; i++) x += ('0000000000' + offs[i]).slice(-10) + ' 00000 n \n';
+          put(x + 'trailer\n<< /Size ' + total + ' /Root 1 0 R >>\nstartxref\n' + xref + '\n%%EOF\n');
+          ok(new Blob(parts, { type: 'application/pdf' }));
+        };
+        fr.onerror = function () { fail(new Error('could not read the picture')); };
+        fr.readAsArrayBuffer(jb);
+      }, 'image/jpeg', 0.92);
+    });
+  }
+
   function roundRect(ctx, x, y, w, h, r) {
     ctx.beginPath();
     ctx.moveTo(x + r, y); ctx.lineTo(x + w - r, y); ctx.arcTo(x + w, y, x + w, y + r, r);
@@ -451,7 +597,7 @@ var SFL = (function () {
 
   return {
     sizes: SIZES, size: size, canvas: canvas, fileName: fileName, save: save, zip: zip,
-    poster: poster, posterBlob: posterBlob,
+    poster: poster, posterBlob: posterBlob, posterPdf: posterPdf, loadArt: loadArt,
     useLogo: useLogo,
     png: function (p, key, shop, look) {
       return pngBytes(canvas(p, key, shop, look), size(key)[4]).then(function (b) { return new Blob([b], { type: 'image/png' }); });
