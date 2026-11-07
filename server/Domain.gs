@@ -1131,7 +1131,30 @@ SF.action('releaseUnpaid', 'settings', 'write', function (p, ctx) {
   return { ok: true, released: n };
 });
 
+/**
+ * One-off corrections to a stall's own data, written in the stall's folder
+ * (sfDataFixes() in stalls/<slug>/Fixes.gs returns [{id, what, run}]). Each runs
+ * once, the first time anyone opens the app after the update, and is then
+ * remembered; a fix only changes what is still exactly as it was, so a
+ * correction typed in by hand always wins. A failing fix never stops the app.
+ */
+SF.runDataFixes = function () {
+  if (typeof sfDataFixes !== 'function') return [];
+  var done = [];
+  sfDataFixes().forEach(function (f) {
+    var key = 'fix.' + f.id;
+    if (SF.get(key, '')) return;
+    try {
+      var changed = f.run();
+      SF.set(key, SF.today());
+      if (changed) { done.push(f.what); SF.audit({ role: 'system' }, 'datafix', f.id, f.what, 'ok'); }
+    } catch (e) { /* tried again at the next open */ }
+  });
+  return done;
+};
+
 SF.action('boot', 'sell', 'read', function (p, ctx) {
+  SF.runDataFixes();
   // New code with new tabs: upgrade the sheet on first open instead of
   // waiting for someone to find StallFlow > Set up / upgrade.
   if ((Number(SF.get('schemaVersion', 0)) || 0) < SF.SCHEMA) SF.migrate();

@@ -157,6 +157,10 @@ go through `SF.once` so a retried request never runs twice.
   (`SF.sellingAt()`) name it, amber when it is not today's. The till's
   `running` list feeds the "Markets today" card (Start / Switch). Keep every
   sale, pre-order and number filed under its own market.
+- **One-off fixes to a stall's own data** live in `stalls/<slug>/Fixes.gs`
+  (`sfDataFixes()`), run once by `SF.runDataFixes` on the first `boot` after an
+  update. A fix changes only what is still exactly as it was (a hand edit
+  wins) and a failing one never stops the app.
 - **Uncooked stock** (the `Pantry` tab) is a plain count list, not a ledger:
   nothing is sold from it, so `savePantry` overwrites the amount.
 - Server code is plain Apps Script (V8, no modules). Every `.gs` shares one

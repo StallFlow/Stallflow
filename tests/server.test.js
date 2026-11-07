@@ -495,6 +495,24 @@ test('markets running at the same time stay apart: sales, pre-orders and numbers
   assert.strictEqual(n2.summary.revenue, 3 * n1.summary.revenue, 'Numbers are per market too');
 });
 
+test('a stall data fix runs once, only changes what is still as it was, and never breaks the app', () => {
+  const env = shop(day(3));
+  const { SF, ctx } = env;
+  SF.append('markets', { MarketId: 'M03', Name: 'Blairegowrie Church Market', Date: day(0), Location: 'Christ Church Blairgowrie, Gordon Avenue', Status: 'planned' });
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'stalls', 'duxies', 'Fixes.gs'), 'utf8'), ctx);
+  const row = () => SF.rows('markets').filter((m) => m.MarketId === 'M03')[0];
+  assert.strictEqual(SF.runDataFixes().length, 1);
+  assert.strictEqual(row().Name, 'Blairegowrie Craft Market');
+  assert.ok(/Domus Dei Campus, 39 Malcolm Road/.test(row().Location), row().Location);
+  // typed in by hand afterwards: the fix is spent and never overwrites it
+  SF.setCell('markets', row()._row, 'Name', 'Blairgowrie Craft Market');
+  assert.strictEqual(SF.runDataFixes().length, 0);
+  assert.strictEqual(row().Name, 'Blairgowrie Craft Market');
+  // a fix that throws does not escape
+  vm.runInContext("sfDataFixes = function () { return [{ id: 'boom', what: 'x', run: function () { throw new Error('no'); } }]; };", ctx);
+  assert.deepStrictEqual(Array.from(SF.runDataFixes()), []);
+});
+
 test('uncooked stock is a list she can add to and update', () => {
   const { SF } = shop(day(3));
   SF.setPin('owner', '4321');
