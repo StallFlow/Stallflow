@@ -538,9 +538,13 @@ test('a new product can start with the stock she has on the shelf', () => {
 function claudeKit() {
   const env = shop(day(3));
   const { SF } = env;
-  SF.setPin('owner', '4321'); SF.setPin('manager', '5555');
-  env.owner = SF.dispatch('signIn', { pin: '4321', device: 'd' }).data.token;
-  env.manager = SF.dispatch('signIn', { pin: '5555', device: 'd' }).data.token;
+  // Google mode: the connector belongs to the StallFlow administrator, not to the stall's own owner.
+  SF.PLATFORM.googleClientId = CLIENT; SF.PLATFORM.admins = ['boss@stallflow.co.za'];
+  env.owner = signIn(SF, 'admin').token;                                   // the platform admin
+  SF.dispatch('savePerson', { token: env.owner, opId: 'ku1', email: 'helper@gmail.com', role: 'owner' });
+  SF.dispatch('savePerson', { token: env.owner, opId: 'ku2', email: 'stranger@gmail.com', role: 'manager' });
+  env.stallOwner = signIn(SF, 'helper').token;                             // the stall's own owner
+  env.manager = signIn(SF, 'stranger').token;
   env.key = SF.dispatch('assistantKey', { token: env.owner, opId: 'k' + Math.random() }).key;
   env.rpc = (method, params, key, id) => {
     const r = SF.mcp(key === undefined ? env.key : key, { jsonrpc: '2.0', id: id === undefined ? 1 : id, method, params });
@@ -553,13 +557,26 @@ function claudeKit() {
   return env;
 }
 
-test('only the owner can make or end the connector key, and only its hash is kept', () => {
-  const { SF, owner, manager, props, key } = claudeKit();
+test('only the StallFlow administrator can make, see or end the connector key, and only its hash is kept', () => {
+  const { SF, owner, stallOwner, manager, props, key } = claudeKit();
   assert.ok(key && key.length >= 32);
-  assert.strictEqual(SF.dispatch('assistantKey', { token: manager, opId: 'm1' }).code, 'forbidden');
-  assert.strictEqual(SF.dispatch('assistantOff', { token: manager, opId: 'm2' }).code, 'forbidden');
-  assert.strictEqual(SF.dispatch('assistantStatus', { token: owner }).data.on, true);
+  [manager, stallOwner].forEach((t, i) => {
+    assert.strictEqual(SF.dispatch('assistantKey', { token: t, opId: 'm1' + i }).code, 'forbidden', 'cannot make one');
+    assert.strictEqual(SF.dispatch('assistantOff', { token: t, opId: 'm2' + i }).code, 'forbidden', 'cannot switch it off');
+    const st = SF.dispatch('assistantStatus', { token: t });
+    assert.strictEqual(st.code || (st.data && st.data.code), 'forbidden', 'cannot even see if it is on');
+  });
+  assert.strictEqual(SF.dispatch('assistantStatus', { token: owner }).data.on, true, 'still on: nobody else touched it');
   assert.ok(!JSON.stringify(props).includes(key) && !JSON.stringify(SF.rows('settings')).includes(key), 'the key itself is not stored');
+  assert.strictEqual(SF.dispatch('boot', { token: stallOwner }).data.me.admin, false, 'the app is told not to show it');
+  assert.strictEqual(SF.dispatch('boot', { token: owner }).data.me.admin, true);
+});
+
+test('in PIN mode nobody is the administrator, so the connector cannot be set up', () => {
+  const { SF } = shop(day(3));
+  SF.setPin('owner', '4321');
+  const tok = SF.dispatch('signIn', { pin: '4321', device: 'd' }).data.token;
+  assert.strictEqual(SF.dispatch('assistantKey', { token: tok, opId: 'p1' }).code, 'forbidden');
 });
 
 test('the connector: wrong key, then the protocol, then a fixed list of tools', () => {

@@ -1129,8 +1129,19 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
     await env.ctx.close();
   });
 
-  await test('Settings: the owner switches Claude on, sees the address once, and can switch it off', async () => {
-    const env = await phone({ hash: '#settings' });
+  await test('Settings: the stall owner and staff never see the Claude connector', async () => {
+    const env = await phone({ hash: '#settings' });          // PIN mode: nobody is the StallFlow administrator
+    await env.page.waitForSelector('h2:has-text("Plugins")');
+    assert.strictEqual(await env.page.locator('text=Claude as your helper').count(), 0, 'no Claude card');
+    await env.ctx.close();
+    const google = await phone({ hash: '#settings', google: true });
+    await google.page.waitForSelector('h2:has-text("Plugins")');
+    assert.ok(await google.page.locator('text=Claude as your helper').count() > 0, 'the administrator sees it');
+    await google.ctx.close();
+  });
+
+  await test('Settings: the administrator switches Claude on, sees the address once, and can switch it off', async () => {
+    const env = await phone({ hash: '#settings', google: true });
     const page = env.page;
     await page.waitForSelector('button:has-text("Set up or switch off")');
     await page.click('button:has-text("Set up or switch off")');
