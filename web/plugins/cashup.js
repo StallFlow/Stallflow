@@ -14,7 +14,7 @@ SF.plugin({
   screens: [{
     id: 'cashup', title: 'Cash-up', cap: 'reports',
     render: function () {
-      setTimeout(SFC.load, 0);
+      SFC.closed = ''; setTimeout(SFC.load, 0);
       return '<div class="wrap"><div id="cubox">' +
         '<div class="card"><div class="loading">Adding up the day…</div></div>' +
         '</div><div class="foot">StallFlow · cash-up</div></div>';
@@ -31,10 +31,10 @@ SF.plugin({
 });
 
 window.SFC = {
-  data: null,
+  data: null, closed: '',
 
   load: function () {
-    SF.get('cashup.expected').then(function (res) {
+    SF.get('cashup.expected', { marketId: SF.ls.get('sf.sellAt', '') }).then(function (res) {
       SFC.data = res && res.ok !== false ? res : null;
       SFC.draw();
     }).catch(function () { SFC.draw(); });
@@ -49,9 +49,12 @@ window.SFC = {
         'has to agree with the shop, not just with this phone.</div></div>';
       return;
     }
-    box.innerHTML =
+    box.innerHTML = (SFC.closed ? '<div class="notice ok" style="border-radius:10px;margin-bottom:14px"><b>' +
+        SF.esc(SFC.closed) + '</b> is cashed up and closed. It has left the till. ' +
+        'Numbers keeps it, with a Reopen button if you need it back.</div>' : '') +
       '<div class="card"><h2>What should be in the tin</h2>' +
-        '<div class="sub">Everything taken at this market, plus the float you started with.</div>' +
+        '<div class="sub">Everything taken at <b>' + SF.esc(d.marketName || 'this market') + '</b>, plus the float you started with.' +
+          (d.done ? ' <b>This market is already cashed up.</b>' : '') + '</div>' +
         '<div class="ledger">' +
           '<div><span>Taken today</span><b class="num">' + SF.money(d.cash) + '</b></div>' +
           '<div><span>Float you started with</span><b class="num">' + SF.money(d.float) + '</b></div>' +
@@ -99,14 +102,18 @@ window.SFC = {
   save: function () {
     var counted = Number(SF.el('cuc').value) || 0;
     if (counted <= 0) { SF.toast('Count the tin first.', true); return; }
-    SF.post({ action: 'cashup.record', opId: SF.uid('cu'),
+    SF.post({ action: 'cashup.record', opId: SF.uid('cu'), marketId: SFC.data && SFC.data.marketId,
               counted: counted, note: SF.el('cun').value })
       .then(function (res) {
         if (!res || res.ok === false) {
           SF.toast((res && res.message) || 'Could not save.', true);
           return;
         }
-        SF.toast('Cash-up recorded');
+        // The market is closed now: this phone goes back to the live market and the till refreshes.
+        var done = SFC.data && SFC.data.marketId;
+        SFC.closed = SFC.data && SFC.data.marketName;
+        if (SF.ls.get('sf.sellAt', '') === done) SF.ls.set('sf.sellAt', '');
+        SF.toast('Cash-up recorded. That market is closed.');
         SFC.load();
       })
       .catch(function () {

@@ -177,6 +177,10 @@ go through `SF.once` so a retried request never runs twice.
   orders, markets, PINs or people; products are switched off, never deleted.
   Only the key's hash is stored; every call is audited as `Claude (connector)`.
   A new tool must be added to that list and justified; do not widen it casually.
+- **Cashing up closes a market.** `cashup.record` counts the market the phone sells at
+  (`SF.cashupMarket`, never HOME) and sets its Status to `SF.CASHED` ('cashed up'). Cashed-up
+  markets leave `SF.sellableMarkets` and the till's `running` list; Numbers › All markets keeps
+  them, with a Reopen button (`reopenMarket`, `settings`).
 - **Uncooked stock** (the `Pantry` tab) is a plain count list, not a ledger:
   nothing is sold from it, so `savePantry` overwrites the amount.
 - Server code is plain Apps Script (V8, no modules). Every `.gs` shares one

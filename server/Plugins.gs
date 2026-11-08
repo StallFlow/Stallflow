@@ -195,8 +195,8 @@ SF.definePlugin({
   ],
 
   actions: {
-    'cashup.expected': function () {
-      var market = SF.activeMarket();
+    'cashup.expected': function (p) {
+      var market = SF.cashupMarket(p);
       var cash = 0, other = 0;
       SF.orders().forEach(function (o) {
         if (o.marketId !== market) return;
@@ -206,7 +206,9 @@ SF.definePlugin({
         if (method === 'cash') cash += o.total; else other += o.total;
       });
       var s = SF.pluginSettings('cashup');
-      return { ok: true, marketId: market, cash: cash, other: other,
+      var mk = SF.markets().filter(function (m) { return m.id === market; })[0];
+      return { ok: true, marketId: market, marketName: mk ? mk.name : market,
+               done: !!mk && mk.status === SF.CASHED, cash: cash, other: other,
                float: Number(s.float) || 0,
                expectedInTin: cash + (Number(s.float) || 0),
                tolerance: Number(s.tolerance) || 0,
@@ -225,7 +227,7 @@ SF.definePlugin({
       var tolerance = Number(s.tolerance) || 0;
 
       var cash = 0;
-      var market = SF.activeMarket();
+      var market = SF.cashupMarket(p);
       SF.orders().forEach(function (o) {
         if (o.marketId !== market) return;
         if (o.status !== 'paid' && o.status !== 'collected') return;
@@ -247,12 +249,22 @@ SF.definePlugin({
         Expected: expected, Counted: counted, Difference: diff,
         By: ctx.role + '@' + ctx.device, Note: note
       });
+      // Cashed up means done: the market leaves the till's lists (Numbers keeps it, with Reopen).
+      SF.rows('markets').forEach(function (m) {
+        if (String(m.MarketId) === market) SF.setCell('markets', m._row, 'Status', SF.CASHED);
+      });
       SF.audit(ctx, 'cashup', market, 'expected ' + expected + ', counted ' + counted +
                ', diff ' + diff, Math.abs(diff) > tolerance ? 'variance' : 'ok');
       return { ok: true, id: id, expected: expected, counted: counted, difference: diff };
     }
   }
 });
+
+/** The market a cash-up is for: the one the phone is selling at, else the live one. Never HOME. */
+SF.cashupMarket = function (p) {
+  var m = SF.sellMarket(p && p.marketId);
+  return m === SF.HOME ? SF.activeMarket() : m;
+};
 
 /** Settings for one plugin, defaults filled in. */
 SF.pluginSettings = function (pluginId) {

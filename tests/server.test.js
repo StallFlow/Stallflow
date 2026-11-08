@@ -673,6 +673,30 @@ test('a lizard sale recorded as Apricot Jam is put right: the order, the money, 
   assert.strictEqual(stock(/Lizard/), 0);
 });
 
+test('cashing up closes that market: off the till, cash-up counts the phone\'s market, Reopen puts it back', () => {
+  const env = shop(day(0));
+  const { SF } = env;
+  SF.append('markets', { MarketId: 'M02', Name: 'Second Market', Date: day(0), Status: 'planned' });
+  SF.setPin('owner', '4321');
+  const tok = SF.dispatch('signIn', { pin: '4321', device: 'd' }).data.token;
+  assert.ok(SF.dispatch('sell', { token: tok, opId: 'a1', marketId: 'M02', lines: [{ id: 'P01', qty: 1 }], paid: 'cash' }).ok);
+  const exp = SF.dispatch('cashup.expected', { token: tok, marketId: 'M02' });
+  assert.strictEqual(exp.marketId, 'M02', 'the phone\'s market, not the live one');
+  assert.ok(exp.cash > 0);
+  const rec = SF.dispatch('cashup.record', { token: tok, opId: 'c1', marketId: 'M02', counted: exp.expectedInTin, note: '' });
+  assert.ok(rec.ok, JSON.stringify(rec));
+  let till = SF.dispatch('till', { token: tok }).data;
+  assert.strictEqual(till.markets.filter((m) => m.id === 'M02').length, 0, 'gone from the picker');
+  assert.strictEqual(till.running.filter((m) => m.id === 'M02').length, 0, 'gone from Markets today');
+  assert.ok(till.markets.some((m) => m.id === 'M01'), 'the other market stays');
+  const hist = SF.dispatch('dashboard', { token: tok, marketId: 'M02' }).data.history.filter((h) => h.id === 'M02')[0];
+  assert.strictEqual(hist.cashed, true, 'Numbers keeps it, marked cashed up');
+  assert.strictEqual(SF.dispatch('reopenMarket', { token: tok, opId: 'r1', id: 'M02' }).ok, true);
+  till = SF.dispatch('till', { token: tok }).data;
+  assert.ok(till.markets.some((m) => m.id === 'M02'), 'back on the till');
+  assert.strictEqual(SF.dispatch('reopenMarket', { token: tok, opId: 'r2', id: 'M02' }).ok, false, 'nothing to reopen twice');
+});
+
 test('uncooked stock is a list she can add to and update', () => {
   const { SF } = shop(day(3));
   SF.setPin('owner', '4321');
