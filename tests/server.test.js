@@ -568,7 +568,7 @@ test('the connector: wrong key, then the protocol, then a fixed list of tools', 
   const init = env.rpc('initialize', { protocolVersion: '2025-06-18' }).reply.result;
   assert.strictEqual(init.protocolVersion, '2025-06-18'); assert.ok(init.capabilities.tools);
   const tools = env.rpc('tools/list', {}).reply.result.tools.map((t) => t.name).sort();
-  assert.strictEqual(tools.join(), 'stallflow_add_product,stallflow_adjust_stock,stallflow_problems,stallflow_set_price,stallflow_stock,stallflow_switch_product');
+  assert.strictEqual(tools.join(), 'stallflow_add_product,stallflow_adjust_stock,stallflow_problems,stallflow_set_price,stallflow_stock,stallflow_stocktake,stallflow_switch_product');
   assert.strictEqual(env.SF.mcp(env.key, { jsonrpc: '2.0', method: 'notifications/initialized' }).reply, null, 'a notification gets no answer');
   assert.strictEqual(env.call('sell', { lines: [] }).data.ok, false, 'no tool outside the list');
   assert.strictEqual(env.call('setPin', { role: 'owner', pin: '1' }).data.ok, false);
@@ -597,6 +597,7 @@ test('the connector adds, prices, restocks and switches off, and records each as
   assert.ok(['stallflow_add_product', 'stallflow_adjust_stock', 'stallflow_set_price', 'stallflow_switch_product'].every((a) => mine.indexOf(a) !== -1), mine.join());
   assert.strictEqual(env.call('stallflow_add_product', { name: 'x', price: 0 }).data.ok, false);
   assert.ok(env.call('stallflow_problems', {}).data.ok, 'support read works');
+  assert.strictEqual(env.call('stallflow_stocktake', {}).data.status, 'none', 'no stocktake yet: says so');
 });
 
 test('a new key replaces the old one, switching off ends it, and the hourly limit holds', () => {
@@ -920,6 +921,18 @@ test('stocktake: a manager starts it, a cashier cannot', () => {
   assert.strictEqual(st.canApprove, false);
   assert.strictEqual(st.open.review, undefined, 'only the owner sees the review');
   assert.strictEqual(JSON.stringify(st.open.locations.map((l) => l.status)), '["todo","todo","todo"]');
+});
+
+test('the connector can read a stocktake: counted against what the app shows, and changes nothing', () => {
+  const { SF, cashier, manager } = counting();
+  const id = act(SF, 'countStart', manager).id;
+  act(SF, 'countSave', cashier, { countId: id, location: 'Storeroom', lines: [{ id: 'P01', qty: 9 }] });
+  const before = SF.products({ all: true }).filter((x) => x.id === 'P01')[0].onHand;
+  const r = SF.ASSISTANT_TOOLS.stallflow_stocktake.run({});
+  assert.strictEqual(r.status, 'open'); assert.strictEqual(r.id, id);
+  const l = r.lines.filter((x) => x.id === 'P01')[0];
+  assert.strictEqual(l.counted, 9); assert.strictEqual(l.appNow, before);
+  assert.strictEqual(SF.products({ all: true }).filter((x) => x.id === 'P01')[0].onHand, before, 'reading changed nothing');
 });
 
 test('stocktake: anyone counts a location; counting it again replaces the first count', () => {

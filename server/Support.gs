@@ -117,6 +117,32 @@ SF.ASSISTANT_TOOLS = {
     need: ['product_id', 'on'],
     run: function (a) { return SF.CORE_ACTIONS.setActive.fn({ productId: a.product_id, active: a.on === true }, {}); }
   },
+  stallflow_stocktake: {
+    write: false,
+    description: 'Read-only: the latest stocktake (open or finished): its status, which locations are done, and for every counted product what was counted against what the app shows now. Use it to find out why stock does not match a count. It changes nothing.',
+    props: {}, need: [],
+    run: function () {
+      var rows = SF.rows('stockcounts'), row = SF.openCount() || rows[rows.length - 1];
+      if (!row) return { ok: true, status: 'none', message: 'No stocktake has been started.' };
+      var review = SF.countReview(row), prog = SF.countProgress(String(row.CountId));
+      var now = {};
+      SF.products({ all: true }).forEach(function (p) { now[p.id] = p.onHand; });
+      var counted = review.filter(function (r) { return r.counted !== null; });
+      return { ok: true, id: String(row.CountId), status: String(row.Status),
+        startedAt: row.StartedAt instanceof Date ? row.StartedAt.toISOString() : String(row.StartedAt || ''),
+        closedAt: row.ClosedAt instanceof Date ? row.ClosedAt.toISOString() : String(row.ClosedAt || ''),
+        result: SF.json(row.Result, {}),
+        locations: Object.keys(prog).map(function (n) { return { name: n, submitted: !!prog[n].sub, by: prog[n].by || '' }; }),
+        totals: { counted: Math.round(counted.reduce(function (a, r) { return a + r.counted; }, 0) * 1000) / 1000,
+                  appNow: Math.round(Object.keys(now).reduce(function (a, k) { return a + now[k]; }, 0) * 1000) / 1000 },
+        lines: counted.map(function (r) {
+          return { id: r.id, name: r.name, variant: r.variant, expectedAtStart: r.expected, counted: r.counted,
+                   appNow: now[r.id] };
+        }),
+        notCountedButInStock: review.filter(function (r) { return r.counted === null && r.expected; })
+          .map(function (r) { return { id: r.id, name: r.name, variant: r.variant, expectedAtStart: r.expected, appNow: now[r.id] }; }) };
+    }
+  },
   stallflow_problems: {
     write: false,
     description: 'Support: the latest problems reported from the app, any items the checks flag, and recent Google sign-in problems.',
