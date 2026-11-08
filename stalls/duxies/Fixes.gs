@@ -89,5 +89,25 @@ function sfDataFixes() {
       });
       return changed;
     }
+  }, {
+    id: 'remove-caroline-test-market',
+    what: 'The Caroline test market (Lyttelton) was removed',
+    // A market made to try the app out, with nothing sold, spent or moved against it. It goes
+    // only while that is still true, and never if it is the live market.
+    run: function () {
+      var removed = false;
+      SF.rows('markets').forEach(function (m) {
+        if (!/^caroline$/i.test(String(m.Name).trim()) || !/lyttelton/i.test(String(m.Location))) return;
+        var id = String(m.MarketId);
+        if (id === SF.activeMarket()) return;
+        var used = ['orders', 'expenses', 'movements'].some(function (t) {
+          return SF.rows(t).some(function (r) { return String(r.MarketId) === id; });
+        });
+        if (used) return;
+        SF.sheet('markets').deleteRow(m._row);
+        removed = true;
+      });
+      return removed;
+    }
   }];
 }

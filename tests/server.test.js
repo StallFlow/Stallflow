@@ -697,6 +697,22 @@ test('cashing up closes that market: off the till, cash-up counts the phone\'s m
   assert.strictEqual(SF.dispatch('reopenMarket', { token: tok, opId: 'r2', id: 'M02' }).ok, false, 'nothing to reopen twice');
 });
 
+test('the Caroline test market is removed only while nothing is recorded against it', () => {
+  const env = shop(day(3));
+  const { SF, ctx } = env;
+  SF.append('markets', { MarketId: 'M07', Name: 'Caroline', Date: day(300), Location: 'Lyttelton', Status: 'planned' });
+  SF.append('markets', { MarketId: 'M08', Name: 'Caroline', Date: day(301), Location: 'Lyttelton', Status: 'planned' });
+  SF.append('expenses', { ExpenseId: 'E1', MarketId: 'M08', Description: 'Stall', Amount: 50, Category: 'Stall', When: new Date() });
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'stalls', 'duxies', 'Fixes.gs'), 'utf8'), ctx);
+  const fix = vm.runInContext('sfDataFixes()', ctx).filter((f) => f.id === 'remove-caroline-test-market')[0];
+  assert.strictEqual(fix.run(), true);
+  const ids = SF.rows('markets').map((m) => m.MarketId).join(',');
+  assert.ok(ids.indexOf('M07') < 0, 'the empty one is gone');
+  assert.ok(ids.indexOf('M08') >= 0, 'one with a cost against it stays');
+  assert.ok(ids.indexOf('M01') >= 0, 'other markets stay');
+  assert.strictEqual(fix.run(), false);
+});
+
 test('uncooked stock is a list she can add to and update', () => {
   const { SF } = shop(day(3));
   SF.setPin('owner', '4321');
