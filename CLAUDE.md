@@ -109,6 +109,12 @@ go through `SF.once` so a retried request never runs twice.
   submission and the latest per location counts. Only the owner approves: the
   difference goes into Movements as `stocktake` lines and the loss is kept at
   cost in the stocktake's Result. Counts are never edited, only appended.
+  **The difference is counted against the stock at the moment the location was
+  submitted** (`SF.countReview`: movements up to that time), never the snapshot
+  taken at the start: a stocktake stays open for hours while the stall sells, and
+  the start snapshot would take every later sale off twice. Sales after a count
+  stay; uncounted products set to "none left" go to 0 from what is on hand now
+  and never below. The Result carries `check` (counted vs app, and what moved since).
 - **Who may change things:** anything that changes how the stall runs
   (markets, pre-orders on/off, Collect, plugins, label look, profile, PINs,
   release unpaid, reset) needs the `settings` capability: owner and manager

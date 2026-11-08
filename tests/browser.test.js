@@ -1139,7 +1139,7 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
     await page.waitForSelector('#claudeurl');
     const url = (await page.textContent('#claudeurl')).trim();
     assert.ok(/\?mcp=[a-f0-9]{32,}$/.test(url), url);
-    assert.strictEqual(env.SF.mcp(url.split('mcp=')[1], { jsonrpc: '2.0', id: 1, method: 'tools/list' }).reply.result.tools.length, 6, 'the address works');
+    assert.strictEqual(env.SF.mcp(url.split('mcp=')[1], { jsonrpc: '2.0', id: 1, method: 'tools/list' }).reply.result.tools.length, 7, 'the address works');
     assert.ok(!JSON.stringify(env.sheets).includes(url.split('mcp=')[1]), 'the key itself is not in the sheet');
     await page.click('.sheet button:has-text("Switch off")');
     await page.waitForFunction(() => !document.querySelector('.sheet'));
