@@ -85,7 +85,10 @@ var SFCount = (function () {
         (x.status === 'approved'
           ? '<span class="amt" style="text-align:right">' + (r.lossUnits ? '<span style="color:var(--bad)">−' +
               qty(r.lossUnits, 'each') + ' · ' + money(r.lossValue) + '</span>' : 'No loss') +
-            (r.foundUnits ? '<br><span class="muted small">+' + qty(r.foundUnits, 'each') + ' found</span>' : '') + '</span>'
+            (r.foundUnits ? '<br><span class="muted small">+' + qty(r.foundUnits, 'each') + ' found</span>' : '') +
+            (r.check ? '<br><span class="muted small">Counted ' + qty(r.check.counted, 'each') + ' · app ' +
+              qty(r.check.app, 'each') + (r.check.movedSince ? ' (' + qty(r.check.movedSince, 'each') + ' sold since)' : '') +
+              '</span>' : '') + '</span>'
           : '') + '</div>';
     }).join('') + '</div>';
   }
@@ -126,14 +129,15 @@ var SFCount = (function () {
     var rows = state.open.review || [];
     var loss = 0, lossN = 0, found = 0, missing = 0;
     rows.forEach(function (r) {
-      if (r.diff === null) { if (r.expected) missing++; return; }
+      if (r.diff === null) { if (r.now > 0) missing++; return; }
       if (r.diff < 0) { lossN += -r.diff; loss += -r.diff * r.cost; } else found += r.diff;
     });
     var left = state.open.locations.filter(function (l) { return l.status !== 'done'; }).length;
     var F = 'countreview';
     return '<div class="card"><h2>Review and approve</h2>' +
-      '<div class="sub">What was counted against what the app expected. Approving moves the stock to ' +
-        'the counted numbers and records the difference.</div>' +
+      '<div class="sub">What was counted against what the app had at the moment it was counted. ' +
+        'Approving moves the stock to the counted numbers as they were then. Sales made after a count ' +
+        'stay: they are not taken off twice.</div>' +
       SF.snap([
         '<div class="figure"><div class="k">Short</div><div class="v" style="color:var(--bad)">' + qty(lossN, 'each') +
           '</div><div class="n">' + money(loss) + ' at cost</div></div>',
@@ -146,22 +150,24 @@ var SFCount = (function () {
         facets: [{ key: 'show', label: 'Show', options: [['all', 'All'], ['short', 'Short'], ['found', 'Found'],
           ['missing', 'Not counted'], ['right', 'Spot on']] }] }) +
       '<div class="scroll"><table><tr>' + SF.filters.th(F, 'name', 'Product') +
-        SF.filters.th(F, 'expected', 'Expected', 'r') + SF.filters.th(F, 'counted', 'Counted', 'r') +
-        SF.filters.th(F, 'diff', 'Difference', 'r') + SF.filters.th(F, 'value', 'Value', 'r') + '</tr>' +
+        SF.filters.th(F, 'expected', 'App had', 'r') + SF.filters.th(F, 'counted', 'Counted', 'r') +
+        SF.filters.th(F, 'diff', 'Difference', 'r') + SF.filters.th(F, 'sold', 'Sold since', 'r') +
+        SF.filters.th(F, 'value', 'Value', 'r') + '</tr>' +
       rows.map(function (r) {
         var show = r.diff === null ? 'missing' : r.diff < 0 ? 'short' : r.diff > 0 ? 'found' : 'right';
         var value = r.diff === null ? 0 : Math.round(r.diff * r.cost * 100) / 100;
         return '<tr' + SF.filters.row(F, { text: label(r) + ' ' + r.id, show: show },
             { name: label(r).toLowerCase(), expected: r.expected, counted: r.counted === null ? -1 : r.counted,
-              diff: r.diff === null ? 0 : r.diff, value: value }) + '>' +
+              diff: r.diff === null ? 0 : r.diff, sold: r.soldSince === null ? 0 : r.soldSince, value: value }) + '>' +
           '<td><b>' + esc(r.name) + '</b>' + (r.variant ? '<div class="muted small">' + esc(r.variant) + '</div>' : '') + '</td>' +
           '<td class="r num">' + qty(r.expected, r.unit) + '</td>' +
           '<td class="r num">' + (r.counted === null ? '<span class="muted">—</span>' : qty(r.counted, r.unit)) + '</td>' +
           '<td class="r num"' + (r.diff < 0 ? ' style="color:var(--bad)"' : '') + '>' +
             (r.diff === null ? '' : (r.diff > 0 ? '+' : '') + qty(r.diff, r.unit)) + '</td>' +
+          '<td class="r num">' + (r.soldSince ? qty(r.soldSince, r.unit) : '') + '</td>' +
           '<td class="r num">' + (value ? money(value) : '') + '</td></tr>';
       }).join('') +
-      '<tr data-fempty="' + F + '" style="display:none"><td colspan="5" class="empty">Nothing matches.</td></tr>' +
+      '<tr data-fempty="' + F + '" style="display:none"><td colspan="6" class="empty">Nothing matches.</td></tr>' +
       '</table></div>' +
       (missing ? '<div class="field" style="margin-top:12px"><label for="ctmissing">Products nobody counted (' +
         missing + ')</label><select id="ctmissing"><option value="keep">Leave them as they are</option>' +

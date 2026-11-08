@@ -989,6 +989,71 @@ test('stocktake: what nobody counted is left alone, unless the owner says there 
   assert.strictEqual(r.result.lossUnits, 6);
 });
 
+const waitMs = (ms) => { const t = Date.now() + ms; while (Date.now() < t); };
+const sellOne = (SF, tok, id, n, op) => assert.ok(SF.dispatch('sell', { token: tok, opId: op, lines: [{ id, qty: n }], paid: 'cash' }).ok);
+
+test('stocktake: a sale made after a location was counted is kept, not taken off twice', () => {
+  const { SF, tok, cashier } = counting();
+  const id = act(SF, 'countStart', tok).id;            // P01: 10 on hand
+  act(SF, 'countSave', cashier, { countId: id, location: 'Storeroom', lines: [{ id: 'P01', qty: 12 }] });   // found 2 more than the app had
+  waitMs(5);
+  sellOne(SF, tok, 'P01', 2, 'a1');                    // sold after it was counted
+  const review = SF.dispatch('countState', { token: tok }).data.open.review.find((r) => r.id === 'P01');
+  assert.strictEqual(JSON.stringify([review.expected, review.counted, review.diff, review.now, review.soldSince]), '[10,12,2,8,2]');
+  const r = act(SF, 'countApprove', tok, { countId: id });
+  assert.ok(r.ok, r.message);
+  assert.strictEqual(SF.onHand().P01, 10, 'counted 12, less the 2 sold afterwards; never 8 or 12');
+  assert.strictEqual(r.result.check.counted, 12);
+  assert.strictEqual(r.result.check.app, 10);
+  assert.strictEqual(r.result.check.movedSince, 2, 'the whole gap is the sale made after the count');
+});
+
+test('stocktake: a sale made before the count is already in what was counted', () => {
+  const { SF, tok, cashier } = counting();
+  const id = act(SF, 'countStart', tok).id;
+  sellOne(SF, tok, 'P01', 2, 'b1');                    // sold while the stocktake was open, before counting
+  waitMs(5);
+  act(SF, 'countSave', cashier, { countId: id, location: 'Storeroom', lines: [{ id: 'P01', qty: 8 }] });
+  const r = act(SF, 'countApprove', tok, { countId: id });
+  assert.ok(r.ok, r.message);
+  assert.strictEqual(SF.onHand().P01, 8, 'the shelf had 8, the app already said 8: nothing to move');
+  assert.strictEqual(r.result.moved, 0);
+  assert.strictEqual(r.result.check.movedSince, 0);
+});
+
+test('stocktake: two locations counted at different times, with a sale in between', () => {
+  const { SF, tok, cashier, manager } = counting();
+  const id = act(SF, 'countStart', tok).id;
+  act(SF, 'countSave', cashier, { countId: id, location: 'Storeroom', lines: [{ id: 'P02', qty: 4 }] });
+  waitMs(5);
+  sellOne(SF, tok, 'P02', 1, 'c1');                    // between the two counts
+  waitMs(5);
+  act(SF, 'countSave', manager, { countId: id, location: 'Car', lines: [{ id: 'P02', qty: 1 }] });
+  waitMs(5);
+  sellOne(SF, tok, 'P02', 1, 'c2');                    // after both
+  const r = act(SF, 'countApprove', tok, { countId: id });
+  assert.ok(r.ok, r.message);
+  assert.strictEqual(SF.onHand().P02, 4, 'counted 5 in all, minus the 1 sold after the last count');
+});
+
+test('stocktake: what nobody counted goes to 0 from what is on hand now, never below', () => {
+  const { SF, tok, cashier } = counting();
+  const id = act(SF, 'countStart', tok).id;            // P02: 6 on hand
+  act(SF, 'countSave', cashier, { countId: id, location: 'Car', lines: [{ id: 'P01', qty: 10 }] });
+  waitMs(5);
+  sellOne(SF, tok, 'P02', 2, 'd1');                    // P02 is now 4; the start snapshot said 6
+  const r = act(SF, 'countApprove', tok, { countId: id, uncounted: 'zero' });
+  assert.ok(r.ok, r.message);
+  assert.strictEqual(SF.onHand().P02, 0, 'ends at 0, not -2');
+  assert.strictEqual(r.result.lossUnits, 4);
+  // already negative: approval leaves it, it does not make it worse
+  SF.move('P02', -3, 'sale', 'test');
+  const id2 = act(SF, 'countStart', tok).id;
+  act(SF, 'countSave', cashier, { countId: id2, location: 'Car', lines: [{ id: 'P01', qty: 10 }] });
+  act(SF, 'countApprove', tok, { countId: id2, uncounted: 'zero' });
+  assert.strictEqual(SF.onHand().P02, -3);
+});
+
 test('stocktake: managers edit the locations; the list stays tidy', () => {
   const { SF, cashier, manager } = counting();
   assert.strictEqual(act(SF, 'countLocationsSave', cashier, { locations: ['X'] }).ok, false);

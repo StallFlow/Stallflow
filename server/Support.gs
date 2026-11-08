@@ -136,11 +136,12 @@ SF.ASSISTANT_TOOLS = {
         totals: { counted: Math.round(counted.reduce(function (a, r) { return a + r.counted; }, 0) * 1000) / 1000,
                   appNow: Math.round(Object.keys(now).reduce(function (a, k) { return a + now[k]; }, 0) * 1000) / 1000 },
         lines: counted.map(function (r) {
-          return { id: r.id, name: r.name, variant: r.variant, expectedAtStart: r.expected, counted: r.counted,
-                   appNow: now[r.id] };
+          return { id: r.id, name: r.name, variant: r.variant, expectedAtStart: r.startExpected,
+                   appHadWhenCounted: r.expected, counted: r.counted, appNow: now[r.id],
+                   soldSinceCount: r.soldSince };
         }),
-        notCountedButInStock: review.filter(function (r) { return r.counted === null && r.expected; })
-          .map(function (r) { return { id: r.id, name: r.name, variant: r.variant, expectedAtStart: r.expected, appNow: now[r.id] }; }) };
+        notCountedButInStock: review.filter(function (r) { return r.counted === null && r.startExpected; })
+          .map(function (r) { return { id: r.id, name: r.name, variant: r.variant, expectedAtStart: r.startExpected, appNow: now[r.id] }; }) };
     }
   },
   stallflow_problems: {

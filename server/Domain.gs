@@ -1447,20 +1447,45 @@ SF.countProgress = function (countId) {
   return locs;
 };
 
+/**
+ * What was counted against what the app had AT THE MOMENT each product was counted.
+ *
+ * A stocktake stays open for hours or days while the stall keeps selling, so comparing the
+ * count with the stock at the START would take every later sale off twice (once by the sale,
+ * once by the adjustment). Each counted product is compared with the stock as it stood when
+ * the latest location that counted it was submitted; sales after that moment are left alone.
+ * `now` is today's stock and `soldSince` is how much of it moved after the count.
+ */
 SF.countReview = function (row) {
   var snap = SF.json(row.Snapshot, {}), progress = SF.countProgress(String(row.CountId));
-  var counted = {};
+  var counted = {}, at = {};
   Object.keys(progress).forEach(function (loc) {
     if (!progress[loc].sub) return;
     var lines = progress[loc].lines;
-    Object.keys(lines).forEach(function (id) { counted[id] = (counted[id] || 0) + lines[id]; });
+    Object.keys(lines).forEach(function (id) {
+      counted[id] = (counted[id] || 0) + lines[id];
+      at[id] = Math.max(at[id] || 0, progress[loc].subAt || 0);
+    });
   });
-  var cost = SF.costPerUnit();
+  var now = {}, atCount = {};
+  SF.rows('movements').forEach(function (m) {
+    var id = String(m.ProductId), q = SF.num(m.Qty);
+    now[id] = (now[id] || 0) + q;
+    // A line with no readable time counts as before the count.
+    var t = m.When && m.When.getTime ? m.When.getTime() : 0;
+    if (at[id] !== undefined && t <= at[id]) atCount[id] = (atCount[id] || 0) + q;
+  });
+  var cost = SF.costPerUnit(), r3 = function (n) { return Math.round(n * 1000) / 1000; };
   return SF.products({ all: true }).filter(function (p) { return p.type !== 'made'; }).map(function (p) {
-    var expected = SF.num(snap[p.id]), c = counted[p.id];
-    return { id: p.id, name: p.name, variant: p.variant, unit: p.unit, expected: expected,
-             counted: c === undefined ? null : Math.round(c * 1000) / 1000,
-             diff: c === undefined ? null : Math.round((c - expected) * 1000) / 1000,
+    var c = counted[p.id], hand = now[p.id] || 0;
+    var had = c === undefined ? hand : (atCount[p.id] || 0);
+    return { id: p.id, name: p.name, variant: p.variant, unit: p.unit,
+             startExpected: SF.num(snap[p.id]),
+             expected: r3(had),                       // what the app had when it was counted
+             counted: c === undefined ? null : r3(c),
+             diff: c === undefined ? null : r3(c - had),
+             now: r3(hand),
+             soldSince: c === undefined ? null : r3(had - hand),
              cost: cost[p.id] || 0 };
   });
 };
@@ -1563,11 +1588,14 @@ SF.action('countApprove', 'stock', 'write', function (p, ctx) {
   if (!open || String(open.CountId) !== String(p.countId || '')) return { ok: false, message: 'That stocktake is no longer open.' };
   var zero = p.uncounted === 'zero', ref = 'Stocktake ' + open.CountId;
   var res = { moved: 0, lossUnits: 0, lossValue: 0, foundUnits: 0, foundValue: 0, uncounted: 0 };
-  SF.countReview(open).forEach(function (r) {
+  var review = SF.countReview(open);
+  review.forEach(function (r) {
     var diff = r.diff;
     if (diff === null) {
-      if (!zero || !r.expected) { if (r.expected) res.uncounted++; return; }
-      diff = -r.expected;                       // nobody counted it, and the owner said: none left
+      // Nobody counted it. Kept as it is, or (the owner said none are left) taken to 0 from what
+      // is on hand now, never below it: approval never pushes a product under zero.
+      if (!zero) { if (r.now > 0) res.uncounted++; return; }
+      diff = r.now > 0 ? -r.now : 0;
     }
     if (!diff) return;
     SF.move(r.id, diff, 'stocktake', ref);
@@ -1577,6 +1605,15 @@ SF.action('countApprove', 'stock', 'write', function (p, ctx) {
   });
   res.lossValue = Math.round(res.lossValue * 100) / 100;
   res.foundValue = Math.round(res.foundValue * 100) / 100;
+  // The check: what was counted, against what the app shows now. They differ only by what was
+  // sold (or made) after each location was counted.
+  var hand = SF.onHand(), cTotal = 0, aTotal = 0;
+  review.forEach(function (r) {
+    if (r.counted === null) return;
+    cTotal += r.counted; aTotal += hand[r.id] || 0;
+  });
+  res.check = { counted: Math.round(cTotal * 1000) / 1000, app: Math.round(aTotal * 1000) / 1000,
+                movedSince: Math.round((cTotal - aTotal) * 1000) / 1000 };
   SF.setCell('stockcounts', open._row, 'Status', 'approved');
   SF.setCell('stockcounts', open._row, 'ClosedAt', new Date());
   SF.setCell('stockcounts', open._row, 'ClosedBy', ctx.user || ctx.role);
