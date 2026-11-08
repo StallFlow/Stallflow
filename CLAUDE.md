@@ -115,6 +115,8 @@ go through `SF.once` so a retried request never runs twice.
   the start snapshot would take every later sale off twice. Sales after a count
   stay; uncounted products set to "none left" go to 0 from what is on hand now
   and never below. The Result carries `check` (counted vs app, and what moved since).
+  Any past stocktake can be reopened (owner and manager, `countDetail`): counts per location, what
+  the app had at the count, the difference, and what approval actually moved.
 - **Who may change things:** anything that changes how the stall runs
   (markets, pre-orders on/off, Collect, plugins, label look, profile, PINs,
   release unpaid, reset) needs the `settings` capability: owner and manager

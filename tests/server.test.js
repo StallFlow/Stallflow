@@ -1054,6 +1054,27 @@ test('stocktake: what nobody counted goes to 0 from what is on hand now, never b
   assert.strictEqual(SF.onHand().P02, -3);
 });
 
+test('an earlier stocktake can be read back: counts, what the app had, and what approval moved', () => {
+  const { SF, tok, cashier, manager } = counting();
+  const id = act(SF, 'countStart', tok).id;
+  act(SF, 'countSave', cashier, { countId: id, location: 'Storeroom', lines: [{ id: 'P01', qty: 7 }] });
+  waitMs(5);
+  act(SF, 'countApprove', tok, { countId: id });
+  const d = SF.dispatch('countDetail', { token: manager, countId: id }).data;
+  assert.strictEqual(d.ok, true); assert.strictEqual(d.status, 'approved');
+  assert.strictEqual(d.locations[0].name, 'Storeroom'); assert.strictEqual(d.locations[0].items, 7);
+  const l = d.lines.find((x) => x.id === 'P01');
+  assert.strictEqual(JSON.stringify([l.hadAtCount, l.counted, l.diff, l.applied]), '[10,7,-3,-3]');
+  assert.strictEqual(SF.dispatch('countDetail', { token: cashier, countId: id }).code, 'forbidden', 'cashiers cannot open it');
+  assert.strictEqual(SF.dispatch('countDetail', { token: tok, countId: 'ST999' }).data.ok, false);
+  // a cancelled one can be read too, and moved nothing
+  const id2 = act(SF, 'countStart', tok).id;
+  act(SF, 'countSave', cashier, { countId: id2, location: 'Car', lines: [{ id: 'P01', qty: 1 }] });
+  act(SF, 'countCancel', manager, { countId: id2 });
+  const c = SF.dispatch('countDetail', { token: manager, countId: id2 }).data;
+  assert.strictEqual(c.status, 'cancelled'); assert.strictEqual(c.lines.find((x) => x.id === 'P01').applied, 0);
+});
+
 test('stocktake: managers edit the locations; the list stays tidy', () => {
   const { SF, cashier, manager } = counting();
   assert.strictEqual(act(SF, 'countLocationsSave', cashier, { locations: ['X'] }).ok, false);

@@ -12,6 +12,7 @@ var SFCount = (function () {
   var esc = SF.esc, money = SF.money, qty = SF.qty;
   var state = null;        // the last countState from the server
   var counting = null;     // { countId, location, lines: { id: qty } } while counting a location
+  var viewing = null;      // a past stocktake being reviewed: { id, detail } (detail null while loading)
   var DRAFT = 'sf.countdraft';
 
   function find(id) {
@@ -59,6 +60,7 @@ var SFCount = (function () {
         : 'Loading…') + '</div></div>';
     }
     if (counting) return countingHtml();
+    if (viewing) return viewHtml();
     return state.open ? openHtml() : idleHtml();
   }
 
@@ -77,20 +79,76 @@ var SFCount = (function () {
   function historyHtml() {
     var h = state.history || [];
     if (!h.length) return '';
-    return '<div class="card"><h2>Earlier stocktakes</h2>' + h.map(function (x) {
+    return '<div class="card"><h2>Earlier stocktakes</h2>' +
+      (state.canManage ? '<div class="sub">Tap one to see every line that was counted.</div>' : '') +
+      h.map(function (x) {
       var r = x.result || {};
-      return '<div class="rowitem"><div class="who"><b>' + esc(x.id) + ' · ' +
+      return '<div class="rowitem"' + (state.canManage ? ' role="button" tabindex="0" style="cursor:pointer" data-id="' + esc(x.id) +
+          '" onclick="SFCount.view(this.getAttribute(\'data-id\'))"' : '') + '><div class="who"><b>' + esc(x.id) + ' · ' +
         (x.status === 'approved' ? 'approved' : 'cancelled') + '</b><span>' + esc(x.when) +
         (x.by ? ' · ' + esc(x.by) : '') + '</span></div>' +
         (x.status === 'approved'
-          ? '<span class="amt" style="text-align:right">' + (r.lossUnits ? '<span style="color:var(--bad)">−' +
-              qty(r.lossUnits, 'each') + ' · ' + money(r.lossValue) + '</span>' : 'No loss') +
+          ? '<span class="amt" style="text-align:right">' + (r.lossUnits ? '<span style="color:var(--bad)">\u2212' +
+              qty(r.lossUnits, 'each') + ' \u00b7 ' + money(r.lossValue) + '</span>' : 'No loss') +
             (r.foundUnits ? '<br><span class="muted small">+' + qty(r.foundUnits, 'each') + ' found</span>' : '') +
-            (r.check ? '<br><span class="muted small">Counted ' + qty(r.check.counted, 'each') + ' · app ' +
+            (r.check ? '<br><span class="muted small">Counted ' + qty(r.check.counted, 'each') + ' \u00b7 app ' +
               qty(r.check.app, 'each') + (r.check.movedSince ? ' (' + qty(r.check.movedSince, 'each') + ' sold since)' : '') +
               '</span>' : '') + '</span>'
-          : '') + '</div>';
+          : '') + (state.canManage ? '<span class="muted" aria-hidden="true">\u203a</span>' : '') + '</div>';
     }).join('') + '</div>';
+  }
+
+  /* ---- reviewing a past stocktake ----------------------------------------- */
+  function viewHtml() {
+    var back = '<button class="ghost sm" onclick="SFCount.closeView()">\u2039 Back to stocktakes</button>';
+    var d = viewing.detail;
+    if (!d) return '<div class="card">' + back + '<div class="loading" style="margin-top:12px">Loading ' + esc(viewing.id) + '\u2026</div></div>';
+    var F = 'counthist', r = d.result || {};
+    var counted = 0, moved = 0, differs = 0;
+    d.lines.forEach(function (l) {
+      counted += l.counted || 0; moved += l.applied || 0;
+      if (l.counted !== null && l.diff !== l.applied) differs++;
+    });
+    return '<div class="card">' + back + '<h2 style="margin-top:12px">Stocktake ' + esc(d.id) + ' \u00b7 ' + esc(d.status) + '</h2>' +
+      '<div class="sub">Started ' + esc(d.startedAt) + ' by ' + esc(d.startedBy) +
+        (d.closedAt ? '. ' + (d.status === 'approved' ? 'Approved ' : 'Cancelled ') + esc(d.closedAt) + (d.closedBy ? ' by ' + esc(d.closedBy) : '') : '') + '.</div>' +
+      d.locations.map(function (l) {
+        return '<div class="rowitem"><div class="who"><b>' + esc(l.name) + '</b><span>counted ' + esc(l.at) +
+          (l.by ? ' by ' + esc(l.by) : '') + '</span></div><span class="tag ok">' + qty(l.items, 'each') + '</span></div>';
+      }).join('') +
+      SF.snap([
+        '<div class="figure"><div class="k">Counted</div><div class="v">' + qty(counted, 'each') + '</div><div class="n">in all</div></div>',
+        '<div class="figure"><div class="k">Approval moved</div><div class="v">' + (moved > 0 ? '+' : '') + qty(moved, 'each') + '</div><div class="n">net, into the stock</div></div>',
+        '<div class="figure"><div class="k">Lines that differ</div><div class="v">' + differs + '</div><div class="n">moved \u2260 counted</div></div>'
+      ]) +
+      (r.check ? '<div class="muted small" style="margin:8px 0">When approved: counted ' + qty(r.check.counted, 'each') +
+        ', app ' + qty(r.check.app, 'each') + '.</div>' : '') + '</div>' +
+      '<div class="card">' +
+      SF.filters.bar(F, { search: 'Search products', count: d.lines.length, noun: 'products', min: 6,
+        facets: [{ key: 'show', label: 'Show', options: [['all', 'All'], ['short', 'Short'], ['found', 'Found'],
+          ['differs', 'Moved \u2260 counted'], ['missing', 'Not counted']] }] }) +
+      '<div class="scroll"><table><tr>' + SF.filters.th(F, 'name', 'Product') +
+        SF.filters.th(F, 'had', 'App had', 'r') + SF.filters.th(F, 'counted', 'Counted', 'r') +
+        SF.filters.th(F, 'diff', 'Difference', 'r') + SF.filters.th(F, 'applied', 'Moved', 'r') + '</tr>' +
+      d.lines.map(function (l) {
+        var show = l.counted === null ? 'missing' : l.diff !== l.applied ? 'differs' : l.diff < 0 ? 'short' : l.diff > 0 ? 'found' : 'right';
+        var odd = l.counted !== null && l.diff !== l.applied;
+        return '<tr' + SF.filters.row(F, { text: label(l) + ' ' + l.id, show: show },
+            { name: label(l).toLowerCase(), had: l.hadAtCount === null ? -1 : l.hadAtCount, counted: l.counted === null ? -1 : l.counted,
+              diff: l.diff === null ? 0 : l.diff, applied: l.applied }) + '>' +
+          '<td><b>' + esc(l.name) + '</b>' + (l.variant ? '<div class="muted small">' + esc(l.variant) + '</div>' : '') + '</td>' +
+          '<td class="r num">' + (l.hadAtCount === null ? '<span class="muted">\u2014</span>' : qty(l.hadAtCount, l.unit)) + '</td>' +
+          '<td class="r num">' + (l.counted === null ? '<span class="muted">\u2014</span>' : qty(l.counted, l.unit)) + '</td>' +
+          '<td class="r num"' + (l.diff < 0 ? ' style="color:var(--bad)"' : '') + '>' +
+            (l.diff === null ? '' : (l.diff > 0 ? '+' : '') + qty(l.diff, l.unit)) + '</td>' +
+          '<td class="r num"' + (odd ? ' style="color:var(--warn);font-weight:700"' : '') + '>' +
+            (l.applied ? (l.applied > 0 ? '+' : '') + qty(l.applied, l.unit) : '') + '</td></tr>';
+      }).join('') +
+      '<tr data-fempty="' + F + '" style="display:none"><td colspan="5" class="empty">Nothing matches.</td></tr>' +
+      '</table></div>' +
+      '<div class="muted small" style="margin-top:10px"><b>App had</b> is the stock when the product was counted. ' +
+        '<b>Moved</b> is what approving actually put into the stock; where it differs from the difference it is shown in amber. ' +
+        'Stocktakes approved before 8 Nov used the stock at the start, so they can differ.</div></div>';
   }
 
   function locationsEditor() {
@@ -291,6 +349,16 @@ var SFCount = (function () {
       draw();
       window.scrollTo(0, 0);
     },
+    view: function (id) {
+      viewing = { id: id, detail: null };
+      draw(); window.scrollTo(0, 0);
+      SF.get('countDetail', { countId: id }).then(function (res) {
+        var d = res && res.data;
+        if (!d || d.ok === false) { viewing = null; SF.toast((d && d.message) || 'Could not open that stocktake.', true); draw(); return; }
+        if (viewing && viewing.id === id) { viewing.detail = d; draw(); }
+      }).catch(function () { viewing = null; SF.toast('Needs signal to open an earlier stocktake.', true); draw(); });
+    },
+    closeView: function () { viewing = null; draw(); },
     leave: function () {
       // The count stays on the phone; "Carry on" picks it up again.
       counting = null;
