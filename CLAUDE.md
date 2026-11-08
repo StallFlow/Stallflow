@@ -173,7 +173,7 @@ go through `SF.once` so a retried request never runs twice.
 - **Claude as a connector** (`server/Support.gs`): the owner makes a key in
   Settings; Claude calls `<api>?mcp=KEY` (MCP over HTTP) and can only run the
   fixed tools in `SF.ASSISTANT_TOOLS` (read stock, add a product, set a price,
-  adjust stock, switch a product on or off, read problems). Never money,
+  adjust stock, switch a product on or off, read problems, read the latest stocktake). Never money,
   orders, markets, PINs or people; products are switched off, never deleted.
   Only the key's hash is stored; every call is audited as `Claude (connector)`.
   A new tool must be added to that list and justified; do not widen it casually.
