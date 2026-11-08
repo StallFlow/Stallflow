@@ -1725,6 +1725,14 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
     assert.strictEqual(hand.P01, 2); assert.strictEqual(hand.P02, 1); assert.strictEqual(hand.P03, 2);
     assert.strictEqual(hand.P05, 9, 'not counted anywhere: left as it was');
     assert.ok(/approved/.test(await page.textContent('#countbox')));
+    // An earlier stocktake can be opened and read, line by line.
+    await page.click('#countbox .rowitem[data-id]');
+    await page.waitForSelector('#countbox table');
+    const hrow = async (name) => page.$eval('#countbox tr:has-text("' + name + '")', (tr) => Array.from(tr.querySelectorAll('td')).map((td) => td.textContent.trim()));
+    assert.deepStrictEqual((await hrow('Apricot Jam')).slice(1, 5), ['10', '2', '-8', '-8'], 'had, counted, difference, moved');
+    assert.ok(/Storeroom/.test(await page.textContent('#countbox')), 'which location counted it');
+    await page.click('button:has-text("Back to stocktakes")');
+    await page.waitForFunction(() => /Earlier stocktakes/.test(document.getElementById('countbox').textContent));
     await env.ctx.close();
   });
 

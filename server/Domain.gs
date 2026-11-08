@@ -1501,7 +1501,7 @@ SF.action('countState', 'count', 'read', function (p, ctx) {
     }),
     open: null,
     history: SF.rows('stockcounts').filter(function (r) { return String(r.Status) !== 'open'; })
-      .slice(-10).reverse().map(function (r) {
+      .slice(-50).reverse().map(function (r) {
         return { id: String(r.CountId), status: String(r.Status), by: String(r.ClosedBy || ''),
                  when: r.ClosedAt && r.ClosedAt.getTime ? Utilities.formatDate(r.ClosedAt, SF.TZ, 'yyyy-MM-dd HH:mm') : '',
                  result: SF.json(r.Result, {}) };
@@ -1524,6 +1524,43 @@ SF.action('countState', 'count', 'read', function (p, ctx) {
     if (out.canApprove) out.open.review = SF.countReview(open);
   }
   return out;
+});
+
+/**
+ * A past stocktake, line by line: what each location counted, what the app had at that moment,
+ * the difference, and what approval actually moved (the `stocktake` lines it wrote). Counts are
+ * only ever appended, so any stocktake can be rebuilt from its Countlines. Owner and manager.
+ */
+SF.action('countDetail', 'stock', 'read', function (p) {
+  var id = String(p.countId || ''), row = null;
+  SF.rows('stockcounts').forEach(function (r) { if (String(r.CountId) === id) row = r; });
+  if (!row) return { ok: false, message: 'That stocktake was not found.' };
+  var when = function (d) {
+    return d && d.getTime ? Utilities.formatDate(d, SF.TZ, 'yyyy-MM-dd HH:mm') : '';
+  };
+  var applied = {}, ref = 'Stocktake ' + id;
+  SF.rows('movements').forEach(function (m) {
+    if (String(m.Type) === 'stocktake' && String(m.Ref) === ref) {
+      applied[String(m.ProductId)] = (applied[String(m.ProductId)] || 0) + SF.num(m.Qty);
+    }
+  });
+  var progress = SF.countProgress(id);
+  var lines = SF.countReview(row).filter(function (r) {
+    return r.counted !== null || applied[r.id] || r.startExpected;
+  }).map(function (r) {
+    return { id: r.id, name: r.name, variant: r.variant, unit: r.unit, startExpected: r.startExpected,
+             hadAtCount: r.counted === null ? null : r.expected, counted: r.counted, diff: r.diff,
+             applied: Math.round((applied[r.id] || 0) * 1000) / 1000, cost: r.cost };
+  });
+  return { ok: true, id: id, status: String(row.Status), startedBy: String(row.StartedBy || ''),
+    startedAt: when(row.StartedAt), closedBy: String(row.ClosedBy || ''), closedAt: when(row.ClosedAt),
+    result: SF.json(row.Result, {}),
+    locations: Object.keys(progress).filter(function (n) { return progress[n].sub; }).map(function (n) {
+      var items = 0; Object.keys(progress[n].lines).forEach(function (k) { items += progress[n].lines[k]; });
+      return { name: n, by: progress[n].by || '', at: when(new Date(progress[n].subAt)),
+               items: Math.round(items * 1000) / 1000 };
+    }),
+    lines: lines };
 });
 
 SF.action('countStart', 'stock', 'write', function (p, ctx) {
