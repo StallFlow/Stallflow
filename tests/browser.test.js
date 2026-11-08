@@ -1075,6 +1075,29 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
     await env.ctx.close();
   });
 
+  await test('Cash-up closes the market this phone sells at, and it leaves the till', async () => {
+    const env = await phone({ hash: '#till', seed: (SF) => {
+      SF.append('markets', { MarketId: 'M02', Name: 'Blairegowrie', Date: day(0), Status: 'planned' });
+      SF.append('markets', { MarketId: 'M03', Name: 'Monument', Date: day(0), Status: 'planned' });
+    } });
+    const page = env.page;
+    await page.evaluate(() => SF.ls.set('sf.sellAt', 'M02'));
+    await page.goto('about:blank'); await page.goto(base + '#cashup');
+    await page.waitForSelector('#cuc');
+    assert.ok(/Blairegowrie/.test(await page.textContent('#cubox')), 'the cash-up names the market it counts');
+    await page.fill('#cuc', '200');
+    await page.fill('#cun', 'no sales yet');
+    await page.evaluate(() => SFC.save());
+    await page.waitForFunction(() => /is cashed up and closed/i.test(document.querySelector('#cubox').textContent), null, { timeout: 8000 });
+    await page.goto('about:blank'); await page.goto(base + '#till');
+    await page.waitForSelector('.todaymk, .sellbanner');
+    const names = await page.evaluate(() => (SF.state.data.till.markets || []).map((m) => m.name).join('|'));
+    assert.ok(!/Blairegowrie/.test(names), 'cashed-up market is off the picker: ' + names);
+    assert.ok(/Monument/.test(names), 'the other market stays: ' + names);
+    assert.strictEqual(await page.evaluate(() => SF.ls.get('sf.sellAt', '')), '', 'this phone is no longer pointed at it');
+    await env.ctx.close();
+  });
+
   await test('New product: pick the category from a list, give the stock, and it lands on the shelf', async () => {
     const env = await phone({ hash: '#stock', seed: shop10 });
     const page = env.page;

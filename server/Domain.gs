@@ -484,9 +484,11 @@ SF.sellMarket = function (id) {
 };
 
 /** Markets a salesperson might be standing at: today onwards, plus between markets. */
+SF.CASHED = 'cashed up';
 SF.sellableMarkets = function () {
   var today = SF.today(), live = SF.activeMarket();
   return SF.markets().filter(function (m) {
+    if (m.status === SF.CASHED) return false;       // cashed up: done, off the till's lists
     return m.id === SF.HOME || m.id === live || !m.date || m.date >= today;
   }).map(function (m) { return { id: m.id, name: m.name, date: m.date }; });
 };
@@ -526,11 +528,13 @@ SF.action('till', 'sell', 'read', function (p) {
     // So the till can say when the live market is one that is already over.
     liveId: SF.activeMarket(), today: SF.today(),
     allMarkets: SF.markets().filter(function (m) { return m.id !== SF.HOME; })
-                  .map(function (m) { return { id: m.id, name: m.name, date: m.date }; }),
+                  .map(function (m) { return { id: m.id, name: m.name, date: m.date,
+                                               cashed: m.status === SF.CASHED }; }),
     // Every market on today's date with what it has taken so far, so a phone can be
     // pointed at any of them: several markets can trade at the same moment.
-    running: SF.markets().filter(function (m) { return m.id !== SF.HOME && m.date && m.date === SF.today(); })
-      .map(function (m) {
+    running: SF.markets().filter(function (m) {
+      return m.id !== SF.HOME && m.date && m.date === SF.today() && m.status !== SF.CASHED;
+    }).map(function (m) {
         var sold = SF.orders().filter(function (o) {
           return o.marketId === m.id && (o.status === 'paid' || o.status === 'collected');
         });
@@ -538,6 +542,18 @@ SF.action('till', 'sell', 'read', function (p) {
                  total: Math.round(sold.reduce(function (a, o) { return a + o.total; }, 0) * 100) / 100 };
       })
   };
+});
+
+/** Put a cashed-up market back on the till's lists (a late sale, or cashed up by mistake). */
+SF.action('reopenMarket', 'settings', 'write', function (p, ctx) {
+  var id = String(p.id || ''), found = false;
+  SF.rows('markets').forEach(function (m) {
+    if (String(m.MarketId) !== id || String(m.Status) !== SF.CASHED) return;
+    SF.setCell('markets', m._row, 'Status', 'planned'); found = true;
+  });
+  if (!found) return { ok: false, message: 'That market is not cashed up.' };
+  SF.audit(ctx, 'reopenMarket', id, 'market reopened', 'ok');
+  return { ok: true };
 });
 
 SF.action('sell', 'sell', 'write', function (p, ctx) {
@@ -1053,7 +1069,7 @@ SF.action('dashboard', 'reports', 'read', function (p) {
     history: SF.markets().map(function (m) {
       var s = summarise(m.id);
       return { id: m.id, name: m.name, date: m.date, location: m.location, status: m.status,
-               revenue: s.revenue, expenses: s.expenses, profit: s.profit, units: s.units };
+               cashed: m.status === SF.CASHED, revenue: s.revenue, expenses: s.expenses, profit: s.profit, units: s.units };
     }).sort(function (a, b) { return String(b.date).localeCompare(String(a.date)); }),
     stock: { value: stockValue, units: Math.round(stockUnits * 100) / 100 },
     preordersOpen: SF.preordersOpen(),

@@ -237,7 +237,9 @@
                          taken: h.revenue, units: h.units, costs: h.expenses }) + '>' +
         '<td><b>' + esc(h.name) + '</b>' +
         (h.location ? '<div class="muted small">' + esc(h.location) + '</div>' : '') +
-        (when === 'past' ? '' : '<button class="quiet" style="padding:4px 0;min-height:36px;text-decoration:underline" ' +
+        (h.cashed ? '<div class="muted small">Cashed up \u00b7 <button class="quiet" style="padding:4px 0;min-height:36px;text-decoration:underline" ' +
+          'data-id="' + esc(h.id) + '" onclick="SFA.reopenMarket(this.getAttribute(\'data-id\'))">Reopen</button></div>' : '') +
+        (when === 'past' || h.cashed ? '' : '<button class="quiet" style="padding:4px 0;min-height:36px;text-decoration:underline" ' +
           'data-id="' + esc(h.id) + '" onclick="SFA.shareMarket(this.getAttribute(\'data-id\'))">Share the order form</button>') +
         '</td><td class="mkdate">' + esc(h.date || '—') + '</td>' +
         '<td class="r" data-l="' + esc(v.units) + '">' + qty(h.units, 'each') + '</td>' +
@@ -775,7 +777,7 @@
     setActiveMarket: 'Changing the live market', setPreordersOpen: 'Opening or closing pre-orders',
     setHomeOrders: 'Orders between markets', setCollectStep: 'The Collect screen',
     saveLabelLook: 'The label look',
-    'cashup.record': 'A cash-up'
+    reopenMarket: 'Reopening a market', 'cashup.record': 'A cash-up'
   };
 
   SF.screen({
@@ -895,6 +897,10 @@
     makeLive: function () {
       SF.write('setActiveMarket', { marketId: SF.state.marketId });
       SF.toast('This is the live market now.');
+    },
+    reopenMarket: function (id) {
+      SF.write('reopenMarket', { id: id });
+      SF.toast('Market reopened. It is back on the till.');
     },
     setCollect: function (on) {
       SF.write('setCollectStep', { on: on }, function () { SF.state.boot.collect = on; });
