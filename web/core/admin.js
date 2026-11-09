@@ -192,7 +192,8 @@
         '><div class="who"><b>' + esc(x.description) + '</b>' +
         '<span>' + esc(x.category) + '</span></div>' +
         '<span class="amt">' + money(x.amount) + '</span>' +
-        '<button class="quiet" onclick="SFA.dropExpense(\'' + x.id + '\')">remove</button></div>';
+        (String(x.id).indexOf('new-') === 0 ? '<span class="muted small">Saving\u2026</span>'
+          : '<button class="quiet" onclick="SFA.dropExpense(\'' + x.id + '\')">remove</button>') + '</div>';
     }).join('') + '<div class="empty" data-fempty="costs" style="display:none">No cost matches.</div>'
       : '<div class="empty">Nothing yet. Stall fee, petrol, a gazebo — whatever it ' +
       'costs to be there.</div>';
@@ -208,6 +209,19 @@
         '<select id="ec"><option>Stall</option><option>Travel</option><option>Setup</option>' +
         '<option>Packaging</option><option>Marketing</option><option>Other</option></select></div>' +
       '<button class="ghost block" onclick="SFA.addExpense()">Add this cost</button></div>';
+  }
+
+  /** How long this phone's requests have been taking: the round trip, and the server's share of it. */
+  function speedHtml() {
+    var sp = SF.speed(), sec = function (ms) { return ms === null ? '\u2014' : (ms / 1000).toFixed(1) + ' s'; };
+    if (!sp.count) return '<div class="muted small">Nothing timed yet. Use the app and look again.</div>';
+    return '<div class="muted small" style="margin-bottom:8px">Saving a change: about <b>' + sec(sp.avgWrite) +
+      '</b> (the server itself <b>' + sec(sp.avgWriteServer) + '</b>). Everything: about ' + sec(sp.avgAll) +
+      '. The screen updates straight away; this is how long the shop takes to confirm.</div>' +
+      sp.recent.slice(0, 8).map(function (t) {
+        return '<div class="rowitem"><div class="who"><b>' + esc(t.a) + '</b></div><span class="amt num">' +
+          sec(t.ms) + (t.s !== null ? ' <span class="muted small">(' + sec(t.s) + ' server)</span>' : '') + '</span></div>';
+      }).join('');
   }
 
   function best(d) {
@@ -1010,11 +1024,27 @@
       var desc = SF.el('ed').value, amt = SF.el('ea').value;
       if (String(desc).trim().length < 2) { SF.toast('What was the money for?', true); return; }
       if (!(Number(amt) > 0)) { SF.toast('Enter the amount.', true); return; }
-      SF.write('addExpense', { marketId: SF.state.marketId, description: desc,
-                               amount: amt, category: SF.el('ec').value });
+      var cat = SF.el('ec').value, n = Number(amt);
+      SF.write('addExpense', { marketId: SF.state.marketId, description: desc, amount: amt, category: cat }, function () {
+        var d = SF.state.data.numbers;
+        if (!d) return;
+        (d.expenses = d.expenses || []).push({ id: 'new-' + Date.now(), description: String(desc).trim(), amount: n, category: cat });
+        if (d.summary) { d.summary.expenses += n; d.summary.profit -= n; }
+        (d.history || []).forEach(function (h) { if (h.id === d.marketId) { h.expenses += n; h.profit -= n; } });
+      });
       SF.toast('Added');
     },
-    dropExpense: function (id) { SF.write('deleteExpense', { expenseId: id }); },
+    dropExpense: function (id) {
+      SF.write('deleteExpense', { expenseId: id }, function () {
+        var d = SF.state.data.numbers;
+        if (!d || !d.expenses) return;
+        var x = SF.find(d.expenses, id);
+        if (!x) return;
+        d.expenses = d.expenses.filter(function (e) { return e !== x; });
+        if (d.summary) { d.summary.expenses -= x.amount; d.summary.profit += x.amount; }
+        (d.history || []).forEach(function (h) { if (h.id === d.marketId) { h.expenses -= x.amount; h.profit += x.amount; } });
+      });
+    },
     sendReport: function () {
       var box = SF.el('rmsg'), msg = String(box.value || '').trim();
       if (msg.length < 5) { SF.toast('Say what went wrong, in a sentence or two.', true); return; }
@@ -1413,6 +1443,7 @@
               : 'No backup yet. One is made each week by itself, or make one now.') +
               ' Customers\' names and numbers are never copied.</div>' +
             (SF.can('settings') ? '<button class="ghost" id="backupnow" onclick="SFA.backupNow()">Back up now</button>' : '') +
+            '<h3 style="margin:16px 0 8px">Speed</h3>' + speedHtml() +
             '<h3 style="margin:16px 0 8px">Plugins</h3>' +
             h.plugins.map(function (p) {
               return '<div class="rowitem"><div class="who"><b>' + esc(p.name) + '</b>' +
