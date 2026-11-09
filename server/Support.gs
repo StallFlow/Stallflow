@@ -36,7 +36,17 @@ SF.assistantAllowed = function () {
 
 /* ---- the owner's side: make the key, see it is on, switch it off ---- */
 
+/**
+ * Who may set up, see or switch off the connector: the StallFlow platform administrator who
+ * built the stall (SF.PLATFORM.admins), nobody else. The stall's own owner, managers and
+ * cashiers never see it. (Platform admins are owner on every stall; a stall's own owner is
+ * not an admin.) Without Google sign-in nobody is an admin, so it cannot be set up in PIN mode.
+ */
+SF.assistantAdmin = function (ctx) { return !!ctx && SF.isAdmin(ctx.user); };
+SF.assistantRefused = { ok: false, code: 'forbidden', message: 'Only the StallFlow administrator can do this.' };
+
 SF.action('assistantKey', 'people', 'write', function (p, ctx) {
+  if (!SF.assistantAdmin(ctx)) return SF.assistantRefused;
   var key = (Utilities.getUuid() + Utilities.getUuid()).replace(/-/g, '');
   SF.set('assistantKeyHash', SF.hash('assistant:' + key));
   SF.set('assistantSince', SF.today());
@@ -46,12 +56,14 @@ SF.action('assistantKey', 'people', 'write', function (p, ctx) {
 });
 
 SF.action('assistantOff', 'people', 'write', function (p, ctx) {
+  if (!SF.assistantAdmin(ctx)) return SF.assistantRefused;
   SF.set('assistantKeyHash', '');
   SF.audit(ctx, 'assistantOff', 'Claude', 'the connector was switched off', 'ok');
   return { ok: true };
 });
 
-SF.action('assistantStatus', 'people', 'read', function () {
+SF.action('assistantStatus', 'people', 'read', function (p, ctx) {
+  if (!SF.assistantAdmin(ctx)) return SF.assistantRefused;
   return { on: SF.assistantOn(), since: String(SF.get('assistantSince', '')),
            lastUsed: String(SF.get('assistantLastUsed', '')) };
 });

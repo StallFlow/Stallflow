@@ -178,7 +178,10 @@ go through `SF.once` so a retried request never runs twice.
   variable *before* `SF.closeSheet()`. New product takes its category from a
   list of those in use (or a new one) and an opening stock count, which goes in
   as the first `adjust` line of the ledger.
-- **Claude as a connector** (`server/Support.gs`): the owner makes a key in
+- **Claude as a connector** (`server/Support.gs`): only the StallFlow platform
+  administrator (`SF.PLATFORM.admins`, `SF.assistantAdmin`) sees or uses it: the stall's
+  own owner, managers and staff never do, and the server refuses them too (`boot` tells the
+  app via `me.admin`; PIN mode has no admin, so it cannot be set up there). The admin makes a key in
   Settings; Claude calls `<api>?mcp=KEY` (MCP over HTTP) and can only run the
   fixed tools in `SF.ASSISTANT_TOOLS` (read stock, add a product, set a price,
   adjust stock, switch a product on or off, read problems, read the latest stocktake). Never money,

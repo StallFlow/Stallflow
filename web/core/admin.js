@@ -626,7 +626,8 @@
           '<div class="muted small">owner: everything · manager: everything but PINs · ' +
             'cashier: sell and hand over · viewer: numbers only</div></div>') +
 
-        (SF.can('people')
+        // Only the StallFlow administrator (the builder), never the stall's own owner or staff.
+        (SF.can('people') && SF.state.boot && SF.state.boot.me && SF.state.boot.me.admin
           ? '<div class="card"><h2>Claude as your helper</h2>' +
             '<div class="sub">Connect Claude, so when a message comes in on WhatsApp to add stock, ' +
             'remove something or sort out a problem, Claude can do it for you. It can only add or ' +

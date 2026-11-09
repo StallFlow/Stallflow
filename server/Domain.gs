@@ -1199,7 +1199,7 @@ SF.action('boot', 'sell', 'read', function (p, ctx) {
   var pr = SF.profile();
   return {
     version: SF.VERSION,
-    me: { user: ctx.user || '', role: ctx.role },
+    me: { user: ctx.user || '', role: ctx.role, admin: SF.isAdmin(ctx.user) },
     auth: { google: SF.googleOn() },
     profile: pr,
     marketId: SF.activeMarket(),
