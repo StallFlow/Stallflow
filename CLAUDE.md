@@ -146,6 +146,13 @@ go through `SF.once` so a retried request never runs twice.
   customers' names and phone numbers left out. Only the spreadsheets
   permission is used: adding another Google service (Drive, triggers)
   would need the owner to re-authorise before the live app works again.
+- **Speed.** Server: a sheet is read once per request (`SF.rows` caches; `SF.append` / `SF.setCell`
+  drop that sheet's copy; any other write to a sheet must call `SF.touch(key)` or `SF.flush()`;
+  every dispatch and every lock starts clean). Replies carry `ms`. App: a write shows on screen
+  first (give `SF.write` an optimistic function; anything not yet on the server is marked
+  `pending` and gets no buttons that would send its made-up id), queued writes go up as one
+  `batch` request, and afterwards only the open screen is re-read (plus any screen still showing
+  something `pending`), not every screen. Timings are kept on the phone (More › Health › Speed).
 - **Updates must never cost a sale.** A sale lives in the phone's outbox
   (`sf.outbox`) until the server answers `ok`. Only an explicit `ok: true`
   removes it; an unreadable reply (error page, lost connection), a busy server
