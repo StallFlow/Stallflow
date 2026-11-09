@@ -1694,41 +1694,62 @@ SF.action('countLocationsSave', 'stock', 'write', function (p) {
 
 SF.BACKUP_DAYS = 7;
 
+/** A Google Sheets cell holds at most 50,000 characters; the label logo alone can be 60,000. */
+SF.BACKUP_CELL_MAX = 49000;
+SF.backupCell = function (v) {
+  v = SF.safe(v);
+  return typeof v === 'string' && v.length > SF.BACKUP_CELL_MAX
+    ? v.slice(0, SF.BACKUP_CELL_MAX) + ' …(cut for the backup)' : v;
+};
+
 SF.backup = function (ctx) {
   var src = SpreadsheetApp.getActiveSpreadsheet();
   var stamp = Utilities.formatDate(new Date(), SF.TZ, 'yyyy-MM-dd HH:mm');
   var name = (SF.profile().name || src.getName()) + ' — backup ' + stamp;
   var dest = SpreadsheetApp.create(name);
-  var blank = dest.getSheets()[0], copied = 0;
+  var blank = dest.getSheets()[0], copied = 0, failed = [];
   var orderHead = SF.SHEETS.orders;
   var cCol = orderHead.indexOf('Customer'), pCol = orderHead.indexOf('Phone'), chCol = orderHead.indexOf('Channel');
 
   src.getSheets().forEach(function (s) {
-    var tab = dest.insertSheet(s.getName());
-    if (s.getLastRow() < 1 || s.getLastColumn() < 1) return;
-    var values = s.getRange(1, 1, s.getLastRow(), s.getLastColumn()).getValues();
-    if (s.getName() === 'Orders') {
-      for (var r = 1; r < values.length; r++) {
-        if (pCol < values[r].length) values[r][pCol] = '';
-        if (cCol < values[r].length && String(values[r][chCol]) !== 'till') values[r][cCol] = '(not kept)';
+    var tabName = s.getName();
+    // One tab that will not copy must not cost the other tabs: skip it and say so.
+    try {
+      var tab = dest.insertSheet(tabName);
+      if (s.getLastRow() < 1 || s.getLastColumn() < 1) return;
+      var values = s.getRange(1, 1, s.getLastRow(), s.getLastColumn()).getValues();
+      if (tabName === 'Orders') {
+        for (var r = 1; r < values.length; r++) {
+          if (pCol < values[r].length) values[r][pCol] = '';
+          if (cCol < values[r].length && String(values[r][chCol]) !== 'till') values[r][cCol] = '(not kept)';
+        }
       }
-    }
-    tab.getRange(1, 1, values.length, values[0].length)
-       .setValues(values.map(function (row) { return row.map(SF.safe); }));
-    copied++;
+      tab.getRange(1, 1, values.length, values[0].length)
+         .setValues(values.map(function (row) { return row.map(SF.backupCell); }));
+      copied++;
+    } catch (e) { failed.push(tabName); }
   });
-  dest.deleteSheet(blank);
+  try { dest.deleteSheet(blank); } catch (e) { /* an empty first tab is harmless */ }
 
   var when = new Date().toISOString();
   SF.set('lastBackup', JSON.stringify({ at: when, url: dest.getUrl(), name: name }));
-  SF.audit(ctx || { role: 'system' }, 'backup', name, copied + ' tabs', 'ok');
-  return { ok: true, at: when, url: dest.getUrl(), name: name, tabs: copied };
+  SF.audit(ctx || { role: 'system' }, 'backup', name,
+           copied + ' tabs' + (failed.length ? ', skipped ' + failed.join(', ') : ''), failed.length ? 'partial' : 'ok');
+  return { ok: true, at: when, url: dest.getUrl(), name: name, tabs: copied, skipped: failed };
 };
 
 SF.lastBackup = function () { return SF.json(SF.get('lastBackup', ''), null); };
 
 /* Reads, so the copy never holds the lock a sale is waiting for. */
-SF.action('backupNow', 'settings', 'read', function (p, ctx) { return SF.backup(ctx); });
+SF.action('backupNow', 'settings', 'read', function (p, ctx) {
+  // Say what actually went wrong (a short reason), not "try again with signal".
+  try { return SF.backup(ctx); }
+  catch (e) {
+    var why = String(e && e.message || e).replace(/\s+/g, ' ').slice(0, 200);
+    SF.audit(ctx, 'backup', '', why, 'error');
+    return { ok: false, message: 'The backup stopped: ' + why };
+  }
+});
 
 SF.action('autoBackup', 'settings', 'read', function (p, ctx) {
   var last = SF.lastBackup();

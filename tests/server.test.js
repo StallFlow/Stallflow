@@ -1291,6 +1291,26 @@ test('a backup copies every tab, but no customer names or phone numbers', () => 
   assert.strictEqual(SF.dispatch('health', { token: tok }).data.backup.url, r.url);
 });
 
+test('a backup survives a cell over the 50,000-character limit (the label logo) and a tab that will not copy', () => {
+  const { SF, created, ctx } = shop(day(3));
+  const tok = ownerTok(SF);
+  SF.set('labelLogo', 'data:image/png;base64,' + 'A'.repeat(60000));
+  const r = SF.dispatch('backupNow', { token: tok }).data;
+  assert.strictEqual(r.ok, true, JSON.stringify(r));
+  const longest = Math.max.apply(null, [].concat.apply([], created[0].tabs.Settings.rows).map((c) => String(c).length));
+  assert.ok(longest <= 50000, 'no cell over the limit: ' + longest);
+  // one tab that fails to copy is skipped and named, the rest are kept
+  const real = ctx.SpreadsheetApp.create;
+  ctx.SpreadsheetApp.create = (n) => { const ss = real(n); const ins = ss.insertSheet; ss.insertSheet = (t) => { if (t === 'Orders') throw new Error('boom'); return ins(t); }; return ss; };
+  const r2 = SF.dispatch('backupNow', { token: tok }).data;
+  assert.strictEqual(r2.ok, true); assert.strictEqual(JSON.stringify(r2.skipped), '["Orders"]');
+  assert.ok(created[1].tabs.Products, 'the other tabs were kept');
+  // and when it cannot even start, the owner is told the real reason
+  ctx.SpreadsheetApp.create = () => { throw new Error('You do not have permission to call SpreadsheetApp.create'); };
+  const r3 = SF.dispatch('backupNow', { token: tok }).data;
+  assert.strictEqual(r3.ok, false); assert.ok(/permission to call SpreadsheetApp\.create/.test(r3.message), r3.message);
+});
+
 test('the weekly backup runs once a week, and only for an owner or manager', () => {
   const { SF, created } = shop(day(3));
   const tok = ownerTok(SF);

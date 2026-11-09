@@ -1350,12 +1350,15 @@
       var b = SF.el('backupnow');
       if (b) { b.disabled = true; b.textContent = 'Backing up\u2026'; }
       SF.get('backupNow').then(function (res) {
-        if (!res || res.ok === false || !res.data || !res.data.ok) throw new Error('refused');
-        SF.toast('Backed up: ' + res.data.tabs + ' tabs');
+        if (b) { b.disabled = false; b.textContent = 'Back up now'; }
+        var d = res && res.data;
+        // The server answered. If it refused, show its reason; only a lost connection is "signal".
+        if (!d || d.ok === false) { SF.toast((d && d.message) || (res && res.message) || 'The backup was refused.', true); return; }
+        SF.toast('Backed up: ' + d.tabs + ' tabs' + (d.skipped && d.skipped.length ? '. Skipped: ' + d.skipped.join(', ') : ''));
         SFA.loadHealth();
       }).catch(function () {
         if (b) { b.disabled = false; b.textContent = 'Back up now'; }
-        SF.toast('The backup did not go through. Try again with signal.', true);
+        SF.toast('No answer from the server. Check your signal and try again.', true);
       });
     },
     loadHealth: function () {
