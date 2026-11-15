@@ -22,7 +22,7 @@
     render: function (ctx) {
       var d = ctx.data, s = d.summary, v = SF.state.vocab;
       var on = d.preordersOn !== undefined ? d.preordersOn : d.preordersOpen;
-      var opts = d.markets.map(function (m) {
+      var opts = d.markets.filter(function (m) { return !m.archived || m.id === d.marketId; }).map(function (m) {
         return '<option value="' + m.id + '"' + (m.id === d.marketId ? ' selected' : '') +
           (m.pending ? ' disabled' : '') + '>' +
           esc(m.name) + (m.date ? ' · ' + esc(m.date) : '') + (m.pending ? ' · saving…' : '') + '</option>';
@@ -239,33 +239,55 @@
       rows + '</div>';
   }
 
+  /** One line on a market's card saying whether its own order page takes pre-orders. */
+  function preState(d, h, when) {
+    if (h.id === 'HOME' || h.archived) return '';
+    var on = d.preordersOn !== undefined ? d.preordersOn : d.preordersOpen;
+    var txt = h.orders === false ? 'Pre-orders off for this market'
+      : !on ? 'Pre-orders off for every market'
+      : when === 'past' || h.cashed ? '' : 'Pre-orders on';
+    return txt ? '<div class="small mkpre ' + (h.orders !== false && on ? 'on' : 'off') + '">' + txt + '</div>' : '';
+  }
+
+  var showArchived = false;
+
   function history(d, v) {
     var now = new Date();
     var today = now.getFullYear() + '-' + ('0' + (now.getMonth() + 1)).slice(-2) + '-' +
                 ('0' + now.getDate()).slice(-2);
-    var rows = d.history.length ? d.history.map(function (h) {
+    var archived = d.history.filter(function (h) { return h.archived; });
+    var list = d.history.filter(function (h) { return !h.archived; });
+    var link = 'class="quiet" style="padding:4px 0;min-height:36px;text-decoration:underline;margin-right:14px" ';
+    function mrow(h) {
       var when = h.id === 'HOME' ? 'home' : !h.date ? 'undated' : h.date >= today ? 'upcoming' : 'past';
+      var arch = h.archived;
       return '<tr' + (h.id === d.marketId ? ' class="here"' : '') +
-        SF.filters.row('markets', { text: [h.name, h.location, h.date].join(' '), when: when },
+        (arch ? ' data-arch="1"' : SF.filters.row('markets', { text: [h.name, h.location, h.date].join(' '), when: when },
                        { name: String(h.name).toLowerCase(), date: h.date || '0000', profit: h.profit,
-                         taken: h.revenue, units: h.units, costs: h.expenses }) + '>' +
-        '<td><b>' + esc(h.name) + '</b>' +
+                         taken: h.revenue, units: h.units, costs: h.expenses })) + '>' +
+        '<td><b>' + esc(h.name) + '</b>' + (h.live ? ' <span class="tag ok">Live</span>' : '') +
+        (arch ? ' <span class="tag">Archived</span>' : '') +
         (h.location ? '<div class="muted small">' + esc(h.location) + '</div>' : '') +
-        (h.cashed ? '<div class="muted small">Cashed up \u00b7 <button class="quiet" style="padding:4px 0;min-height:36px;text-decoration:underline" ' +
+        preState(d, h, when) +
+        (h.cashed && !arch ? '<div class="muted small">Cashed up \u00b7 <button class="quiet" style="padding:4px 0;min-height:36px;text-decoration:underline" ' +
           'data-id="' + esc(h.id) + '" onclick="SFA.reopenMarket(this.getAttribute(\'data-id\'))">Reopen</button></div>' : '') +
-        (when === 'past' || h.cashed ? '' : '<button class="quiet" style="padding:4px 0;min-height:36px;text-decoration:underline" ' +
+        '<div>' +
+        (when === 'past' || h.cashed || arch || h.orders === false ? '' : '<button ' + link +
           'data-id="' + esc(h.id) + '" onclick="SFA.shareMarket(this.getAttribute(\'data-id\'))">Share the order form</button>') +
-        '</td><td class="mkdate">' + esc(h.date || '—') + '</td>' +
+        (h.id === 'HOME' || h.pending ? '' : '<button ' + link + 'data-id="' + esc(h.id) +
+          '" onclick="SFA.editMarket(this.getAttribute(\'data-id\'))">Edit</button>') +
+        '</div></td><td class="mkdate">' + esc(h.date || '—') + '</td>' +
         '<td class="r" data-l="' + esc(v.units) + '">' + qty(h.units, 'each') + '</td>' +
         '<td class="r" data-l="Taken">' + money(h.revenue) + '</td>' +
         '<td class="r" data-l="Costs">' + money(h.expenses) + '</td>' +
         '<td class="r" data-l="Profit"><b style="color:' + (h.profit >= 0 ? 'var(--ok)' : 'var(--bad)') + '">' +
         money(h.profit) + '</b></td></tr>';
-    }).join('') : '<tr><td colspan="6" class="empty">No markets recorded yet.</td></tr>';
+    }
+    var rows = list.length ? list.map(mrow).join('') : '<tr><td colspan="6" class="empty">No markets recorded yet.</td></tr>';
 
     return '<div class="card"><h2>Every market so far</h2>' +
       '<div class="sub">The record that tells you which ones are worth going back to.</div>' +
-      SF.filters.bar('markets', { search: 'Search markets', count: d.history.length, noun: 'markets',
+      SF.filters.bar('markets', { search: 'Search markets', count: list.length, noun: 'markets',
         facets: [{ key: 'when', label: 'Show', options: [['all', 'All'], ['upcoming', 'Coming up'],
           ['past', 'Been and gone'], ['home', 'Between markets']] }],
         sorts: [['', 'Newest first'], ['date', 'Oldest first'], ['-profit', 'Most profit'],
@@ -277,6 +299,10 @@
       SF.filters.th('markets', 'profit', 'Profit', 'r') + '</tr>' + rows +
       '<tr data-fempty="markets" style="display:none"><td colspan="6" class="empty">No market matches.</td></tr>' +
       '</table></div>' +
+      (archived.length ? '<button class="ghost block" style="margin-top:12px" onclick="SFA.toggleArchived()">' +
+        (showArchived ? 'Hide archived markets' : 'Show archived markets (' + archived.length + ')') + '</button>' +
+        (showArchived ? '<div class="scroll" style="margin-top:10px"><table class="mktable">' +
+          archived.map(mrow).join('') + '</table></div>' : '') : '') +
       '<div class="muted small" style="margin-top:10px">' + qty(d.stock.units, 'each') +
       ' in stock, worth ' + money(d.stock.value) + ' in what it cost to make.</div></div>';
   }
@@ -792,7 +818,9 @@
     setActiveMarket: 'Changing the live market', setPreordersOpen: 'Opening or closing pre-orders',
     setHomeOrders: 'Orders between markets', setCollectStep: 'The Collect screen',
     saveLabelLook: 'The label look',
-    reopenMarket: 'Reopening a market', 'cashup.record': 'A cash-up'
+    reopenMarket: 'Reopening a market', 'cashup.record': 'A cash-up',
+    editMarket: 'Changing a market', setMarketOrders: 'Pre-orders for one market',
+    archiveMarket: 'Archiving a market', deleteMarket: 'Deleting a market'
   };
 
   SF.screen({
@@ -849,6 +877,21 @@
      Behaviour
      ================================================================== */
 
+  function findMarket(id) {
+    var d = SF.state.data.numbers, m = null;
+    ((d && d.history) || []).forEach(function (x) { if (String(x.id) === String(id)) m = x; });
+    return m;
+  }
+  /** Change a market everywhere this phone shows it (the optimistic half of a write). */
+  function eachMarket(id, fn) {
+    ['numbers', 'till'].forEach(function (v) {
+      var d = SF.state.data[v];
+      if (d) ['markets', 'history', 'allMarkets'].forEach(function (k) {
+        (d[k] || []).forEach(function (m) { if (String(m.id) === String(id)) fn(m); });
+      });
+    });
+  }
+
   window.SFA = {
     askRelease: function () {
       SF.openSheet('<h2>Release unpaid reservations?</h2>' +
@@ -860,7 +903,8 @@
     },
     release: function () {
       SF.closeSheet();
-      SF.post({ action: 'releaseUnpaid', opId: SF.uid('op') }).then(function (res) {
+      var d = SF.state.data.numbers;
+      return SF.post({ action: 'releaseUnpaid', opId: SF.uid('op'), marketId: (d && d.marketId) || '' }).then(function (res) {
         if (!res || res.ok === false) { SF.toast((res && res.message) || 'That did not work.', true); return; }
         SF.toast(res.released + ' released');
         SF.load('numbers');
@@ -912,6 +956,115 @@
     makeLive: function () {
       SF.write('setActiveMarket', { marketId: SF.state.marketId });
       SF.toast('This is the live market now.');
+    },
+    toggleArchived: function () { showArchived = !showArchived; SF.render(); },
+    /** The Edit menu of one market: its details, pre-orders for it, archive, delete. */
+    editMarket: function (id) {
+      var h = findMarket(id);
+      if (!h) { SF.toast('That market is not on this phone yet. Try again in a moment.', true); return; }
+      var did = esc(h.id), on = h.orders !== false;
+      SF.openSheet('<h2>Edit ' + esc(h.name) + '</h2>' +
+        '<div class="field"><label for="emn">Name</label><input id="emn" maxlength="60" value="' + esc(h.name) + '"></div>' +
+        '<div class="field"><label for="emd">Date</label><input id="emd" type="date" value="' + esc(h.date || '') + '"></div>' +
+        '<div class="field"><label for="eml">Where</label><input id="eml" maxlength="160" value="' + esc(h.location || '') + '"></div>' +
+        '<button class="block" data-id="' + did + '" onclick="SFA.saveMarket(this.getAttribute(\'data-id\'))">Save</button>' +
+        (h.archived ? '' : '<div class="toggle" style="margin:14px 0 0"><div><div class="t">Pre-orders for this market are ' +
+          (on ? 'on' : 'off') + '</div><div class="s">' + (on ? 'Customers can order on its own page until its day.'
+            : 'Its order page turns people away and offers your other markets.') + '</div></div>' +
+          '<button class="' + (on ? 'bad' : 'ok') + ' sm" data-id="' + did + '" data-on="' + (on ? '' : '1') +
+          '" onclick="SFA.marketOrders(this.getAttribute(\'data-id\'), !!this.getAttribute(\'data-on\'))">' +
+          (on ? 'Switch off' : 'Switch on') + '</button></div>') +
+        '<div class="hr"></div>' +
+        (h.archived
+          ? '<button class="ghost block" data-id="' + did + '" onclick="SFA.archiveMarket(this.getAttribute(\'data-id\'), false)">Bring back from the archive</button>'
+          : '<button class="ghost block" data-id="' + did + '" onclick="SFA.askArchive(this.getAttribute(\'data-id\'))">Archive</button>' +
+            '<div class="muted small" style="margin:4px 0 10px">Hidden from the till and the lists. Its sales and costs stay in the numbers.</div>') +
+        (h.canDelete
+          ? '<button class="bad block" data-id="' + did + '" onclick="SFA.askDelete(this.getAttribute(\'data-id\'))">Delete</button>'
+          : '<div class="muted small">' + (h.unpaid ? 'It has unpaid reservations' : 'It has sales, costs or stock moves') +
+            ', so it cannot be deleted. Archive it instead.</div>') +
+        '<button class="quiet block" style="margin-top:8px" onclick="SF.closeSheet()">Close</button>');
+    },
+    saveMarket: function (id) {
+      var name = String(SF.el('emn').value || '').trim(), date = SF.el('emd').value, where = SF.el('eml').value;
+      if (name.length < 2) { SF.toast('Give the market a name.', true); return; }
+      SF.closeSheet();
+      SF.write('editMarket', { id: id, name: name, date: date, location: where }, function () {
+        eachMarket(id, function (m) { m.name = name; m.date = date; m.location = where; });
+      });
+      SF.toast('Saved');
+    },
+    marketOrders: function (id, open) {
+      SF.closeSheet();
+      SF.write('setMarketOrders', { id: id, open: open }, function () {
+        eachMarket(id, function (m) { m.orders = open; });
+      });
+      SF.toast(open ? 'Pre-orders for this market are on' : 'Pre-orders for this market are off');
+    },
+    askArchive: function (id) {
+      var h = findMarket(id);
+      if (!h) return;
+      if (h.live) { SF.closeSheet(); SF.toast('This is the live market. Make another market live first.', true); return; }
+      if (h.unpaid) { SFA.askReleaseFor(id, 'archive'); return; }
+      SF.openSheet('<h2>Archive ' + esc(h.name) + '?</h2>' +
+        '<div class="sub" style="margin-bottom:14px">It goes off the till, the order pages and the market lists. ' +
+        'Its sales and costs stay in the numbers, under Show archived markets. You can bring it back.</div>' +
+        '<div class="row"><button class="ghost" onclick="SF.closeSheet()">Keep it</button>' +
+        '<button style="flex:2" data-id="' + esc(id) + '" onclick="SFA.archiveMarket(this.getAttribute(\'data-id\'), true)">Archive it</button></div>');
+    },
+    archiveMarket: function (id, on) {
+      SF.closeSheet();
+      SF.write('archiveMarket', { id: id, archived: on }, function () {
+        eachMarket(id, function (m) { m.archived = on; });
+        var t = SF.state.data.till;
+        if (t && on) ['markets', 'allMarkets', 'running'].forEach(function (k) {
+          if (t[k]) t[k] = t[k].filter(function (m) { return String(m.id) !== String(id); });
+        });
+      });
+      SF.toast(on ? 'Archived. It is under Show archived markets.' : 'Back from the archive.');
+    },
+    askDelete: function (id) {
+      var h = findMarket(id);
+      if (!h) return;
+      if (h.live) { SF.closeSheet(); SF.toast('This is the live market. Make another market live first.', true); return; }
+      if (h.unpaid) { SFA.askReleaseFor(id, 'delete'); return; }
+      SF.openSheet('<h2>Delete ' + esc(h.name) + '?</h2>' +
+        '<div class="sub" style="margin-bottom:14px">It has no sales, costs or reservations, so nothing is lost. ' +
+        'This cannot be undone.</div>' +
+        '<div class="row"><button class="ghost" onclick="SF.closeSheet()">Keep it</button>' +
+        '<button class="bad" style="flex:2" data-id="' + esc(id) + '" onclick="SFA.deleteMarket(this.getAttribute(\'data-id\'))">Delete it</button></div>');
+    },
+    deleteMarket: function (id) {
+      SF.closeSheet();
+      SF.write('deleteMarket', { id: id }, function () {
+        ['numbers', 'till'].forEach(function (v) {
+          var d = SF.state.data[v];
+          if (d) ['markets', 'history', 'allMarkets', 'running'].forEach(function (k) {
+            if (d[k]) d[k] = d[k].filter(function (m) { return String(m.id) !== String(id); });
+          });
+        });
+      });
+      SF.toast('Market deleted.');
+    },
+    /** A market with unpaid reservations: release them (stock back on the shelf) before archiving. */
+    askReleaseFor: function (id, then) {
+      var h = findMarket(id);
+      SF.openSheet('<h2>Unpaid reservations first</h2>' +
+        '<div class="sub" style="margin-bottom:14px">' + esc(h.name) + ' has ' + h.unpaid + ' unpaid reservation' +
+        (h.unpaid === 1 ? '' : 's') + ' (' + money(h.unpaidTotal) + '). Releasing cancels ' +
+        (h.unpaid === 1 ? 'it' : 'them') + ' and puts the stock back on the shelf.' +
+        (then === 'delete' ? ' The market can then be archived (it has had orders, so it cannot be deleted).' : '') +
+        '</div><div class="row"><button class="ghost" onclick="SF.closeSheet()">Not now</button>' +
+        '<button class="bad" style="flex:2" data-id="' + esc(id) + '" onclick="SFA.releaseFor(this.getAttribute(\'data-id\'))">Release them</button></div>');
+    },
+    releaseFor: function (id) {
+      SF.closeSheet();
+      // Needs an answer now (it moves stock), so it is not queued: no signal, nothing happens.
+      SF.post({ action: 'releaseUnpaid', opId: SF.uid('op'), marketId: id }).then(function (res) {
+        if (!res || res.ok === false) { SF.toast((res && res.message) || 'That did not work.', true); return; }
+        SF.toast(res.released + ' released. You can archive it now.');
+        SF.load('numbers');
+      }).catch(function () { SF.toast('No signal. Try again when you have some.', true); });
     },
     reopenMarket: function (id) {
       SF.write('reopenMarket', { id: id });

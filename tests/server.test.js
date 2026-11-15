@@ -1286,7 +1286,7 @@ test('schema 10 adds a Paid heading to an Orders tab that had none', () => {
   const done = SF.migrate();
   assert.ok(done.some((d) => /^10:/.test(d)), done.join(' | '));
   assert.strictEqual(sheets.Orders.rows[0][15], 'Paid');
-  assert.strictEqual(SF.SCHEMA, 10);
+  assert.ok(SF.SCHEMA >= 10);
 });
 
 test('a till sale keeps how it was paid; anything unknown, or nothing, is cash', () => {
@@ -1500,6 +1500,117 @@ test('the same sale sent twice (the first reply was lost) is sold once', () => {
   assert.strictEqual(a.ok, true); assert.strictEqual(b.ok, true); assert.strictEqual(b.replayed, true);
   assert.strictEqual(SF.orders().length, 1);
   assert.strictEqual(SF.onHand().P01, 8, 'the stock went down once');
+});
+
+/* ---------- editing, archiving and deleting markets ---------- */
+test('schema 11 adds the Orders and Archived headings to Markets', () => {
+  const { SF, sheets } = shop(day(3));
+  sheets.Markets.rows[0].length = 6;                 // a Markets tab from before
+  SF.set('schemaVersion', 10);
+  const done = SF.migrate();
+  assert.ok(done.some((d) => /^11:/.test(d)), done.join(' | '));
+  assert.strictEqual(JSON.stringify(sheets.Markets.rows[0].slice(6, 8)), JSON.stringify(['Orders', 'Archived']));
+  assert.strictEqual(SF.SCHEMA, 11);
+  assert.strictEqual(SF.markets()[0].orders, true, 'blank means pre-orders on');
+});
+
+test('a market can be renamed, moved and re-dated; bad dates and names are refused', () => {
+  const { SF } = shop(day(3));
+  const tok = ownerTok(SF);
+  const r = SF.dispatch('editMarket', { token: tok, opId: 'e1', id: 'M01', name: 'Irene Village', date: day(5), location: 'Irene' });
+  assert.strictEqual(r.ok, true);
+  const m = SF.markets()[0];
+  assert.strictEqual([m.id, m.name, m.date, m.location].join('|'), ['M01', 'Irene Village', day(5), 'Irene'].join('|'));
+  assert.strictEqual(SF.dispatch('editMarket', { token: tok, opId: 'e2', id: 'M01', name: 'X', date: '' }).ok, false);
+  assert.strictEqual(SF.dispatch('editMarket', { token: tok, opId: 'e3', id: 'M01', name: 'Fine', date: 'next week' }).ok, false);
+  assert.strictEqual(SF.dispatch('editMarket', { token: tok, opId: 'e4', id: 'M99', name: 'Nope' }).ok, false);
+});
+
+test('pre-orders can be switched off for one market while the others keep taking orders', () => {
+  const { SF } = shop(day(3));
+  SF.append('markets', { MarketId: 'M02', Name: 'Other', Date: day(4), Status: 'planned' });
+  const tok = ownerTok(SF);
+  assert.strictEqual(SF.dispatch('setMarketOrders', { token: tok, opId: 'p1', id: 'M01', open: false }).ok, true);
+  assert.strictEqual(order(SF).ok, false, 'the live market turns orders away');
+  assert.strictEqual(order(SF, { market: 'M02' }).ok, true, 'the other market still takes them');
+  const cat = SF.dispatch('catalogue', {}).data;
+  assert.strictEqual(cat.open, false);
+  assert.ok(cat.markets.some((m) => m.id === 'M02') && !cat.markets.some((m) => m.id === 'M01'));
+  const hist = SF.dispatch('dashboard', { token: tok }).data.history.find((h) => h.id === 'M01');
+  assert.strictEqual(hist.orders, false, 'the card can say so');
+  SF.dispatch('setMarketOrders', { token: tok, opId: 'p2', id: 'M01', open: true });
+  assert.strictEqual(order(SF).ok, true);
+});
+
+test('an archived market keeps its numbers but leaves the till, the order pages and the lists', () => {
+  const { SF } = shop(day(3));
+  SF.append('markets', { MarketId: 'M02', Name: 'Old one', Date: day(3), Status: 'planned' });
+  const tok = ownerTok(SF);
+  SF.dispatch('sell', { token: tok, opId: 's1', marketId: 'M02', lines: [{ id: 'P01', qty: 1 }] });
+  assert.strictEqual(SF.dispatch('archiveMarket', { token: tok, opId: 'a1', id: 'M02' }).ok, true);
+  const till = SF.dispatch('till', { token: tok }).data;
+  assert.ok(!till.markets.some((m) => m.id === 'M02'), 'not on the till selector');
+  assert.ok(!till.allMarkets.some((m) => m.id === 'M02'));
+  assert.ok(!SF.dispatch('catalogue', {}).data.markets.some((m) => m.id === 'M02'), 'no order page');
+  assert.strictEqual(order(SF, { market: 'M02' }).ok, false);
+  const h = SF.dispatch('dashboard', { token: tok }).data.history.find((x) => x.id === 'M02');
+  assert.strictEqual(h.archived, true);
+  assert.strictEqual(h.revenue, 70, 'its sales stay in the numbers');
+  assert.strictEqual(h.canDelete, false, 'it has a sale, so it can only be archived');
+  assert.strictEqual(SF.dispatch('archiveMarket', { token: tok, opId: 'a2', id: 'M02', archived: false }).ok, true);
+  assert.ok(SF.dispatch('till', { token: tok }).data.markets.some((m) => m.id === 'M02'), 'and it can come back');
+});
+
+test('the live market, or one with unpaid reservations, is not archived or deleted', () => {
+  const { SF } = shop(day(3));
+  SF.append('markets', { MarketId: 'M02', Name: 'Next', Date: day(4), Status: 'planned' });
+  const tok = ownerTok(SF);
+  assert.strictEqual(SF.dispatch('archiveMarket', { token: tok, opId: 'l1', id: 'M01' }).code, 'live');
+  assert.strictEqual(SF.dispatch('deleteMarket', { token: tok, opId: 'l2', id: 'M01' }).code, 'live');
+  order(SF, { market: 'M02' });
+  assert.strictEqual(SF.dispatch('archiveMarket', { token: tok, opId: 'u1', id: 'M02' }).code, 'unpaid');
+  assert.strictEqual(SF.dispatch('deleteMarket', { token: tok, opId: 'u2', id: 'M02' }).code, 'unpaid');
+  const h = SF.dispatch('dashboard', { token: tok }).data.history.find((x) => x.id === 'M02');
+  assert.strictEqual(h.unpaid, 1); assert.strictEqual(h.unpaidTotal, 70);
+  // Release that market's reservations (not the live one's): then it can be archived.
+  assert.strictEqual(SF.dispatch('releaseUnpaid', { token: tok, opId: 'rel', marketId: 'M02' }).released, 1);
+  assert.strictEqual(SF.onHand().P01, 10, 'the stock is back');
+  assert.strictEqual(SF.dispatch('archiveMarket', { token: tok, opId: 'u3', id: 'M02' }).ok, true);
+});
+
+test('a market with nothing against it is deleted, and its id is never given out again', () => {
+  const { SF } = shop(day(3));
+  SF.append('markets', { MarketId: 'M02', Name: 'Caroline test', Date: '2027-11-01', Status: 'planned' });
+  const tok = ownerTok(SF);
+  const r = SF.dispatch('deleteMarket', { token: tok, opId: 'd1', id: 'M02' });
+  assert.strictEqual(r.ok, true);
+  assert.ok(!SF.markets().some((m) => m.id === 'M02'), 'gone from every list');
+  assert.ok(!SF.dispatch('dashboard', { token: tok }).data.history.some((h) => h.id === 'M02'));
+  assert.strictEqual(SF.dispatch('deleteMarket', { token: tok, opId: 'd2', id: 'M02' }).ok, true, 'deleting it again is fine');
+  const added = SF.dispatch('addMarket', { token: tok, opId: 'n1', name: 'Brand new' });
+  assert.ok(added.ok); assert.notStrictEqual(added.id, 'M02', 'the deleted id is not reused');
+  assert.strictEqual(SF.dispatch('editMarket', { token: tok, opId: 'd3', id: 'M02', name: 'Back?' }).ok, false);
+});
+
+test('a market with a sale, a cost or a stock move cannot be deleted', () => {
+  const { SF } = shop(day(3));
+  ['M02', 'M03', 'M04'].forEach((id) => SF.append('markets', { MarketId: id, Name: id, Date: day(4), Status: 'planned' }));
+  const tok = ownerTok(SF);
+  SF.dispatch('sell', { token: tok, opId: 's', marketId: 'M02', lines: [{ id: 'P01', qty: 1 }] });
+  SF.dispatch('addExpense', { token: tok, opId: 'x', marketId: 'M03', description: 'Stall fee', amount: 100 });
+  SF.move('P01', 1, 'adjust', 'test', 'M04');
+  ['M02', 'M03', 'M04'].forEach((id) =>
+    assert.strictEqual(SF.dispatch('deleteMarket', { token: tok, opId: 'del' + id, id }).code, 'used', id));
+  assert.strictEqual(SF.markets().filter((m) => /^M0[234]$/.test(m.id)).length, 3);
+});
+
+test('only owners and managers change markets', () => {
+  const { SF } = shop(day(3));
+  SF.setPin('cashier', '1111');
+  const c = SF.dispatch('signIn', { pin: '1111', device: 'd' }).data.token;
+  [['editMarket', { id: 'M01', name: 'Hack' }], ['archiveMarket', { id: 'M01' }], ['deleteMarket', { id: 'M01' }],
+   ['setMarketOrders', { id: 'M01', open: false }]].forEach(([a, p]) =>
+    assert.strictEqual(SF.dispatch(a, Object.assign({ token: c, opId: a }, p)).ok, false, a));
 });
 
 console.log(failures ? '\n' + failures + ' failed' : '\nall passed');
