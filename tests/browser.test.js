@@ -220,13 +220,14 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
         ? Object.fromEntries(new URL(req.url()).searchParams)
         : JSON.parse(req.postData() || '{}');
       if (env.offline) return route.abort('internetdisconnected');
+      (env.actions = env.actions || []).push(String(body.action));
       if (opts.delay) await new Promise((r) => setTimeout(r, opts.delay));
       // What a server in the middle of an update can do to a write (anything with an opId).
       const json = (o) => route.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify(o) });
-      if (body.opId && env.mode === 'busy') return json({ ok: false, retry: true, message: 'Busy for a moment — please try again.' });
-      if (body.opId && env.mode === 'unknown') return json({ ok: false, message: 'Unknown action: ' + body.action });
-      if (body.opId && env.mode === 'html') return route.fulfill({ status: 200, contentType: 'text/html', headers: { 'access-control-allow-origin': '*' }, body: '<html><body>Sorry, unable to open the file at this time.</body></html>' });
-      if (body.opId && env.mode === 'lostreply') { SF.dispatch(body.action, body); return route.abort('connectionreset'); }
+      if ((body.opId || body.action === 'batch') && env.mode === 'busy') return json({ ok: false, retry: true, message: 'Busy for a moment — please try again.' });
+      if ((body.opId || body.action === 'batch') && env.mode === 'unknown') return json({ ok: false, message: 'Unknown action: ' + body.action });
+      if ((body.opId || body.action === 'batch') && env.mode === 'html') return route.fulfill({ status: 200, contentType: 'text/html', headers: { 'access-control-allow-origin': '*' }, body: '<html><body>Sorry, unable to open the file at this time.</body></html>' });
+      if ((body.opId || body.action === 'batch') && env.mode === 'lostreply') { SF.dispatch(body.action, body); return route.abort('connectionreset'); }
       const out = SF.dispatch(body.action, body);
       await route.fulfill({ status: 200, contentType: 'application/json',
         headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify(out) });
@@ -1095,6 +1096,60 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
     assert.ok(!/Blairegowrie/.test(names), 'cashed-up market is off the picker: ' + names);
     assert.ok(/Monument/.test(names), 'the other market stays: ' + names);
     assert.strictEqual(await page.evaluate(() => SF.ls.get('sf.sellAt', '')), '', 'this phone is no longer pointed at it');
+    await env.ctx.close();
+  });
+
+  await test('Speed: a new product and a new cost are on screen at once, even when the server takes 1.5 seconds', async () => {
+    const env = await phone({ hash: '#stock', seed: shop10, delay: 1500 });
+    const page = env.page;
+    await page.waitForFunction(() => SF.state.data.stock);
+    await page.evaluate(() => SFS.newProduct());
+    await page.waitForSelector('#pn');
+    await page.fill('#pn', 'Speedy Chutney'); await page.fill('#pp', '60');
+    if (await page.locator('select#pc').count()) await page.selectOption('select#pc', { index: 0 });
+    const t0 = Date.now();
+    await page.click('.sheet button:has-text("Add it")');
+    await page.waitForFunction(() => SF.state.data.stock.products.some((p) => p.name === 'Speedy Chutney'));
+    assert.ok(Date.now() - t0 < 500, 'on the shelf within half a second: ' + (Date.now() - t0) + ' ms');
+    assert.strictEqual(await page.evaluate(() => SF.state.data.stock.products.filter((p) => p.name === 'Speedy Chutney')[0].pending), true, 'marked Saving until the server has it');
+    await page.waitForFunction(() => !SF.outbox.pending().length, null, { timeout: 15000 });
+    await page.waitForFunction(() => !SF.state.data.stock.products.some((p) => p.pending), null, { timeout: 15000 });
+    assert.strictEqual(await page.evaluate(() => SF.state.data.stock.products.filter((p) => p.name === 'Speedy Chutney').length), 1, 'replaced by the real one, not doubled');
+    assert.ok(env.sheets.Products.rows.some((r) => r[1] === 'Speedy Chutney'), 'and it did reach the sheet');
+    // a cost, from Numbers
+    await page.evaluate(() => { SF.ls.set('sf.tab.numbers', 'costs'); SF.go('numbers'); });
+    await page.waitForSelector('#ed');
+    await page.fill('#ed', 'Petrol'); await page.fill('#ea', '120');
+    const t1 = Date.now();
+    await page.evaluate(() => SFA.addExpense());
+    await page.waitForSelector('.rowitem:has-text("Petrol")');
+    assert.ok(Date.now() - t1 < 500, 'the cost is listed within half a second: ' + (Date.now() - t1) + ' ms');
+    await page.waitForFunction(() => !SF.outbox.pending().length, null, { timeout: 15000 });
+    assert.ok(env.sheets.Expenses.rows.some((r) => r[2] === 'Petrol'), 'and it reached the sheet');
+    await env.ctx.close();
+  });
+
+  await test('Speed: changes saved up while offline go up as one request, and removing what is already gone is quiet', async () => {
+    const env = await phone({ hash: '#stock', seed: shop10 });
+    const page = env.page;
+    await page.waitForFunction(() => SF.state.data.stock);
+    env.offline = true;
+    await page.evaluate(() => {
+      SF.write('adjustStock', { productId: 'P01', qty: 1, reason: 'a' });
+      SF.write('adjustStock', { productId: 'P01', qty: 1, reason: 'b' });
+      SF.write('adjustStock', { productId: 'P02', qty: 2, reason: 'c' });
+      SF.write('deleteExpense', { expenseId: 'E-does-not-exist' });
+    });
+    assert.strictEqual(await page.evaluate(() => SF.outbox.pending().length), 4);
+    env.offline = false; env.actions = [];
+    await page.evaluate(() => SF.sync());
+    await page.waitForFunction(() => !SF.outbox.pending().length, null, { timeout: 15000 });
+    assert.strictEqual(env.actions.filter((a) => a === 'batch').length, 1, 'one batch request: ' + env.actions.join());
+    assert.strictEqual(env.actions.filter((a) => a === 'adjustStock').length, 0, 'not one request each');
+    assert.strictEqual(await page.evaluate(() => SF.outbox.failed().length), 0, 'a delete of something already gone is not a failure');
+    const hand = env.SF.onHand();
+    assert.strictEqual(hand.P01, 12); assert.strictEqual(hand.P02, 12);
+    assert.ok((await page.evaluate(() => SF.speed().count)) > 0, 'requests are being timed');
     await env.ctx.close();
   });
 
@@ -2288,7 +2343,9 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
       assert.strictEqual(await page.evaluate(() => SF.outbox.failed().length), 0, mode + ': nothing was given up on');
     }
     // the lost-reply sale really did reach the server once already, and the retry must not add a second
-    assert.strictEqual(env.SF.orders().length, 1, 'only the lost-reply sale had reached the sheet');
+    // The reply that was lost came back for a request carrying all four waiting sales in one go, so the
+    // server has taken them (once each); what the phone must do next is not send any of them twice.
+    assert.ok(env.SF.orders().length >= 1, 'the lost-reply request reached the sheet');
     assert.strictEqual(await page.evaluate(() => SF.outbox.pending().length), 4, 'all four are still waiting on the phone');
     // the phone is closed and opened again, the server still in the middle of its update
     env.mode = 'html';

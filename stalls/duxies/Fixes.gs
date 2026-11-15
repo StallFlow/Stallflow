@@ -105,6 +105,7 @@ function sfDataFixes() {
         });
         if (used) return;
         SF.sheet('markets').deleteRow(m._row);
+        SF.touch('markets');
         removed = true;
       });
       return removed;

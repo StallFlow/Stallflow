@@ -185,17 +185,42 @@ window.SF = (function () {
     return post(body);
   }
 
+  /**
+   * Every request is timed: how long the whole round trip took and how much of that was the
+   * server itself (the reply carries `ms`). The last 60 are kept on the phone so the speed
+   * can be checked at the stall (More > Health) instead of guessed at.
+   */
+  var timings = LS.get('sf.timings', []);
+  function note(action, ms, serverMs) {
+    timings.push({ a: action, ms: ms, s: serverMs === undefined ? null : serverMs, at: Date.now() });
+    if (timings.length > 60) timings.shift();
+    LS.set('sf.timings', timings);
+  }
+  function speed() {
+    var writes = timings.filter(function (t) { return t.a !== 'till' && t.a !== 'stock' && t.a !== 'dashboard' && t.a !== 'queue' && t.a !== 'labels' && t.a !== 'boot' && t.a !== 'health'; });
+    var avg = function (list, k) {
+      var v = list.map(function (t) { return t[k]; }).filter(function (n) { return typeof n === 'number'; });
+      return v.length ? Math.round(v.reduce(function (a, b) { return a + b; }, 0) / v.length) : null;
+    };
+    return { recent: timings.slice(-12).reverse(), avgWrite: avg(writes, 'ms'), avgWriteServer: avg(writes, 's'),
+             avgAll: avg(timings, 'ms'), avgAllServer: avg(timings, 's'), count: timings.length };
+  }
+
   function post(body) {
     // text/plain keeps this a "simple" cross-origin request. application/json
     // triggers a CORS preflight, which Apps Script cannot answer.
     var payload = {};
     Object.keys(body).forEach(function (k) { payload[k] = body[k]; });
     if (S.token) payload.token = S.token;
+    var t0 = Date.now();
     return fetch(CFG.api, {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
       body: JSON.stringify(payload)
-    }).then(function (r) { return r.json(); });
+    }).then(function (r) { return r.json(); }).then(function (res) {
+      note(String(body.action), Date.now() - t0, res && typeof res.ms === 'number' ? res.ms : undefined);
+      return res;
+    });
   }
 
   /* ==================================================================
@@ -354,6 +379,7 @@ window.SF = (function () {
    */
   function warm() {
     if (Outbox.pending().length) return Promise.resolve();
+    S.warmAt = Date.now();
     return Promise.all(Object.keys(SOURCE)
       .filter(function (v) { return can(screens[v] ? screens[v].cap : 'sell'); })
       .map(function (v) { return fetchInto(v).catch(function () {}); })
@@ -383,6 +409,78 @@ window.SF = (function () {
   }
 
   var syncAgain = false;
+  var BATCH = 15;
+
+  function opBody(op) {
+    var body = { action: op.action, opId: op.opId };
+    Object.keys(op.payload).forEach(function (k) { body[k] = op.payload[k]; });
+    return body;
+  }
+
+  /**
+   * What to do with the server's answer to one queued change. Only an explicit answer counts:
+   * anything unreadable (an empty body, a captive-portal login page, a truncated reply) is "did
+   * not arrive", so the change stays queued and is retried. Removing it on a guess would lose a
+   * sale silently, which is the one outcome this whole design exists to prevent.
+   */
+  function settle(op, res) {
+    if (res && res.code === 'auth') throw new Error('auth');
+    if (!res || typeof res.ok === 'undefined') throw new Error('unreadable');
+    if (res.ok === false && res.retry) {
+      // The server was busy and did nothing: the same request will do next time.
+      throw new Error('busy');
+    }
+    if (res.ok === false && /^Unknown action/.test(String(res.message || ''))) {
+      // The app has updated before the server did (or the other way round). Nothing
+      // ran, so keep the change and send it again later, once the server knows it.
+      var l = Outbox.all();
+      l.forEach(function (o) {
+        if (o.opId !== op.opId) return;
+        o.tries = (o.tries || 0) + 1;
+        if (o.tries > 40) { o.failed = true; o.message = res.message; }
+      });
+      Outbox.save(l);
+    } else if (res.ok === false && /^Not found/i.test(String(res.message || '')) && /^(delete|drop|remove)/i.test(op.action)) {
+      // Deleting something that is already gone is the outcome that was asked for.
+      Outbox.remove(op.opId);
+      fire('write.done', { action: op.action, result: res });
+    } else if (res.ok === false) {
+      // The server refused on its own terms, not a signal problem.
+      // Keep it and show why, rather than dropping it quietly.
+      Outbox.fail(op.opId, res.message || 'The server would not accept this.');
+    } else {
+      Outbox.remove(op.opId);
+      fire('write.done', { action: op.action, result: res });
+    }
+  }
+
+  function sendOne(op) {
+    return post(opBody(op)).then(function (res) { settle(op, res); });
+  }
+
+  /**
+   * Several waiting changes in one request: a phone that has been offline (or a slow server)
+   * pays for one round trip, not one each. Each change is still checked and de-duplicated by
+   * the server on its own opId. A server that has not updated yet does not know `batch`; the
+   * changes then go one at a time as before.
+   */
+  function sendBatch(ops) {
+    return post({ action: 'batch', ops: ops.map(opBody) }).then(function (res) {
+      if (res && res.code === 'auth') throw new Error('auth');
+      if (!res || typeof res.ok === 'undefined') throw new Error('unreadable');
+      if (res.ok === false && /^Unknown action/.test(String(res.message || ''))) {
+        S.noBatch = true;
+        return ops.reduce(function (c, op) { return c.then(function () { return sendOne(op); }); }, Promise.resolve());
+      }
+      var answers = {};
+      ((res.data && res.data.results) || []).forEach(function (r) { answers[r.opId] = r.res; });
+      for (var i = 0; i < ops.length; i++) {
+        // An unanswered change was not run (the server stopped at a busy one): keep it and go again.
+        if (!(ops[i].opId in answers)) throw new Error('busy');
+        settle(ops[i], answers[ops[i].opId]);
+      }
+    });
+  }
 
   function sync() {
     // A write that lands mid-flush must not be forgotten: remember that
@@ -394,47 +492,24 @@ window.SF = (function () {
     S.syncing = true;
     render(true);
 
-    return queue.reduce(function (chain, op) {
+    var chunks = [];
+    for (var i = 0; i < queue.length; i += BATCH) chunks.push(queue.slice(i, i + BATCH));
+
+    return chunks.reduce(function (chain, chunk) {
       return chain.then(function () {
-        var body = { action: op.action, opId: op.opId };
-        Object.keys(op.payload).forEach(function (k) { body[k] = op.payload[k]; });
-        return post(body).then(function (res) {
-          if (res && res.code === 'auth') throw new Error('auth');
-          // Only an explicit answer counts. Anything we cannot read — an empty
-          // body, a captive-portal login page, a truncated reply — is treated
-          // as "did not arrive" so the change stays queued and is retried.
-          // Removing it here would lose a sale silently, which is the one
-          // outcome this whole design exists to prevent.
-          if (!res || typeof res.ok === 'undefined') throw new Error('unreadable');
-          if (res.ok === false && res.retry) {
-            // The server was busy and did nothing: the same request will do next time.
-            throw new Error('busy');
-          }
-          if (res.ok === false && /^Unknown action/.test(String(res.message || ''))) {
-            // The app has updated before the server did (or the other way round). Nothing
-            // ran, so keep the change and send it again later, once the server knows it.
-            var l = Outbox.all();
-            l.forEach(function (o) {
-              if (o.opId !== op.opId) return;
-              o.tries = (o.tries || 0) + 1;
-              if (o.tries > 40) { o.failed = true; o.message = res.message; }
-            });
-            Outbox.save(l);
-          } else if (res.ok === false) {
-            // The server refused on its own terms — not a signal problem.
-            // Keep it and show why, rather than dropping it quietly.
-            Outbox.fail(op.opId, res.message || 'The server would not accept this.');
-          } else {
-            Outbox.remove(op.opId);
-            fire('write.done', { action: op.action, result: res });
-          }
-        });
+        if (chunk.length === 1 || S.noBatch) {
+          return chunk.reduce(function (c, op) { return c.then(function () { return sendOne(op); }); }, Promise.resolve());
+        }
+        return sendBatch(chunk);
       });
     }, Promise.resolve())
       .then(function () {
         S.syncing = false; S.online = true;
+        S.savedAt = Date.now();
+        render(true);
+        setTimeout(function () { if (!S.syncing) render(true); }, 2600);   // let the "Saved" tick fade
+        refreshSoon();                  // checks again when it fires: skipped if more is still going up
         if (syncAgain) { syncAgain = false; return sync(); }
-        return load(S.view).then(warm);
       })
       .catch(function (err) {
         S.syncing = false;
@@ -449,6 +524,28 @@ window.SF = (function () {
         S.online = false;               // out of signal: the rest stays queued, in order
         render(true);
       });
+  }
+
+  /**
+   * After a save the screen already shows the change (see write). Fetch the server's version of
+   * the screen that is open once things go quiet, not after every single write, and do not pull
+   * down every other screen: those refresh when they are opened, or every few minutes.
+   */
+  var refreshTimer = null;
+  function refreshSoon() {
+    clearTimeout(refreshTimer);
+    refreshTimer = setTimeout(function () {
+      if (S.syncing || Outbox.pending().length) return;
+      load(S.view);
+      // A screen that is not open but still shows something marked "saving" (a new market on the
+      // till, say) gets the server's version too, so nothing stays grey. Nothing else is re-read.
+      Object.keys(SOURCE).forEach(function (v) {
+        if (v !== S.view && S.data[v] && JSON.stringify(S.data[v]).indexOf('"pending":true') !== -1) {
+          fetchInto(v).then(function () { render(true); }).catch(function () {});
+        }
+      });
+      if (Date.now() - (S.warmAt || 0) > 5 * 60e3) warm();
+    }, 900);
   }
 
   /* ==================================================================
@@ -571,10 +668,12 @@ window.SF = (function () {
     // "Sending" only while there is something to send it over. An attempt that
     // is failing must not read as progress.
     var chip = (S.syncing && S.online)
-      ? { cls: 'chip sync', text: 'Sending' + (queued ? ' ' + queued : '') + '…' }
+      ? { cls: 'chip sync', text: 'Saving' + (queued > 1 ? ' ' + queued : '') + '…' }
       : !S.online
         ? { cls: 'chip off', text: queued ? queued + ' waiting' : 'No signal' }
-        : { cls: 'chip', text: queued ? queued + ' waiting' : 'Online' };
+        : queued ? { cls: 'chip', text: queued + ' waiting' }
+        : (S.savedAt && Date.now() - S.savedAt < 2500) ? { cls: 'chip', text: 'Saved \u2713' }
+        : { cls: 'chip', text: 'Online' };
 
     // The market this phone is selling at (what the Till is using), not the one
     // last looked at on Numbers: the cashier must see where her sales go.
@@ -1226,7 +1325,7 @@ window.SF = (function () {
 
   return {
     // lifecycle
-    init: init, start: start, render: render, load: load, go: go, route: route,
+    init: init, start: start, speed: speed, render: render, load: load, go: go, route: route,
     signOut: signOut, forceSignOut: forceSignOut, toggleTheme: toggleTheme,
     // data
     state: S, write: write, sync: sync, get: get, post: post, retryGoogle: retryGoogle,

@@ -1142,6 +1142,7 @@ SF.action('deleteExpense', 'expenses', 'write', function (p) {
   for (var i = 0; i < all.length; i++) {
     if (String(all[i].ExpenseId) === String(p.expenseId)) {
       SF.sheet('expenses').deleteRow(all[i]._row);
+      SF.touch('expenses');
       return { ok: true };
     }
   }
@@ -1272,6 +1273,7 @@ SF.action('resetTrading', 'settings', 'write', function (p, ctx) {
     cleared[key] = Math.max(0, last - 1);
     if (last > 1) sheet.deleteRows(2, last - 1);
   });
+  SF.flush();
 
   SF.audit(ctx, 'resetTrading', SF.profile().name, JSON.stringify(cleared), 'ok');
   return { ok: true, cleared: cleared };

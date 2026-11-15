@@ -1527,7 +1527,14 @@
       box._t = setTimeout(function () { SFS.setPrice(id, box.value); }, 600);
     },
 
-    toggle: function (id, on) { SF.write('setActive', { productId: id, active: on }); },
+    toggle: function (id, on) {
+      SF.write('setActive', { productId: id, active: on }, function () {
+        ['till', 'stock'].forEach(function (view) {
+          var d = SF.state.data[view], pp = d && SF.find(d.products, id);
+          if (pp) pp.active = on;
+        });
+      });
+    },
 
     /** Add every missing jam size. It can take a little while, so say so, then show the result. */
     addSizes: function () {
@@ -1656,7 +1663,15 @@
         price: SF.el('pp').value, capacity: SF.el('pcap').value || 0
       };
       SF.closeSheet();
-      SF.write('saveProduct', item);
+      // On the shelf at once, marked Saving; the server's own copy (with its real id) replaces it.
+      SF.write('saveProduct', item, function () {
+        var d = SF.state.data.stock;
+        if (!d || !d.products) return;
+        var price = Number(item.price) || 0;
+        d.products.push({ id: 'new-' + Date.now(), name: item.name, variant: item.variant || '', category: item.category || '',
+          type: item.type, unit: item.unit, weighed: false, price: price, capacity: Number(item.capacity) || 0, options: [],
+          active: true, sort: 9999, available: null, onHand: made ? 0 : item.qty, cost: 0, margin: price, marginPct: 100, pending: true });
+      });
       SF.toast('Added');
     }
   };
@@ -1678,7 +1693,8 @@
       var show = [p.active ? 'onsale' : 'hidden'];
       if (p.type !== 'made') show.push(p.onHand <= 0 ? 'out' : p.onHand <= 4 ? 'low' : 'instock');
       var left = p.type === 'made' ? (p.available === null ? 1e9 : p.available) : p.onHand;
-      var state = !p.active ? '<span class="tag">Hidden</span>'
+      var state = p.pending ? '<span class="tag">Saving\u2026</span>'
+        : !p.active ? '<span class="tag">Hidden</span>'
         : p.type === 'made'
           ? '<span class="tag ok">' + (p.available === null ? 'to order'
               : p.available + ' left today') + '</span>'
@@ -1703,7 +1719,7 @@
           '<div class="pinput">' +
             '<button type="button" class="step" data-id="' + id + '" data-d="-5" aria-label="R5 less for ' + esc(p.name) +
               '" onclick="SFS.nudge(this)">&minus;5</button>' +
-            '<input id="pp-' + id + '" type="number" min="0" step="0.5" inputmode="decimal" class="pricebox num" ' +
+            '<input id="pp-' + id + '" type="number" min="0" step="0.5" inputmode="decimal" class="pricebox num"' + (p.pending ? ' disabled' : '') + ' ' +
               'data-id="' + id + '" value="' + p.price.toFixed(2) + '" aria-label="Selling price of ' + esc(p.name) + '" ' +
               'onchange="SFS.setPrice(this.getAttribute(\'data-id\'),this.value)" onfocus="this.select()">' +
             '<button type="button" class="step" data-id="' + id + '" data-d="5" aria-label="R5 more for ' + esc(p.name) +
@@ -1711,12 +1727,12 @@
           '</div><div class="saved' + (js && Date.now() - js.at < 2600 ? ' on' : '') + '" id="ps-' + id +
           '" aria-live="polite">' + (js && Date.now() - js.at < 2600 ? esc(js.text) : '') + '</div></div>' +
         '<div class="pmeta">' + kept + '</div>' +
-        '<div class="pacts"><button class="quiet" data-id="' + id + '" data-on="' + (p.active ? 'false' : 'true') +
+        (p.pending ? '' : '<div class="pacts"><button class="quiet" data-id="' + id + '" data-on="' + (p.active ? 'false' : 'true') +
           '" onclick="SFS.toggle(this.getAttribute(\'data-id\'),this.getAttribute(\'data-on\')===\'true\')">' +
           (p.active ? 'hide' : 'show') + '</button>' +
           (p.type !== 'made'
             ? '<button class="quiet" data-id="' + id + '" onclick="SFS.adjust(this.getAttribute(\'data-id\'))">adjust stock</button>' : '') +
-        '</div></div>';
+        '</div>') + '</div>';
     }).join('');
 
     return '<div class="card"><div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">' +

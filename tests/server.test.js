@@ -1092,6 +1092,41 @@ test('an earlier stocktake can be read back: counts, what the app had, and what 
   assert.strictEqual(c.status, 'cancelled'); assert.strictEqual(c.lines.find((x) => x.id === 'P01').applied, 0);
 });
 
+test('batch: several changes in one request, each checked and de-duplicated on its own', () => {
+  const { SF, tok } = counting();
+  const ops = [
+    { action: 'adjustStock', opId: 'bx1', productId: 'P01', qty: 3, reason: 'a' },
+    { action: 'adjustStock', opId: 'bx2', productId: 'P01', qty: 4, reason: 'b' },
+    { action: 'nope', opId: 'bx3' }
+  ];
+  const r = SF.dispatch('batch', { token: tok, ops }).data;
+  assert.strictEqual(r.results.length, 3);
+  assert.strictEqual(r.results[0].res.ok, true); assert.strictEqual(r.results[1].res.ok, true);
+  assert.ok(/Unknown action/.test(r.results[2].res.message), 'an unknown change is answered, not swallowed');
+  const before = SF.onHand().P01;
+  SF.dispatch('batch', { token: tok, ops: ops.slice(0, 2) });        // the same two sent again (reply was lost)
+  assert.strictEqual(SF.onHand().P01, before, 'sent twice, ran once');
+  const bad = SF.dispatch('batch', { token: 'junk', ops: [ops[0]] }).data;
+  assert.strictEqual(bad.results[0].res.code, 'auth', 'a wrong token still stops each change');
+  assert.strictEqual(bad.results.length, 1);
+  const own = SF.dispatch('batch', { token: tok, ops: [{ action: 'batch', opId: 'z', ops: [] }] }).data;
+  assert.strictEqual(own.results[0].res.ok, false, 'no batches inside batches');
+});
+
+test('a request reads each sheet once, however many times the code asks for it', () => {
+  const { SF, tok } = markets3();
+  SF.append('markets', { MarketId: 'M09', Name: 'Third Market', Date: day(0), Status: 'planned' });
+  SF.dispatch('till', { token: tok });                                // warm: creates and caches the sheet objects
+  const sheet = SF.sheet('orders'); let reads = 0;
+  const gr = sheet.getRange.bind(sheet);
+  sheet.getRange = (...a) => { const r = gr(...a); const gv = r.getValues; if (gv) r.getValues = () => { reads++; return gv.call(r); }; return r; };
+  SF.dispatch('till', { token: tok });
+  assert.ok(reads <= 1, 'orders sheet read ' + reads + ' times in one till request');
+  // and a write is never hidden from the next read
+  SF.dispatch('sell', { token: tok, opId: 'cache1', lines: [{ id: 'P01', qty: 1 }], paid: 'cash' });
+  assert.strictEqual(SF.orders().length >= 1, true);
+});
+
 test('stocktake: managers edit the locations; the list stays tidy', () => {
   const { SF, cashier, manager } = counting();
   assert.strictEqual(act(SF, 'countLocationsSave', cashier, { locations: ['X'] }).ok, false);

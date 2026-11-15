@@ -50,30 +50,50 @@ SF.SHEETS = {
   countlines: ['CountId', 'Location', 'Submission', 'ProductId', 'Qty', 'By', 'When']
 };
 
+/**
+ * Reading a sheet from Google is the slow part of every request (each call is a round trip),
+ * and one request reads the same sheet many times (the till asks for orders once per market).
+ * So within one request a sheet's rows are read once and kept. Anything that writes goes
+ * through SF.append / SF.setCell, which drop that sheet's copy; anything else that changes a
+ * sheet calls SF.flush(). Every request, and every lock taken, starts from a clean cache so
+ * another request's writes are never missed.
+ */
+SF._ss = null; SF._sheets = {}; SF._rc = {};
+SF.flush = function () { SF._rc = {}; };
+SF.touch = function (key) { delete SF._rc[key]; };
+
 SF.sheet = function (key) {
   var head = SF.SHEETS[key];
   if (!head) throw new Error('Unknown sheet: ' + key);
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  if (SF._sheets[key]) return SF._sheets[key];
+  var ss = SF._ss || (SF._ss = SpreadsheetApp.getActiveSpreadsheet());
   var name = key.charAt(0).toUpperCase() + key.slice(1);
   var s = ss.getSheetByName(name);
   if (!s) { s = ss.insertSheet(name); s.appendRow(head); }
   if (s.getLastRow() === 0) s.appendRow(head);
-  return s;
+  return (SF._sheets[key] = s);
 };
 
 SF.rows = function (key) {
-  var s = SF.sheet(key), head = SF.SHEETS[key], last = s.getLastRow();
-  if (last < 2) return [];
-  var values = s.getRange(2, 1, last - 1, head.length).getValues(), out = [];
-  for (var i = 0; i < values.length; i++) {
-    var o = { _row: i + 2 }, blank = true;
-    for (var c = 0; c < head.length; c++) {
-      o[head[c]] = values[i][c];
-      if (values[i][c] !== '' && values[i][c] !== null) blank = false;
+  var hit = SF._rc[key];
+  if (!hit) {
+    var s = SF.sheet(key), head = SF.SHEETS[key], last = s.getLastRow();
+    hit = [];
+    if (last >= 2) {
+      var values = s.getRange(2, 1, last - 1, head.length).getValues();
+      for (var i = 0; i < values.length; i++) {
+        var o = { _row: i + 2 }, blank = true;
+        for (var c = 0; c < head.length; c++) {
+          o[head[c]] = values[i][c];
+          if (values[i][c] !== '' && values[i][c] !== null) blank = false;
+        }
+        if (!blank) hit.push(o);
+      }
     }
-    if (!blank) out.push(o);
+    SF._rc[key] = hit;
   }
-  return out;
+  // A copy of each row: a caller that changes what it was given must not change the next caller's.
+  return hit.map(function (r) { var o = {}; for (var k in r) o[k] = r[k]; return o; });
 };
 
 /**
@@ -87,12 +107,14 @@ SF.safe = function (v) {
 };
 
 SF.append = function (key, obj) {
+  SF.touch(key);
   SF.sheet(key).appendRow(SF.SHEETS[key].map(function (h) {
     return obj[h] == null ? '' : SF.safe(obj[h]);
   }));
 };
 
 SF.setCell = function (key, row, header, value) {
+  SF.touch(key);
   SF.sheet(key).getRange(row, SF.SHEETS[key].indexOf(header) + 1).setValue(SF.safe(value));
 };
 
@@ -375,6 +397,7 @@ SF.action = function (name, capability, kind, fn) {
 };
 
 SF.dispatch = function (action, p) {
+  SF.flush();
   var def = SF.CORE_ACTIONS[action];
   var fromPlugin = false;
 
@@ -450,6 +473,7 @@ SF.lock = function (fn) {
   try { lock.waitLock(25000); }
   // Nothing has run: the phone may safely send the same thing again (retry), and does, by itself.
   catch (e) { return { ok: false, retry: true, message: 'Busy for a moment — please try again.' }; }
+  SF.flush();                       // another request may have written while we waited
   try { return fn(); } finally { lock.releaseLock(); }
 };
 
@@ -483,7 +507,10 @@ function doPost(e) {
   var body;
   try { body = JSON.parse(e.postData.contents || '{}'); }
   catch (err) { return SF.reply({ ok: false, message: 'Could not read that request.' }); }
-  return SF.reply(SF.safely(String(body.action || ''), body));
+  // `ms`: how long the server itself took, so the app can tell server time from network time.
+  var t0 = Date.now(), out = SF.safely(String(body.action || ''), body);
+  if (out && typeof out === 'object' && !Array.isArray(out)) out.ms = Date.now() - t0;
+  return SF.reply(out);
 }
 
 SF.safely = function (action, p) {
@@ -589,6 +616,7 @@ SF.migrate = function () {
   SF.MIGRATIONS.forEach(function (m) {
     if (m.to > from) {
       m.run();
+      SF.flush(); SF._sheets = {};      // a migration may rewrite headings or whole tabs directly
       SF.set('schemaVersion', m.to);
       done.push(m.to + ': ' + m.what);
       SF.audit({ role: 'system' }, 'migrate', 'schema ' + m.to, m.what, 'ok');
@@ -645,6 +673,30 @@ SF.action('health', 'reports', 'read', function () {
 
 // Public: the PIN itself is the credential, so this needs no token.
 // Returned inside `data` like any read; the client checks data.ok.
+/**
+ * Several queued changes in one request. A phone that has been offline sends what it saved
+ * up in one go instead of one slow round trip each. Every change goes through SF.dispatch on
+ * its own, so it is checked with the same token, locked, and de-duplicated by its own opId
+ * exactly as if it had come alone. It stops at the first answer that says "nothing ran, try
+ * again" (busy, sign in again), so the changes after it are neither run nor lost: the phone
+ * keeps them and sends them again.
+ */
+SF.BATCH_MAX = 15;
+SF.action('batch', null, 'read', function (p) {
+  var ops = Array.isArray(p.ops) ? p.ops.slice(0, SF.BATCH_MAX) : [], results = [];
+  for (var i = 0; i < ops.length; i++) {
+    var op = ops[i] || {};
+    if (!op.action || op.action === 'batch') { results.push({ opId: op.opId || '', res: { ok: false, message: 'Not a change I can run.' } }); continue; }
+    var body = {};
+    Object.keys(op).forEach(function (k) { body[k] = op[k]; });
+    body.token = p.token;
+    var res = SF.safely(String(op.action), body);
+    results.push({ opId: String(op.opId || ''), res: res });
+    if (res && (res.retry || res.code === 'auth')) break;
+  }
+  return { ok: true, results: results };
+});
+
 SF.action('signIn', null, 'read', function (p) { return SF.signIn(p); });
 
 SF.action('setPin', 'settings', 'write', function (p, ctx) {
