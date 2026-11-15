@@ -225,18 +225,28 @@ SF.activeMarket = function () { return String(SF.get('activeMarket', '')); };
  */
 SF.HOME = 'HOME';
 
+/**
+ * Every market, plus between markets. A deleted market (Status 'deleted') stays in the sheet,
+ * so its id is never given out again, but is left out everywhere. An archived one is kept in
+ * the numbers and hidden from the till, the order pages and the market lists.
+ */
+SF.DELETED = 'deleted';
 SF.markets = function () {
-  return SF.rows('markets').map(function (m) {
+  return SF.rows('markets').filter(function (m) {
+    return String(m.Status) !== SF.DELETED;
+  }).map(function (m) {
     return {
       id: String(m.MarketId), row: m._row, name: String(m.Name),
       date: m.Date instanceof Date
         ? Utilities.formatDate(m.Date, SF.TZ, 'yyyy-MM-dd') : String(m.Date || ''),
       location: String(m.Location || ''),
       status: String(m.Status || 'planned'),
-      note: String(m.Note || '')
+      note: String(m.Note || ''),
+      orders: String(m.Orders || '').toLowerCase() !== 'off',
+      archived: !!m.Archived
     };
   }).concat([{ id: SF.HOME, row: null, name: 'Sales between markets', date: '',
-               location: '', status: 'ongoing', note: '' }]);
+               location: '', status: 'ongoing', note: '', orders: true, archived: false }]);
 };
 
 SF.today = function () { return Utilities.formatDate(new Date(), SF.TZ, 'yyyy-MM-dd'); };
@@ -298,6 +308,7 @@ SF.takesOrders = function (m) {
   if (!m || !SF.preordersOn()) return false;
   if (m.id === SF.HOME) return SF.homeOrdersOn();
   if (String(m.status).toLowerCase() === 'cancelled') return false;
+  if (m.archived || m.orders === false) return false;   // archived, or pre-orders off for this one
   return !(m.date && m.date < SF.today());
 };
 
@@ -488,7 +499,7 @@ SF.CASHED = 'cashed up';
 SF.sellableMarkets = function () {
   var today = SF.today(), live = SF.activeMarket();
   return SF.markets().filter(function (m) {
-    if (m.status === SF.CASHED) return false;       // cashed up: done, off the till's lists
+    if (m.status === SF.CASHED || m.archived) return false;   // cashed up or archived: off the till's lists
     return m.id === SF.HOME || m.id === live || !m.date || m.date >= today;
   }).map(function (m) { return { id: m.id, name: m.name, date: m.date }; });
 };
@@ -527,13 +538,13 @@ SF.action('till', 'sell', 'read', function (p) {
     markets: SF.sellableMarkets(),
     // So the till can say when the live market is one that is already over.
     liveId: SF.activeMarket(), today: SF.today(),
-    allMarkets: SF.markets().filter(function (m) { return m.id !== SF.HOME; })
+    allMarkets: SF.markets().filter(function (m) { return m.id !== SF.HOME && !m.archived; })
                   .map(function (m) { return { id: m.id, name: m.name, date: m.date,
                                                cashed: m.status === SF.CASHED }; }),
     // Every market on today's date with what it has taken so far, so a phone can be
     // pointed at any of them: several markets can trade at the same moment.
     running: SF.markets().filter(function (m) {
-      return m.id !== SF.HOME && m.date && m.date === SF.today() && m.status !== SF.CASHED;
+      return m.id !== SF.HOME && m.date && m.date === SF.today() && m.status !== SF.CASHED && !m.archived;
     }).map(function (m) {
         var sold = SF.orders().filter(function (o) {
           return o.marketId === m.id && (o.status === 'paid' || o.status === 'collected');
@@ -1067,9 +1078,11 @@ SF.action('dashboard', 'reports', 'read', function (p) {
     best: Object.keys(perProduct).map(function (k) { return perProduct[k]; })
       .sort(function (a, b) { return b.value - a.value; }),
     history: SF.markets().map(function (m) {
-      var s = summarise(m.id);
+      var s = summarise(m.id), use = SF.marketUse(m.id, all);
       return { id: m.id, name: m.name, date: m.date, location: m.location, status: m.status,
-               cashed: m.status === SF.CASHED, revenue: s.revenue, expenses: s.expenses, profit: s.profit, units: s.units };
+               cashed: m.status === SF.CASHED, revenue: s.revenue, expenses: s.expenses, profit: s.profit, units: s.units,
+               orders: m.orders, archived: m.archived, unpaid: use.unpaid, unpaidTotal: use.unpaidTotal,
+               canDelete: m.id !== SF.HOME && !use.used, live: m.id === SF.activeMarket() };
     }).sort(function (a, b) { return String(b.date).localeCompare(String(a.date)); }),
     stock: { value: stockValue, units: Math.round(stockUnits * 100) / 100 },
     preordersOpen: SF.preordersOpen(),
@@ -1104,6 +1117,110 @@ SF.action('setActiveMarket', 'settings', 'write', function (p) {
   }
   SF.set('activeMarket', String(p.marketId || ''));
   SF.purgeCustomers();
+  return { ok: true };
+});
+
+/* -------------------------------------------------------------------------
+   Changing a market after it was added: its details, pre-orders for it alone,
+   archiving (kept in the numbers, gone from every list), and deleting one that
+   never got going. A delete only marks the row, so the id is never handed out
+   again and nothing that points at it is left pointing at nothing.
+   ------------------------------------------------------------------------- */
+
+/** What a market has against it: anything here means it can be archived but not deleted. */
+SF.marketUse = function (id, orders) {
+  var out = { sales: 0, unpaid: 0, unpaidTotal: 0, costs: 0, stock: 0, used: false };
+  var cancelled = {};
+  (orders || SF.orders()).forEach(function (o) {
+    if (o.marketId !== id) return;
+    if (o.status === 'cancelled') { cancelled[o.no] = true; return; }
+    if (o.status === 'reserved') { out.unpaid++; out.unpaidTotal += o.total; }
+    else out.sales++;
+  });
+  SF.rows('expenses').forEach(function (x) { if (String(x.MarketId) === id) out.costs++; });
+  // Stock moved under this market, other than a cancelled order going out and coming back.
+  SF.rows('movements').forEach(function (m) {
+    if (String(m.MarketId) === id && !cancelled[String(m.Ref)]) out.stock++;
+  });
+  out.used = !!(out.sales || out.unpaid || out.costs || out.stock);
+  return out;
+};
+
+/** The row of a market that has not been deleted, or null. */
+SF.marketRow = function (id) {
+  var found = null;
+  SF.rows('markets').forEach(function (r) {
+    if (String(r.MarketId) === String(id) && String(r.Status) !== SF.DELETED) found = r;
+  });
+  return found;
+};
+
+SF.action('editMarket', 'settings', 'write', function (p, ctx) {
+  var r = SF.marketRow(p.id);
+  if (!r) return { ok: false, message: 'That market is not on the list.' };
+  var name = String(p.name || '').trim().slice(0, 60);
+  if (name.length < 2) return { ok: false, message: 'Give the market a name.' };
+  var date = String(p.date || '').trim();
+  if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) return { ok: false, message: 'That date is not a date.' };
+  var where = String(p.location || '').trim().slice(0, 160);
+  SF.setCell('markets', r._row, 'Name', name);
+  SF.setCell('markets', r._row, 'Date', date);
+  SF.setCell('markets', r._row, 'Location', where);
+  SF.audit(ctx, 'editMarket', String(r.MarketId), name + (date ? ' · ' + date : ''), 'ok');
+  return { ok: true };
+});
+
+/** Pre-orders for one market only; the stall-wide switch still has the last word. */
+SF.action('setMarketOrders', 'settings', 'write', function (p, ctx) {
+  var r = SF.marketRow(p.id);
+  if (!r) return { ok: false, message: 'That market is not on the list.' };
+  SF.setCell('markets', r._row, 'Orders', p.open ? '' : 'off');
+  SF.audit(ctx, 'setMarketOrders', String(r.MarketId), p.open ? 'pre-orders on' : 'pre-orders off', 'ok');
+  return { ok: true, open: !!p.open };
+});
+
+SF.action('archiveMarket', 'settings', 'write', function (p, ctx) {
+  var r = SF.marketRow(p.id);
+  if (!r) return { ok: false, message: 'That market is not on the list.' };
+  var id = String(r.MarketId), on = p.archived !== false;
+  if (on && id === SF.activeMarket()) {
+    return { ok: false, code: 'live', message: 'This is the live market. Make another market live first.' };
+  }
+  if (on && SF.marketUse(id).unpaid) {
+    return { ok: false, code: 'unpaid', message: 'This market still has unpaid reservations. Release them first.' };
+  }
+  SF.setCell('markets', r._row, 'Archived', on ? SF.today() : '');
+  SF.audit(ctx, 'archiveMarket', id, on ? 'archived' : 'back from the archive', 'ok');
+  return { ok: true, archived: on };
+});
+
+SF.action('deleteMarket', 'settings', 'write', function (p, ctx) {
+  var id = String(p.id || ''), r = null, gone = false;
+  SF.rows('markets').forEach(function (x) {
+    if (String(x.MarketId) !== id) return;
+    if (String(x.Status) === SF.DELETED) gone = true; else r = x;
+  });
+  if (gone && !r) return { ok: true };        // already deleted: what was asked for
+  if (!r) return { ok: false, message: 'Not found.' };
+  if (id === SF.activeMarket()) {
+    return { ok: false, code: 'live', message: 'This is the live market. Make another market live first.' };
+  }
+  var use = SF.marketUse(id);
+  if (use.unpaid) {
+    return { ok: false, code: 'unpaid', message: 'This market still has unpaid reservations. Release them first.' };
+  }
+  if (use.used) {
+    return { ok: false, code: 'used', message: 'This market has sales, costs or stock moves, so it can only be archived.' };
+  }
+  SF.setCell('markets', r._row, 'Status', SF.DELETED);
+  // Cancelled orders stay (the numbers add up), but nobody's details are kept for a market that is gone.
+  SF.rows('orders').forEach(function (o) {
+    if (String(o.MarketId) !== id || (!o.Phone && String(o.Customer) === 'Customer')) return;
+    SF.setCell('orders', o._row, 'Customer', 'Customer');
+    SF.setCell('orders', o._row, 'Phone', '');
+    SF.setCell('orders', o._row, 'Note', '');
+  });
+  SF.audit(ctx, 'deleteMarket', id, String(r.Name), 'ok');
   return { ok: true };
 });
 
@@ -1155,7 +1272,7 @@ SF.action('deleteExpense', 'expenses', 'write', function (p) {
 
 /** Owner or manager: put every unpaid reservation for the live market back on the shelf. */
 SF.action('releaseUnpaid', 'settings', 'write', function (p, ctx) {
-  var market = SF.activeMarket(), n = 0;
+  var market = p && p.marketId ? String(p.marketId) : SF.activeMarket(), n = 0;
   SF.orders().forEach(function (o) {
     if (o.marketId !== market || o.status !== 'reserved') return;
     SF.commitLines(o.lines, o.no, 1, o.marketId);

@@ -18,7 +18,7 @@
 var SF = SF || {};
 
 SF.VERSION = '2.0.0';
-SF.SCHEMA = 10;                       // bump when SHEETS changes; see MIGRATIONS
+SF.SCHEMA = 11;                       // bump when SHEETS changes; see MIGRATIONS
 SF.TZ = 'Africa/Johannesburg';
 
 /* =========================================================================
@@ -35,7 +35,7 @@ SF.SHEETS = {
   orders:    ['OrderNo', 'When', 'MarketId', 'Channel', 'Customer', 'Phone', 'Lines',
               'Units', 'Total', 'Cost', 'Status', 'PaidAt', 'CollectedAt', 'Note', 'Consent',
               'Paid'],
-  markets:   ['MarketId', 'Name', 'Date', 'Location', 'Status', 'Note'],
+  markets:   ['MarketId', 'Name', 'Date', 'Location', 'Status', 'Note', 'Orders', 'Archived'],
   expenses:  ['ExpenseId', 'MarketId', 'Description', 'Amount', 'Category', 'When'],
   ops:       ['OpId', 'When', 'Action', 'Result'],
   pantry:    ['Item', 'Qty', 'Unit', 'Note', 'UpdatedAt', 'UpdatedBy'],
@@ -600,6 +600,14 @@ SF.MIGRATIONS = [
       // A new heading at the end; older orders stay blank, which reads as cash.
       var s = SF.sheet('orders'), col = SF.SHEETS.orders.indexOf('Paid') + 1;
       if (String(s.getRange(1, col).getValue()) !== 'Paid') s.getRange(1, col).setValue('Paid');
+    } },
+  { to: 11, what: 'Markets: pre-orders on or off per market, and archiving', run: function () {
+      // Two new headings at the end; blank means pre-orders on and not archived.
+      var s = SF.sheet('markets'), head = SF.SHEETS.markets;
+      ['Orders', 'Archived'].forEach(function (h) {
+        var col = head.indexOf(h) + 1;
+        if (String(s.getRange(1, col).getValue()) !== h) s.getRange(1, col).setValue(h);
+      });
     } }
 ];
 

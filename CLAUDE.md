@@ -199,6 +199,13 @@ go through `SF.once` so a retried request never runs twice.
   (`SF.cashupMarket`, never HOME) and sets its Status to `SF.CASHED` ('cashed up'). Cashed-up
   markets leave `SF.sellableMarkets` and the till's `running` list; Numbers › All markets keeps
   them, with a Reopen button (`reopenMarket`, `settings`).
+- **Changing markets** (Numbers › All markets › Edit, `settings`): `editMarket` (name, date, where),
+  `setMarketOrders` (pre-orders for one market: Markets `Orders` = `off`; the stall-wide switch still
+  wins), `archiveMarket` (Markets `Archived` = date: off the till, order pages and lists, kept in the
+  numbers under Show archived) and `deleteMarket`. Delete only marks Status `deleted` (`SF.DELETED`;
+  `SF.markets()` leaves it out) so the id is never reused, and only when `SF.marketUse` finds no sale,
+  unpaid reservation, cost or stock move. Neither the live market nor one with unpaid reservations
+  can be archived or deleted (release them first: `releaseUnpaid` takes a `marketId`).
 - **Uncooked stock** (the `Pantry` tab) is a plain count list, not a ledger:
   nothing is sold from it, so `savePantry` overwrites the amount.
 - Server code is plain Apps Script (V8, no modules). Every `.gs` shares one

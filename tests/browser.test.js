@@ -1908,6 +1908,75 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
     await env.ctx.close();
   });
 
+  await test('a market is edited, its pre-orders switched off, and a test market deleted, from its card', async () => {
+    const env = await phone({ hash: '#numbers', seed: (SF) => {
+      SF.append('markets', { MarketId: 'M02', Name: 'Caroline', Date: '2027-11-01', Status: 'planned' });
+      SF.append('markets', { MarketId: 'M03', Name: 'Irene', Date: day(5), Status: 'planned' });
+    } });
+    const page = env.page, SF = env.SF;
+    await page.waitForFunction(() => SF.state.data.numbers);
+    await page.evaluate(() => { SF.ls.set('sf.tab.numbers', 'all'); SF.render(); });
+    const card = (name) => page.locator('.mktable tr', { hasText: name }).first();
+    // Edit: rename and re-date Irene.
+    await card('Irene').locator('button', { hasText: 'Edit' }).click();
+    await page.fill('#emn', 'Irene Village'); await page.fill('#emd', day(6));
+    const t0 = Date.now();
+    await page.click('.sheet button:has-text("Save")');
+    await page.waitForSelector('.mktable tr:has-text("Irene Village")');
+    assert.ok(Date.now() - t0 < 1500, 'the new name shows at once');
+    await page.waitForFunction(() => !SF.outbox.pending().length);
+    assert.strictEqual(SF.markets().find((m) => m.id === 'M03').name, 'Irene Village');
+    // Pre-orders off for Irene only; the card says so.
+    await card('Irene Village').locator('button', { hasText: 'Edit' }).click();
+    await page.click('.sheet button:has-text("Switch off")');
+    await page.waitForSelector('.mktable tr:has-text("Irene Village") .mkpre.off');
+    await page.waitForFunction(() => !SF.outbox.pending().length);
+    assert.strictEqual(SF.markets().find((m) => m.id === 'M03').orders, false);
+    // The live market cannot be archived from here.
+    await card('Test Market').locator('button', { hasText: 'Edit' }).click();
+    await page.click('.sheet button:has-text("Archive")');
+    await page.waitForFunction(() => /live market/.test(document.getElementById('toast').textContent));
+    // Caroline has nothing against it: Delete, with a confirm first.
+    await card('Caroline').locator('button', { hasText: 'Edit' }).click();
+    await page.click('.sheet button.bad:has-text("Delete")');
+    await page.waitForSelector('.sheet h2:has-text("Delete Caroline?")');
+    await page.click('.sheet button:has-text("Delete it")');
+    await page.waitForFunction(() => !document.querySelector('.mktable') ||
+      ![].some.call(document.querySelectorAll('.mktable tr'), (t) => /Caroline/.test(t.textContent)));
+    await page.waitForFunction(() => !SF.outbox.pending().length);
+    assert.ok(!SF.markets().some((m) => m.id === 'M02'), 'deleted on the server');
+    assert.strictEqual(await page.evaluate(() => SF.outbox.failed().length), 0);
+    await env.ctx.close();
+  });
+
+  await test('a market with sales is archived, not deleted, and comes back from Show archived', async () => {
+    const env = await phone({ hash: '#numbers', seed: (SF) => {
+      SF.append('markets', { MarketId: 'M02', Name: 'Old Fair', Date: day(-10), Status: 'planned' });
+      SF.setPin('owner', '4321');
+      const t = SF.dispatch('signIn', { pin: '4321', device: 'x' }).data.token;
+      SF.dispatch('sell', { token: t, opId: 'z', marketId: 'M02', lines: [{ id: 'P01', qty: 1 }] });
+    } });
+    const page = env.page, SF = env.SF;
+    await page.waitForFunction(() => SF.state.data.numbers);
+    await page.evaluate(() => { SF.ls.set('sf.tab.numbers', 'all'); SF.render(); });
+    await page.locator('.mktable tr', { hasText: 'Old Fair' }).locator('button', { hasText: 'Edit' }).click();
+    assert.strictEqual(await page.locator('.sheet button.bad:has-text("Delete")').count(), 0, 'no Delete for a market with sales');
+    assert.ok(/cannot be deleted/.test(await page.textContent('.sheet')));
+    await page.click('.sheet button:has-text("Archive")');
+    await page.click('.sheet button:has-text("Archive it")');
+    await page.waitForSelector('button:has-text("Show archived markets (1)")');
+    await page.waitForFunction(() => !SF.outbox.pending().length);
+    assert.strictEqual(SF.markets().find((m) => m.id === 'M02').archived, true);
+    await page.click('button:has-text("Show archived markets")');
+    await page.waitForSelector('.mktable tr:has-text("Old Fair") .tag:has-text("Archived")');
+    assert.strictEqual(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1), false);
+    await page.locator('.mktable tr', { hasText: 'Old Fair' }).locator('button', { hasText: 'Edit' }).click();
+    await page.click('.sheet button:has-text("Bring back")');
+    await page.waitForFunction(() => !SF.outbox.pending().length);
+    assert.strictEqual(SF.markets().find((m) => m.id === 'M02').archived, false);
+    await env.ctx.close();
+  });
+
   await test('a category or cupboard item with a quote in it cannot break out of its button', async () => {
     const evil = "Jams');window.__pwned=1;//";
     const env = await phone({ hash: '#till', seed: (SF) => {
