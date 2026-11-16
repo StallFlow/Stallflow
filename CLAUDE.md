@@ -195,6 +195,13 @@ go through `SF.once` so a retried request never runs twice.
   orders, markets, PINs or people; products are switched off, never deleted.
   Only the key's hash is stored; every call is audited as `Claude (connector)`.
   A new tool must be added to that list and justified; do not widen it casually.
+- **ChatGPT as a design connector** (`server/Support.gs`, `SF.DESIGN_TOOLS`; relay in `tools/chatgpt/`):
+  a second connector with its own key (`designKey`/`designOff`/`designStatus`, same administrator-only
+  rule), reached as `<api>?design=KEY` and only through the relay, which signs people in with Google
+  (OAuth for ChatGPT) and adds the key itself. Tools: brand kit, products (never cost or margin),
+  order links, search/fetch, and `save_design_note` (the only write; shown in Settings). Never money,
+  orders, customers, stock or price changes. Both connectors share `SF.connServe`; audited as
+  `ChatGPT (design connector)`. Do not widen it casually.
 - **Cashing up closes a market.** `cashup.record` counts the market the phone sells at
   (`SF.cashupMarket`, never HOME) and sets its Status to `SF.CASHED` ('cashed up'). Cashed-up
   markets leave `SF.sellableMarkets` and the till's `running` list; Numbers › All markets keeps

@@ -630,6 +630,92 @@ test('a new key replaces the old one, switching off ends it, and the hourly limi
   assert.strictEqual(SF.mcp(fresh, { jsonrpc: '2.0', id: 1, method: 'tools/list' }).error.code, -32001);
 });
 
+/* ---------- ChatGPT as a design connector ---------- */
+function designKit() {
+  const env = claudeKit();
+  const { SF } = env;
+  env.dkey = SF.dispatch('designKey', { token: env.owner, opId: 'd' + Math.random(),
+    site: 'https://stallflow.github.io/Stallflow/duxies/app/' }).key;
+  env.drpc = (method, params, key) => SF.mcpDesign(key === undefined ? env.dkey : key, { jsonrpc: '2.0', id: 7, method, params });
+  env.dcall = (name, args) => {
+    const r = env.drpc('tools/call', { name, arguments: args }).reply;
+    return { isError: r.result.isError, data: JSON.parse(r.result.content[0].text) };
+  };
+  return env;
+}
+
+test('ChatGPT design connector: only the administrator makes it, and its key is separate from Claude\'s', () => {
+  const env = designKit(), { SF } = env;
+  assert.ok(env.dkey && env.dkey !== env.key);
+  [env.manager, env.stallOwner].forEach((t, i) => {
+    assert.strictEqual(SF.dispatch('designKey', { token: t, opId: 'dm' + i }).code, 'forbidden');
+    assert.strictEqual(SF.dispatch('designOff', { token: t, opId: 'do' + i }).code, 'forbidden');
+  });
+  assert.strictEqual(SF.mcpDesign(env.key, { jsonrpc: '2.0', id: 1, method: 'tools/list' }).error.code, -32001, 'Claude\'s key does not open ChatGPT\'s door');
+  assert.strictEqual(SF.mcp(env.dkey, { jsonrpc: '2.0', id: 1, method: 'tools/list' }).error.code, -32001, 'and the other way round');
+  assert.ok(!JSON.stringify(SF.rows('settings')).includes(env.dkey), 'only the hash is kept');
+  const st = SF.dispatch('designStatus', { token: env.owner }).data;
+  assert.strictEqual(st.on, true);
+  assert.strictEqual(st.site, 'https://stallflow.github.io/Stallflow/duxies/', 'the app address becomes the site address');
+  SF.dispatch('designOff', { token: env.owner, opId: 'off2' });
+  assert.strictEqual(env.drpc('tools/list', {}).error.code, -32001);
+  assert.ok(env.rpc('tools/list', {}).reply.result, 'switching ChatGPT off leaves Claude on');
+});
+
+test('ChatGPT design connector: a fixed list of tools, all read-only bar the design note', () => {
+  const env = designKit();
+  const tools = env.drpc('tools/list', {}).reply.result.tools;
+  assert.strictEqual(tools.map((t) => t.name).sort().join(), 'brand_kit,fetch,order_pages,product_list,save_design_note,search');
+  tools.forEach((t) => assert.strictEqual(t.annotations.readOnlyHint, t.name !== 'save_design_note', t.name));
+  ['stallflow_set_price', 'stallflow_adjust_stock', 'saveProfile', 'sell', 'constructor', '__proto__'].forEach((n) => {
+    assert.strictEqual(env.dcall(n, {}).data.ok, false, n + ' is not there');
+  });
+  assert.ok(env.drpc('initialize', { protocolVersion: '2025-06-18' }).reply.result.instructions.includes('brand_kit'));
+});
+
+test('ChatGPT design connector: reads brand, products and links, never cost, orders or customers', () => {
+  const env = designKit(), { SF } = env;
+  SF.dispatch('saveProfile', { token: env.owner, opId: 'pf', name: "Duxie's Homemade", colour: '#aa3355', tagline: 'Small batch' });
+  const brand = env.dcall('brand_kit', {}).data.brand;
+  assert.strictEqual(brand.name, "Duxie's Homemade"); assert.strictEqual(brand.colours.main, '#aa3355');
+  assert.strictEqual(brand.links.betweenMarkets, 'https://stallflow.github.io/Stallflow/duxies/?m=home');
+  assert.strictEqual(brand.labels.logo, undefined, 'the logo only when asked');
+  const prods = env.dcall('product_list', {}).data.products;
+  assert.ok(prods.length > 0);
+  prods.forEach((p) => { assert.ok(!('cost' in p) && !('margin' in p) && !('marginPct' in p), 'no cost prices'); });
+  const found = env.dcall('search', { query: prods[0].name.split(' ')[0] }).data.results;
+  assert.ok(found.some((r) => r.id === prods[0].id));
+  const one = env.dcall('fetch', { id: prods[0].id }).data;
+  assert.ok(one.ok && JSON.parse(one.text).price === prods[0].price && !one.text.includes('cost'));
+  assert.ok(env.dcall('fetch', { id: 'brand' }).data.text.includes('colours'));
+  assert.strictEqual(env.dcall('fetch', { id: 'P999' }).data.ok, false);
+  assert.ok(Array.isArray(env.dcall('order_pages', {}).data.links.markets));
+  const everything = JSON.stringify(['brand_kit', 'product_list', 'order_pages'].map((n) => env.dcall(n, { include_logo: true, include_hidden: true })));
+  assert.ok(!/"(phone|eft|Lines|Total|cost|margin)"/.test(everything), 'nothing about money, orders or customers');
+});
+
+test('ChatGPT design connector: the design note is the only change, recorded as ChatGPT, once per request id', () => {
+  const env = designKit(), { SF } = env;
+  const before = JSON.stringify(SF.rows('products')) + JSON.stringify(SF.rows('movements'));
+  assert.ok(env.dcall('save_design_note', { note: '=HYPERLINK("x") Christmas poster made', request_id: 'n1' }).data.ok);
+  env.dcall('save_design_note', { note: 'second try', request_id: 'n1' });
+  const st = SF.dispatch('designStatus', { token: env.owner }).data;
+  assert.ok(st.note.includes('Christmas poster made'), 'the same request id saves once');
+  assert.ok(st.noteAt);
+  assert.strictEqual(env.dcall('save_design_note', { note: '   ' }).data.ok, false);
+  assert.ok(env.dcall('save_design_note', { note: 'x'.repeat(900) }).data.ok);
+  assert.strictEqual(SF.dispatch('designStatus', { token: env.owner }).data.note.length, SF.DESIGN_NOTE_MAX);
+  assert.strictEqual(JSON.stringify(SF.rows('products')) + JSON.stringify(SF.rows('movements')), before, 'nothing else changed');
+  assert.ok(SF.rows('audit').some((r) => r.Actor === 'ChatGPT (design connector)' && r.Action === 'save_design_note'));
+  assert.ok(!SF.rows('audit').some((r) => r.Actor === 'ChatGPT (design connector)' && /brand_kit|product_list/.test(r.Action)), 'reads are not written to the audit trail');
+});
+
+test('a bad site address is not kept', () => {
+  const { SF } = shop(day(3));
+  ['javascript:alert(1)', 'http://x.y/', 'https://a.b/"onx', ''].forEach((u) => assert.strictEqual(SF.cleanSite(u), '', u));
+  assert.strictEqual(SF.cleanSite('https://stallflow.github.io/Stallflow/duxies/index.html?m=1'), 'https://stallflow.github.io/Stallflow/duxies/');
+});
+
 test('a new product never takes an id that is already in use', () => {
   const { SF } = shop(day(3));
   SF.setPin('owner', '4321');

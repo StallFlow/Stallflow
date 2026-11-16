@@ -1213,6 +1213,36 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
     await env.ctx.close();
   });
 
+  await test('Settings: the administrator switches ChatGPT on for artwork, sees the key once, reads the note, switches it off', async () => {
+    const pin = await phone({ hash: '#settings' });
+    await pin.page.waitForSelector('h2:has-text("Plugins")');
+    assert.strictEqual(await pin.page.locator('text=ChatGPT for artwork').count(), 0, 'the stall\'s own staff never see it');
+    await pin.ctx.close();
+    const env = await phone({ hash: '#settings', google: true });
+    const page = env.page;
+    const card = page.locator('.card:has(h2:has-text("ChatGPT for artwork"))');
+    await card.locator('button:has-text("Set up or switch off")').click();
+    await page.waitForSelector('.sheet button:has-text("Switch on and make the key")');
+    await page.click('.sheet button:has-text("Switch on and make the key")');
+    await page.waitForSelector('#designkey .linkbox');
+    const key = (await page.textContent('#designkey .linkbox')).trim();
+    assert.ok(/^[a-f0-9]{32,}$/.test(key), key);
+    assert.strictEqual(env.SF.mcpDesign(key, { jsonrpc: '2.0', id: 1, method: 'tools/list' }).reply.result.tools.length, 6, 'the key works');
+    assert.ok(!JSON.stringify(env.sheets).includes(key), 'the key itself is not in the sheet');
+    const kept = env.SF.get('designSite', ''), here = await page.evaluate(() => location.protocol);
+    assert.ok(here === 'https:' ? /^https:\/\/.+\/$/.test(kept) : kept === '', 'only an https site address is kept: ' + kept);
+    env.SF.mcpDesign(key, { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'save_design_note', arguments: { note: '<b>Christmas poster</b> ready' } } });
+    await page.click('.sheet button:has-text("Close")');
+    await page.waitForFunction(() => !document.querySelector('.sheet'));
+    await card.locator('button:has-text("Set up or switch off")').click();
+    await page.waitForSelector('.sheet :text("Latest design note")');
+    assert.ok((await page.textContent('.sheet')).includes('<b>Christmas poster</b> ready'), 'the note is shown as text, not markup');
+    await page.click('.sheet button:has-text("Switch off")');
+    await page.waitForFunction(() => !document.querySelector('.sheet'));
+    assert.strictEqual(env.SF.mcpDesign(key, { jsonrpc: '2.0', id: 1, method: 'tools/list' }).error.code, -32001);
+    await env.ctx.close();
+  });
+
   await test('All markets: Show Coming up and sort by profit', async () => {
     const env = await phone({ hash: '#numbers', seed: (SF) => {
       [['M02', 'Spring Fair', 5], ['M03', 'Winter Fair', -40], ['M04', 'Craft Night', 12], ['M05', 'Easter Market', -200],

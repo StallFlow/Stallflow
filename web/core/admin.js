@@ -675,7 +675,12 @@
             'take off stock, add products, change prices, switch products off and read problem ' +
             'reports. Never money, orders, PINs or who has access, and everything it does is ' +
             'recorded as Claude.</div>' +
-            '<button class="ghost block" onclick="SFA.claudeConnector()">Set up or switch off</button></div>'
+            '<button class="ghost block" onclick="SFA.claudeConnector()">Set up or switch off</button></div>' +
+            '<div class="card"><h2>ChatGPT for artwork</h2>' +
+            '<div class="sub">Let ChatGPT read the shop\'s name, colours, label look, products, prices and ' +
+            'order links, so it can make posts, posters, labels and price lists. It cannot see cost prices, ' +
+            'money, orders or customers, and the only thing it can save is a short design note, shown here.</div>' +
+            '<button class="ghost block" onclick="SFA.designConnector()">Set up or switch off</button></div>'
           : '') +
 
         '<div class="card"><h2>Plugins</h2>' +
@@ -1558,6 +1563,52 @@
       SF.get('assistantOff').then(function (res) {
         if (!res || !res.ok) throw new Error('refused');
         SF.closeSheet(); SF.toast('Claude is switched off.');
+      }).catch(function () { SF.toast('That did not go through. Try again with signal.', true); });
+    },
+    /** ChatGPT as a design connector: the administrator makes (or ends) its own key. Shown once. */
+    designConnector: function () {
+      SF.get('designStatus').then(function (res) {
+        var st = res && res.data;
+        if (!st || st.ok === false) { SF.toast((st && st.message) || 'Could not reach the shop. This needs signal.', true); return; }
+        SF.openSheet('<h2>ChatGPT for artwork</h2>' +
+          '<div class="sub">' + (st.on
+            ? 'On since ' + esc(st.since || '?') + (st.lastUsed ? ' \u00b7 last used ' + esc(String(st.lastUsed).slice(0, 16).replace('T', ' ')) + ' (UTC)' : ' \u00b7 not used yet')
+            : 'Off. ChatGPT cannot see anything here.') + '</div>' +
+          (st.note ? '<div class="card flat" style="margin:10px 0"><b>Latest design note</b>' +
+            '<div class="small" style="margin-top:4px;white-space:pre-wrap">' + esc(st.note) + '</div>' +
+            '<div class="small muted">' + esc(String(st.noteAt || '').slice(0, 16).replace('T', ' ')) + ' (UTC)</div></div>' : '') +
+          '<div id="designkey"></div><div id="designbtns">' + SFA.designButtons(st.on) + '</div>' +
+          '<button class="quiet block" style="margin-top:8px" onclick="SF.closeSheet()">Close</button>');
+      }).catch(function () { SF.toast('Could not reach the shop. This needs signal.', true); });
+    },
+    designButtons: function (on) {
+      return '<button class="ok block" onclick="SFA.designKey(' + (on ? 'true' : 'false') + ')">' +
+          (on ? 'Make a new key (the old one stops working)' : 'Switch on and make the key') + '</button>' +
+        (on ? '<button class="bad block" style="margin-top:8px" onclick="SFA.designOff()">Switch off</button>' : '');
+    },
+    designKey: function (again) {
+      if (again && !window.confirm('The old key will stop working straight away. Make a new one?')) return;
+      var site = location.origin + location.pathname;
+      SF.get('designKey', { site: site }).then(function (res) {
+        var d = res;
+        if (!d || !d.ok || !d.key) throw new Error('refused');
+        var box = SF.el('designkey');
+        if (box) box.innerHTML =
+          '<div class="card flat" style="border:2px solid var(--warn);margin:12px 0">' +
+          '<b>The ChatGPT key. It is shown only now.</b>' +
+          '<div class="linkbox" style="margin-top:8px;overflow-wrap:anywhere">' + esc(d.key) + '</div>' +
+          '<button class="ok block" style="margin-top:8px" data-k="' + esc(d.key) + '" onclick="SFA.copyText(this.getAttribute(\'data-k\'))">Copy the key</button>' +
+          '<ol class="small" style="margin:10px 0 0 18px;line-height:1.5">' +
+            '<li>Put it in the ChatGPT sign-in relay as the secret STALL_KEY (see the setup guide).</li>' +
+            '<li>ChatGPT never sees this key: it signs in with Google, and the relay adds the key.</li>' +
+            '<li>Do not post or forward it. If it leaks, switch it off here.</li></ol></div>';
+        var bt = SF.el('designbtns'); if (bt) bt.innerHTML = SFA.designButtons(true);
+      }).catch(function () { SF.toast('That did not go through. Try again with signal.', true); });
+    },
+    designOff: function () {
+      SF.get('designOff').then(function (res) {
+        if (!res || !res.ok) throw new Error('refused');
+        SF.closeSheet(); SF.toast('ChatGPT is switched off.');
       }).catch(function () { SF.toast('That did not go through. Try again with signal.', true); });
     },
     copyText: function (text) {
