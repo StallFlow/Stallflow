@@ -710,6 +710,15 @@ test('ChatGPT design connector: the design note is the only change, recorded as 
   assert.ok(!SF.rows('audit').some((r) => r.Actor === 'ChatGPT (design connector)' && /brand_kit|product_list/.test(r.Action)), 'reads are not written to the audit trail');
 });
 
+test('the "on since" day shows as a day even after Sheets turned it into a date', () => {
+  const env = designKit(), { SF } = env;
+  // What Sheets does to a typed "2026-11-16": the cell comes back as a date.
+  SF.rows('settings').filter((r) => /^(design|assistant)Since$/.test(r.Key))
+    .forEach((r) => SF.setCell('settings', r._row, 'Value', new Date(2026, 10, 16)));
+  assert.strictEqual(SF.dispatch('designStatus', { token: env.owner }).data.since, '2026-11-16');
+  assert.strictEqual(SF.dispatch('assistantStatus', { token: env.owner }).data.since, '2026-11-16');
+});
+
 test('a bad site address is not kept', () => {
   const { SF } = shop(day(3));
   ['javascript:alert(1)', 'http://x.y/', 'https://a.b/"onx', ''].forEach((u) => assert.strictEqual(SF.cleanSite(u), '', u));

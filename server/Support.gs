@@ -15,6 +15,11 @@
 SF.ASSISTANT_PER_HOUR = 120;
 SF.ASSISTANT_MAX_QTY = 500;
 
+/** A day kept in Settings: Sheets turns "2026-11-16" into a date, so turn it back. */
+SF.dayText = function (v) {
+  return v && typeof v === 'object' && typeof v.getTime === 'function' ? Utilities.formatDate(v, SF.TZ, 'yyyy-MM-dd') : String(v == null ? '' : v);
+};
+
 SF.assistantOn = function () { return !!SF.get('assistantKeyHash', ''); };   // = SF.connOn(SF.CONNECTORS.claude)
 
 SF.assistantKeyOk = function (key) {
@@ -64,7 +69,7 @@ SF.action('assistantOff', 'people', 'write', function (p, ctx) {
 
 SF.action('assistantStatus', 'people', 'read', function (p, ctx) {
   if (!SF.assistantAdmin(ctx)) return SF.assistantRefused;
-  return { on: SF.assistantOn(), since: String(SF.get('assistantSince', '')),
+  return { on: SF.assistantOn(), since: SF.dayText(SF.get('assistantSince', '')),
            lastUsed: String(SF.get('assistantLastUsed', '')) };
 });
 
@@ -452,7 +457,7 @@ SF.action('designOff', 'people', 'write', function (p, ctx) {
 
 SF.action('designStatus', 'people', 'read', function (p, ctx) {
   if (!SF.assistantAdmin(ctx)) return SF.assistantRefused;
-  return { on: SF.connOn(SF.CONNECTORS.chatgpt), since: String(SF.get('designSince', '')),
+  return { on: SF.connOn(SF.CONNECTORS.chatgpt), since: SF.dayText(SF.get('designSince', '')),
            lastUsed: String(SF.get('designLastUsed', '')), site: String(SF.get('designSite', '')),
            note: String(SF.get('designNote', '')), noteAt: String(SF.get('designNoteAt', '')) };
 });
