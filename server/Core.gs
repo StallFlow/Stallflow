@@ -18,7 +18,7 @@
 var SF = SF || {};
 
 SF.VERSION = '2.0.0';
-SF.SCHEMA = 12;                       // bump when SHEETS changes; see MIGRATIONS
+SF.SCHEMA = 13;                       // bump when SHEETS changes; see MIGRATIONS
 SF.TZ = 'Africa/Johannesburg';
 
 /* =========================================================================
@@ -28,7 +28,7 @@ SF.TZ = 'Africa/Johannesburg';
 SF.SHEETS = {
   settings:  ['Key', 'Value'],
   products:  ['ProductId', 'Name', 'Variant', 'Type', 'Category', 'Unit', 'Price',
-              'Capacity', 'Options', 'Active', 'Sort'],
+              'Capacity', 'Options', 'Active', 'Sort', 'Contents'],
   batches:   ['BatchId', 'When', 'ProductId', 'Made', 'CostLines', 'TotalCost',
               'CostPerUnit', 'Note'],
   movements: ['When', 'ProductId', 'Qty', 'Type', 'Ref', 'MarketId'],
@@ -619,6 +619,11 @@ SF.MIGRATIONS = [
       // One new heading at the end; blank means collected, not couriered.
       var s = SF.sheet('orders'), col = SF.SHEETS.orders.indexOf('Delivery') + 1;
       if (String(s.getRange(1, col).getValue()) !== 'Delivery') s.getRange(1, col).setValue('Delivery');
+    } },
+  { to: 13, what: 'Add Contents to Products for packages (bundles of jars)', run: function () {
+      // One new heading at the end; blank for every ordinary product. Only a package has contents.
+      var s = SF.sheet('products'), col = SF.SHEETS.products.indexOf('Contents') + 1;
+      if (String(s.getRange(1, col).getValue()) !== 'Contents') s.getRange(1, col).setValue('Contents');
     } }
 ];
 

@@ -146,6 +146,12 @@ SF.definePlugin({
       var tickets = [], making = {};
       orders.forEach(function (o) {
         var items = o.lines.filter(function (l) { return l.type === 'made'; });
+        // Biscuits packed in a gift box still have to be baked.
+        o.lines.forEach(function (l) {
+          (l.contents || []).forEach(function (c) {
+            if (c.made) items.push({ name: c.name, qty: c.qty, type: 'made', note: 'in ' + l.name });
+          });
+        });
         if (!items.length) return;
         items.forEach(function (l) { making[l.name] = (making[l.name] || 0) + l.qty; });
         tickets.push({

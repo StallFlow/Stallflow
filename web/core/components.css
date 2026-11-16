@@ -477,3 +477,8 @@ details.card summary{cursor:pointer;padding:6px 0;font-size:16px}
 .mkpre{font-weight:700;margin-top:2px}
 .mkpre.on{color:var(--ok)}
 .mkpre.off{color:var(--muted)}
+
+/* Gift boxes (packages): the jar pickers on the till */
+.boxslot{margin:12px 0 4px}
+.boxslot>b{display:block;margin-bottom:6px}
+.boxslot .field{margin:6px 0}

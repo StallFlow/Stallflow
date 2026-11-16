@@ -59,6 +59,10 @@ SF.madeSoFar = function (marketId) {
     if (status === 'cancelled') return;
     SF.json(o.Lines, []).forEach(function (l) {
       out[l.id] = (out[l.id] || 0) + SF.num(l.qty);
+      // A made-to-order item inside a package (biscuits in Sunday Breakfast) uses up capacity too.
+      (l.contents || []).forEach(function (c) {
+        if (c.made) out[c.id] = (out[c.id] || 0) + SF.num(c.qty);
+      });
     });
   });
   return out;
@@ -70,10 +74,7 @@ SF.products = function (opts) {
   // Made-to-order capacity is per market: what is left to make at THIS market.
   var made = SF.madeSoFar(opts.market || SF.activeMarket());
 
-  return SF.rows('products')
-    .filter(function (p) {
-      return opts.all || String(p.Active).toLowerCase() !== 'no';
-    })
+  var all = SF.rows('products')
     .map(function (p) {
       var id = String(p.ProductId);
       var type = String(p.Type || 'stocked');
@@ -86,6 +87,8 @@ SF.products = function (opts) {
       if (type === 'made') {
         cap = capacity > 0 ? capacity : null;
         available = cap === null ? Infinity : Math.max(0, cap - (made[id] || 0));
+      } else if (type === 'package') {
+        available = 0;              // worked out below, from what is in the box
       } else {
         available = hand[id] || 0;
       }
@@ -104,16 +107,28 @@ SF.products = function (opts) {
         active: String(p.Active).toLowerCase() !== 'no',
         sort: SF.num(p.Sort),
         available: available === Infinity ? null : available,
-        onHand: hand[id] || 0,
+        // A package holds no stock of its own: its jars are on the shelf, and only they count.
+        onHand: type === 'package' ? 0 : (hand[id] || 0),
         cost: unitCost,
         margin: price - unitCost,
-        marginPct: price > 0 ? (price - unitCost) / price * 100 : 0
+        marginPct: price > 0 ? (price - unitCost) / price * 100 : 0,
+        _contents: type === 'package' ? p.Contents : null
       };
+    });
+
+  SF.fillPackages(all);
+
+  return all
+    .filter(function (p) {
+      return opts.all || p.active;
     })
     .sort(function (a, b) {
       return a.sort - b.sort || a.name.localeCompare(b.name);
     });
 };
+
+/** Does this product keep a count on the shelf? Made-to-order items and packages do not. */
+SF.holdsStock = function (p) { return p.type !== 'made' && p.type !== SF.PACKAGE; };
 
 SF.byId = function (list, id) {
   for (var i = 0; i < list.length; i++) if (list[i].id === String(id)) return list[i];
@@ -125,6 +140,150 @@ SF.move = function (productId, qty, type, ref, marketId) {
     When: new Date(), ProductId: productId, Qty: qty, Type: type,
     Ref: ref || '', MarketId: marketId || SF.activeMarket()
   });
+};
+
+/* =========================================================================
+   1b. PACKAGES (bundles of jars)
+   -------------------------------------------------------------------------
+   A package is a product of type `package` whose Contents column says what is
+   in the box. It has no stock of its own: how many can be sold is the lowest
+   stock among its contents, and selling one takes each content jar off the
+   shelf as ordinary ledger Movements (never a count written directly). Its
+   price is the price of the whole box, box included.
+
+   Contents is a JSON list of slots:
+     {id: 'P12', qty: 1}                           a fixed jar
+     {pick: 2, size: '125 ml', label: 'Any two 125 ml jars'}
+                                                    jars the buyer chooses; the
+                                                    choices are the active jars of
+                                                    that size (Jams, Marmalades,
+                                                    Chutney-style jams unless `cats`
+                                                    says otherwise, or `from` lists
+                                                    the ids), repeats allowed
+   Add `numbered: true` to a pick slot when the jars are packed in order (1, 2, 3...).
+   A package with a pick slot is sold one box at a time (each box has its own jars).
+   ========================================================================= */
+
+SF.PACKAGE = 'package';
+SF.PACKAGE_CATS = ['Jams', 'Marmalades', 'Chutney-style jams'];
+
+/** The slots of a package, cleaned: anything unreadable is dropped. */
+SF.packageSlots = function (raw) {
+  var list = SF.json(raw, []);
+  if (!Array.isArray(list)) return [];
+  var out = [];
+  list.forEach(function (s) {
+    if (!s || typeof s !== 'object') return;
+    if (s.pick !== undefined) {
+      var n = Math.floor(SF.num(s.pick));
+      if (n < 1 || n > 24) return;
+      out.push({ pick: n, size: String(s.size || ''), label: String(s.label || '').slice(0, 60),
+                 cats: Array.isArray(s.cats) && s.cats.length ? s.cats.map(String) : SF.PACKAGE_CATS,
+                 from: Array.isArray(s.from) ? s.from.map(String) : [], numbered: !!s.numbered });
+    } else if (s.id) {
+      var q = Math.floor(SF.num(s.qty)) || 1;
+      if (q >= 1 && q <= 24) out.push({ id: String(s.id), qty: q });
+    }
+  });
+  return out;
+};
+
+/** The jars a pick slot may be filled from. */
+SF.pickChoices = function (slot, all) {
+  return all.filter(function (c) {
+    if (c.type !== 'stocked' || !c.active) return false;
+    if (slot.from.length) return slot.from.indexOf(c.id) !== -1;
+    return c.variant === slot.size && slot.cats.indexOf(c.category) !== -1;
+  });
+};
+
+/**
+ * Work out each package's slots, how many boxes can be made now, and what a box costs.
+ * `all` is every product (switched off ones too): a jar that is switched off cannot be sold,
+ * so a package that needs it shows as sold out.
+ */
+SF.fillPackages = function (all) {
+  var byId = {};
+  all.forEach(function (p) { byId[p.id] = p; });
+  all.forEach(function (p) {
+    if (p.type !== SF.PACKAGE) return;
+    var slots = SF.packageSlots(p._contents), shown = [], limit = Infinity, cost = 0, choosing = false;
+    delete p._contents;
+    p.slotDefs = slots;
+    slots.forEach(function (s) {
+      if (s.pick !== undefined) {
+        choosing = true;
+        var ch = SF.pickChoices(s, all), room = 0, unlimited = false, costs = [];
+        ch.forEach(function (c) {
+          if (c.available === null) unlimited = true; else room += c.available;
+          if (c.cost > 0) costs.push(c.cost);
+        });
+        if (!unlimited) limit = Math.min(limit, Math.floor(room / s.pick));
+        if (costs.length) cost += s.pick * costs.reduce(function (a, b) { return a + b; }, 0) / costs.length;
+        shown.push({ kind: 'pick', n: s.pick, size: s.size, numbered: s.numbered,
+                     label: s.label || ('Choose ' + s.pick + (s.size ? ' × ' + s.size : '')),
+                     choices: ch.map(function (c) {
+                       return { id: c.id, name: c.name, variant: c.variant, available: c.available };
+                     }) });
+      } else {
+        var c = byId[s.id];
+        if (!c || !c.active || c.type === SF.PACKAGE) { limit = 0; shown.push({ kind: 'fixed', id: s.id, qty: s.qty, name: '(not available)', available: 0 }); return; }
+        if (c.available !== null) limit = Math.min(limit, Math.floor(c.available / s.qty));
+        cost += c.cost * s.qty;
+        shown.push({ kind: 'fixed', id: c.id, qty: s.qty, name: c.name + (c.variant ? ' ' + c.variant : ''),
+                     available: c.available, made: c.type === 'made' });
+      }
+    });
+    if (!slots.length) limit = 0;       // an empty box cannot be sold
+    p.slots = shown;
+    p.choosing = choosing;
+    p.available = limit === Infinity ? null : Math.max(0, limit);
+    p.cost = cost;
+    p.margin = p.price - cost;
+    p.marginPct = p.price > 0 ? (p.price - cost) / p.price * 100 : 0;
+  });
+};
+
+/**
+ * Fill in a package for one order line: which jars go in the box. Returns
+ * {ok, contents: [{id, name, qty, made}] (for the whole line), chosen: [names, in order]}.
+ * `line.picks` is a list of lists, one per pick slot, of jar ids; a package with a pick slot is
+ * one box per line.
+ */
+SF.resolvePackage = function (product, line, catalogue) {
+  var slots = product.slotDefs || [];
+  var qty = Math.floor(SF.num(line.qty)) || 0;
+  var picks = Array.isArray(line.picks) ? line.picks : [], at = 0;
+  var sum = {}, order = [], chosen = [];
+  function put(c, n) {
+    if (!sum[c.id]) { sum[c.id] = { id: c.id, name: c.name + (c.variant ? ' ' + c.variant : ''), qty: 0,
+                                    made: c.type === 'made' }; order.push(c.id); }
+    sum[c.id].qty += n;
+  }
+  if (!slots.length) return { ok: false, message: product.name + ' is not ready to sell yet.' };
+  for (var i = 0; i < slots.length; i++) {
+    var s = slots[i];
+    if (s.pick !== undefined) {
+      if (qty !== 1) return { ok: false, message: 'Add each ' + product.name + ' on its own, so each box gets its own jars.' };
+      var mine = Array.isArray(picks[at]) ? picks[at].map(String) : [];
+      at++;
+      var allowed = SF.pickChoices(s, catalogue);
+      if (mine.length !== s.pick) {
+        return { ok: false, message: 'Choose ' + s.pick + (s.pick === 1 ? ' jar' : ' jars') + ' for the ' + product.name + '.' };
+      }
+      for (var j = 0; j < mine.length; j++) {
+        var pick = SF.byId(allowed, mine[j]);
+        if (!pick) return { ok: false, message: 'That jar cannot go in the ' + product.name + '.' };
+        put(pick, 1);
+        chosen.push((s.numbered ? (j + 1) + '. ' : '') + pick.name + (pick.variant ? ' ' + pick.variant : ''));
+      }
+    } else {
+      var c = SF.byId(catalogue, s.id);
+      if (!c || c.type === SF.PACKAGE) return { ok: false, message: product.name + ' is not available right now.' };
+      put(c, s.qty * qty);
+    }
+  }
+  return { ok: true, contents: order.map(function (id) { return sum[id]; }), chosen: chosen };
 };
 
 /* =========================================================================
@@ -173,6 +332,7 @@ SF.buildLines = function (rawLines, ctx, opts) {
   opts = opts || {};
   var catalogue = SF.products({ market: opts.market });
   var out = [], units = 0, total = 0, cost = 0;
+  var used = {};     // jars already taken by earlier lines of this order, whole boxes included
 
   for (var i = 0; i < (rawLines || []).length; i++) {
     var raw = rawLines[i];
@@ -183,15 +343,45 @@ SF.buildLines = function (rawLines, ctx, opts) {
     var priced = SF.priceLine(product, raw, ctx);
     if (priced.units <= 0) continue;
 
-    var free = product.available;
-    if (free !== null && priced.units > free + 1e-9) {
-      var word = product.type === 'made' ? 'left to make today' : 'left';
-      return {
-        ok: false,
-        message: free <= 0
-          ? product.name + ' is finished for today.'
-          : 'Only ' + SF.showQty(free, product.unit) + ' of ' + product.name + ' ' + word + '.'
-      };
+    if (product.type === SF.PACKAGE) {
+      var box = SF.resolvePackage(product, raw, catalogue);
+      if (!box.ok) return box;
+      for (var k = 0; k < box.contents.length; k++) {
+        var c = box.contents[k], cp = SF.byId(catalogue, c.id);
+        if (!cp || cp.available === null || c.made) {
+          if (c.made && cp && cp.available !== null && (used[c.id] || 0) + c.qty > cp.available) {
+            return { ok: false, message: 'Not enough ' + cp.name + ' left to make for the ' + product.name + '.' };
+          }
+          continue;
+        }
+        if ((used[c.id] || 0) + c.qty > cp.available + 1e-9) {
+          return { ok: false, message: cp.available - (used[c.id] || 0) <= 0
+            ? c.name + ' is finished, so the ' + product.name + ' cannot be made.'
+            : 'Only ' + SF.showQty(cp.available - (used[c.id] || 0), cp.unit) + ' of ' + c.name +
+              ' left for the ' + product.name + '.' };
+        }
+      }
+      var boxCost = 0;
+      box.contents.forEach(function (c) {
+        used[c.id] = (used[c.id] || 0) + c.qty;
+        var cp = SF.byId(catalogue, c.id);
+        boxCost += (cp ? cp.cost : 0) * c.qty;
+      });
+      priced.contents = box.contents;
+      if (box.chosen.length) priced.chosen = box.chosen;
+      priced.cost = boxCost;
+    } else {
+      var free = product.available === null ? null : product.available - (used[product.id] || 0);
+      if (free !== null && priced.units > free + 1e-9) {
+        var word = product.type === 'made' ? 'left to make today' : 'left';
+        return {
+          ok: false,
+          message: free <= 0
+            ? product.name + ' is finished for today.'
+            : 'Only ' + SF.showQty(free, product.unit) + ' of ' + product.name + ' ' + word + '.'
+        };
+      }
+      used[product.id] = (used[product.id] || 0) + priced.units;
     }
     if (opts.max && product.type !== 'weighed' && priced.qty > opts.max) {
       return { ok: false, message: 'You can reserve up to ' + opts.max + ' of any one thing.' };
@@ -505,6 +695,15 @@ SF.commitLines = function (lines, ref, direction, marketId) {
   lines.forEach(function (l) {
     var p = SF.byId(catalogue, l.id);
     if (!p || p.type === 'made') return;
+    if (p.type === SF.PACKAGE || l.contents) {
+      // A package takes its own jars off the shelf (and puts the same ones back on a cancel):
+      // the box has no stock of its own. Made-to-order contents are capacity, not stock.
+      (l.contents || []).forEach(function (c) {
+        if (c.made) return;
+        SF.move(c.id, direction * c.qty, direction < 0 ? 'sale' : 'return', ref + ' · ' + l.name, marketId);
+      });
+      return;
+    }
     SF.move(l.id, direction * l.units, direction < 0 ? 'sale' : 'return', ref, marketId);
   });
 };
@@ -546,7 +745,7 @@ SF.action('catalogue', null, 'read', function (p) {
       return {
         id: p.id, name: p.name, variant: p.variant, category: p.category,
         type: p.type, unit: p.unit, weighed: p.weighed, price: p.price,
-        options: p.options, available: p.available
+        options: p.options, available: p.available, slots: p.slots
       };
     })
   };
@@ -660,7 +859,7 @@ SF.action('till', 'sell', 'read', function (p) {
     products: SF.products(forHere).map(function (p) {
       return { id: p.id, name: p.name, variant: p.variant, category: p.category,
                type: p.type, unit: p.unit, weighed: p.weighed, price: p.price,
-               options: p.options, available: p.available };
+               options: p.options, available: p.available, slots: p.slots };
     }),
     unpaid: orders.filter(function (o) { return o.status === 'reserved' && !o.delivery; })
                   .sort(function (a, b) { return a.when - b.when; }),
@@ -1040,6 +1239,7 @@ SF.action('addBatch', 'stock', 'write', function (p, ctx) {
 
   var product = SF.byId(SF.products({ all: true }), productId);
   if (!product) return { ok: false, message: 'Product not found.' };
+  if (product.type === SF.PACKAGE) return { ok: false, message: 'A package is not cooked: cook the jars that go in it.' };
 
   var id = 'B-' + ('000' + (SF.rows('batches').length + 1)).slice(-3);
   SF.append('batches', {
@@ -1085,7 +1285,7 @@ SF.action('saveProduct', 'stock', 'write', function (p) {
   var price = Math.round(SF.num(p.price) * 100) / 100;
 
   if (name.length < 2) return { ok: false, message: 'Give it a name.' };
-  if (['stocked', 'made', 'weighed'].indexOf(type) === -1) {
+  if (['stocked', 'made', 'weighed', 'package'].indexOf(type) === -1) {
     return { ok: false, message: 'That is not a product type I know.' };
   }
   if (!SF.UNITS[unit]) return { ok: false, message: 'That is not a unit I know.' };
@@ -1094,6 +1294,16 @@ SF.action('saveProduct', 'stock', 'write', function (p) {
   if (price <= 0) return { ok: false, message: 'Set a selling price.' };
 
   var existing = p.productId ? SF.byId(SF.products({ all: true }), p.productId) : null;
+  if (type === SF.PACKAGE && !(existing && existing.type === SF.PACKAGE)) {
+    return { ok: false, message: 'Packages are set up by StallFlow, not added here.' };
+  }
+  if (existing && existing.type === SF.PACKAGE) {
+    // A package keeps its type and contents; only its name, price and whether it is on can change here.
+    SF.setCell('products', existing.row, 'Name', name);
+    SF.setCell('products', existing.row, 'Price', price);
+    SF.setCell('products', existing.row, 'Active', p.active === false ? 'No' : 'Yes');
+    return { ok: true, id: existing.id };
+  }
   var fields = {
     Name: name, Variant: String(p.variant || '').slice(0, 30), Type: type,
     Category: String(p.category || '').slice(0, 30), Unit: unit, Price: price,
@@ -1129,6 +1339,9 @@ SF.action('adjustStock', 'stock', 'write', function (p, ctx) {
   if (!product) return { ok: false, message: 'Product not found.' };
   if (product.type === 'made') {
     return { ok: false, message: 'Made-to-order items have a daily capacity, not a stock count.' };
+  }
+  if (product.type === SF.PACKAGE) {
+    return { ok: false, message: 'A package has no stock of its own: change the stock of the jars in it.' };
   }
   SF.move(product.id, n, 'adjust', String(p.reason || '').slice(0, 60));
   SF.audit(ctx, 'adjustStock', product.name, n + ' — ' + (p.reason || 'no reason given'), 'ok');
@@ -1774,7 +1987,7 @@ SF.countReview = function (row) {
     if (at[id] !== undefined && t <= at[id]) atCount[id] = (atCount[id] || 0) + q;
   });
   var cost = SF.costPerUnit(), r3 = function (n) { return Math.round(n * 1000) / 1000; };
-  return SF.products({ all: true }).filter(function (p) { return p.type !== 'made'; }).map(function (p) {
+  return SF.products({ all: true }).filter(function (p) { return SF.holdsStock(p); }).map(function (p) {
     var c = counted[p.id], hand = now[p.id] || 0;
     var had = c === undefined ? hand : (atCount[p.id] || 0);
     return { id: p.id, name: p.name, variant: p.variant, unit: p.unit,
@@ -1793,7 +2006,7 @@ SF.action('countState', 'count', 'read', function (p, ctx) {
     locations: locations,
     canStart: SF.can(ctx.role, 'stock'), canManage: SF.can(ctx.role, 'stock'),
     canApprove: ctx.role === 'owner',
-    products: SF.products({ all: true }).filter(function (x) { return x.type !== 'made'; }).map(function (x) {
+    products: SF.products({ all: true }).filter(function (x) { return SF.holdsStock(x); }).map(function (x) {
       return { id: x.id, name: x.name, variant: x.variant, category: x.category, unit: x.unit,
                weighed: x.weighed, active: x.active };
     }),
@@ -1864,7 +2077,7 @@ SF.action('countDetail', 'stock', 'read', function (p) {
 SF.action('countStart', 'stock', 'write', function (p, ctx) {
   if (SF.openCount()) return { ok: false, message: 'A stocktake is already going. Finish or cancel it first.' };
   var hand = SF.onHand(), snap = {};
-  SF.products({ all: true }).forEach(function (x) { if (x.type !== 'made') snap[x.id] = hand[x.id] || 0; });
+  SF.products({ all: true }).forEach(function (x) { if (SF.holdsStock(x)) snap[x.id] = hand[x.id] || 0; });
   var id = 'ST' + ('00' + (SF.rows('stockcounts').length + 1)).slice(-3);
   SF.append('stockcounts', { CountId: id, StartedAt: new Date(), StartedBy: ctx.user || ctx.role,
                              Status: 'open', Snapshot: JSON.stringify(snap) });
@@ -1901,7 +2114,7 @@ SF.action('countSave', 'count', 'write', function (p, ctx) {
   var clean = [];
   for (var i = 0; i < lines.length; i++) {
     var id = String(lines[i] && lines[i].id || ''), q = Number(lines[i] && lines[i].qty);
-    if (!known[id] || known[id].type === 'made') continue;
+    if (!known[id] || !SF.holdsStock(known[id])) continue;
     if (!(q >= 0) || q > 100000) return { ok: false, message: 'A count of ' + lines[i].qty + ' does not look right.' };
     if (q > 0) clean.push({ id: id, qty: Math.round(q * 1000) / 1000 });
   }
