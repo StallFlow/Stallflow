@@ -1,0 +1,12 @@
+{
+  "name": "stallflow-chatgpt-relay",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "bundle": "esbuild worker.js --bundle --format=esm --platform=neutral --main-fields=module,main --external:cloudflare:* --outfile=dist/worker.js",
+    "test": "node test.mjs",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": { "@cloudflare/workers-oauth-provider": "1.2.4" },
+  "devDependencies": { "esbuild": "^0.28.2", "miniflare": "^4.20260730.0", "wrangler": "^4.0.0" }
+}

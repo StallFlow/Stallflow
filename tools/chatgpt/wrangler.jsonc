@@ -1,0 +1,16 @@
+// Deploy:  cd tools/chatgpt && npx wrangler deploy   (or paste dist/worker.js in the Cloudflare dashboard)
+{
+  "name": "stallflow-chatgpt-duxies",
+  "main": "worker.js",
+  "compatibility_date": "2026-11-01",
+  // Lets the sign-in accept ChatGPT's client metadata documents safely (public addresses only).
+  "compatibility_flags": ["global_fetch_strictly_public"],
+  "kv_namespaces": [{ "binding": "OAUTH_KV", "id": "PUT-THE-KV-NAMESPACE-ID-HERE" }],
+  "vars": {
+    "STALL_API": "https://script.google.com/macros/s/AKfycbzT__IC8WZBjSLa5mE067GriRLSXNTQRcpsiMcazDqbOdnHHGfCw4NodxhNbaWwetEw4w/exec",
+    "ALLOWED_EMAILS": "stallflow910803@gmail.com",
+    "GOOGLE_CLIENT_ID": "385335470126-0c11amdmojlqns2tdhv9qfch6227ti7c.apps.googleusercontent.com"
+  }
+  // Secrets (never in this file):  npx wrangler secret put GOOGLE_CLIENT_SECRET
+  //                                npx wrangler secret put STALL_KEY
+}

@@ -484,13 +484,14 @@ SF.lock = function (fn) {
 function doGet(e) {
   var p = (e && e.parameter) || {};
   if (p.mcp) return SF.mcpReply(null, p.mcp);
+  if (p.design) return SF.mcpReply(null, p.design, SF.mcpDesign);
   if (!p.action) return SF.engineRoom();
   return SF.reply(SF.safely(String(p.action), p));
 }
 
-/** The Claude connector: the address carries the key (?mcp=KEY). */
-SF.mcpReply = function (body, key) {
-  var r = SF.mcp(key, body);
+/** A connector: the address carries the key (?mcp=KEY for Claude, ?design=KEY for ChatGPT). */
+SF.mcpReply = function (body, key, serve) {
+  var r = (serve || SF.mcp)(key, body);
   if (r.error) return SF.reply({ jsonrpc: '2.0', id: null, error: r.error });
   if (r.reply === null || r.reply === undefined || (Array.isArray(r.reply) && !r.reply.length)) {
     return ContentService.createTextOutput('');
@@ -503,6 +504,11 @@ function doPost(e) {
     var mb;
     try { mb = JSON.parse(e.postData.contents || '{}'); } catch (err) { mb = {}; }
     return SF.mcpReply(mb, e.parameter.mcp);
+  }
+  if (e && e.parameter && e.parameter.design) {
+    var db;
+    try { db = JSON.parse(e.postData.contents || '{}'); } catch (err) { db = {}; }
+    return SF.mcpReply(db, e.parameter.design, SF.mcpDesign);
   }
   var body;
   try { body = JSON.parse(e.postData.contents || '{}'); }
