@@ -18,7 +18,7 @@
 var SF = SF || {};
 
 SF.VERSION = '2.0.0';
-SF.SCHEMA = 11;                       // bump when SHEETS changes; see MIGRATIONS
+SF.SCHEMA = 12;                       // bump when SHEETS changes; see MIGRATIONS
 SF.TZ = 'Africa/Johannesburg';
 
 /* =========================================================================
@@ -34,7 +34,7 @@ SF.SHEETS = {
   movements: ['When', 'ProductId', 'Qty', 'Type', 'Ref', 'MarketId'],
   orders:    ['OrderNo', 'When', 'MarketId', 'Channel', 'Customer', 'Phone', 'Lines',
               'Units', 'Total', 'Cost', 'Status', 'PaidAt', 'CollectedAt', 'Note', 'Consent',
-              'Paid'],
+              'Paid', 'Delivery'],
   markets:   ['MarketId', 'Name', 'Date', 'Location', 'Status', 'Note', 'Orders', 'Archived'],
   expenses:  ['ExpenseId', 'MarketId', 'Description', 'Amount', 'Category', 'When'],
   ops:       ['OpId', 'When', 'Action', 'Result'],
@@ -608,6 +608,11 @@ SF.MIGRATIONS = [
         var col = head.indexOf(h) + 1;
         if (String(s.getRange(1, col).getValue()) !== h) s.getRange(1, col).setValue(h);
       });
+    } },
+  { to: 12, what: 'Add Delivery to Orders for courier orders', run: function () {
+      // One new heading at the end; blank means collected, not couriered.
+      var s = SF.sheet('orders'), col = SF.SHEETS.orders.indexOf('Delivery') + 1;
+      if (String(s.getRange(1, col).getValue()) !== 'Delivery') s.getRange(1, col).setValue('Delivery');
     } }
 ];
 

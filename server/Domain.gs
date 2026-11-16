@@ -345,16 +345,119 @@ SF.purgeCustomers = function () {
     var home = String(o.MarketId) === SF.HOME;
     var finished = /^(collected|cancelled)$/.test(String(o.Status));
     if (home ? !finished : !over[String(o.MarketId)]) return;
-    if (!o.Phone && String(o.Customer) === 'Customer') return;
+    if (!o.Phone && String(o.Customer) === 'Customer' && !SF.hasWhere(o.Delivery)) return;
     SF.setCell('orders', o._row, 'Customer', 'Customer');
     SF.setCell('orders', o._row, 'Phone', '');
     SF.setCell('orders', o._row, 'Note', '');
+    SF.wipeDelivery(o._row, o.Delivery);
     n++;
   });
   SF.set('lastPurge', today);
   if (n) SF.audit({ role: 'system' }, 'purgeCustomers', '', n + ' orders', 'ok');
   return n;
 };
+
+/* =========================================================================
+   3b. COURIER TO YOU
+   -------------------------------------------------------------------------
+   Orders between markets can be sent by courier: a locker or an address. The
+   customer pays the goods plus the courier fee by EFT. The fee is passed on to
+   the courier, so it is never part of an order's Total (takings stay goods
+   only); it is kept in the order's Delivery next to where it goes. Where it
+   goes is wiped the moment the order is marked sent, or when it is cancelled.
+   ========================================================================= */
+
+SF.COURIER_MODES = ['locker', 'address'];
+
+/** A fee setting: a number of rand, or null when blank (that way of sending is off). */
+SF.feeSetting = function (key) {
+  var v = SF.get(key, '');
+  if (v === '' || v === null || v === undefined) return null;
+  var n = Number(v);
+  return isFinite(n) && n >= 0 ? Math.round(n * 100) / 100 : null;
+};
+
+SF.courier = function () {
+  var locker = SF.feeSetting('courierLockerFee'), address = SF.feeSetting('courierAddressFee');
+  var min = Math.floor(SF.num(SF.get('courierMinJars', 3))) || 3;
+  return {
+    on: String(SF.get('courierOn', 'no')) === 'yes' && (locker !== null || address !== null),
+    name: String(SF.get('courierName', '')),
+    lockerFee: locker, addressFee: address, minJars: min
+  };
+};
+
+SF.eft = function () {
+  var e = SF.json(SF.get('eft', '{}'), {});
+  return { bank: String(e.bank || ''), holder: String(e.holder || ''), account: String(e.account || ''),
+           branch: String(e.branch || ''), type: String(e.type || '') };
+};
+
+/** Courier is for 3 or more jars (or any package): counts what is counted, not weighed. */
+SF.courierEligible = function (lines, catalogue) {
+  var c = SF.courier(), units = 0, pack = false;
+  (lines || []).forEach(function (l) {
+    var p = SF.byId(catalogue, l.id);
+    if (!p || SF.num(l.qty) <= 0) return;
+    if (p.type === 'package') pack = true;
+    else if (p.type !== 'weighed') units += Math.floor(SF.num(l.qty));
+  });
+  return pack || units >= c.minJars;
+};
+
+SF.hasWhere = function (delivery) {
+  var d = SF.json(delivery, null);
+  return !!(d && d.where);
+};
+
+/** Keep the way it was sent and the fee, drop where it went. */
+SF.wipeDelivery = function (row, delivery) {
+  var d = SF.json(delivery, null);
+  if (!d || !d.where) return;
+  d.where = '';
+  SF.setCell('orders', row, 'Delivery', JSON.stringify(d));
+};
+
+/** What this order is worth in total to the customer: goods plus courier fee. */
+SF.toPay = function (o) {
+  return Math.round((o.total + (o.delivery ? SF.num(o.delivery.fee) : 0)) * 100) / 100;
+};
+
+SF.action('courierSettings', 'settings', 'read', function () {
+  var c = SF.courier();
+  return { ok: true, on: String(SF.get('courierOn', 'no')) === 'yes', name: c.name,
+           lockerFee: c.lockerFee === null ? '' : c.lockerFee,
+           addressFee: c.addressFee === null ? '' : c.addressFee,
+           minJars: c.minJars, eft: SF.eft() };
+});
+
+SF.action('saveCourier', 'settings', 'write', function (p, ctx) {
+  function fee(v) {
+    if (v === '' || v === null || v === undefined) return '';
+    var n = Number(String(v).replace(',', '.'));
+    return isFinite(n) && n >= 0 && n <= 2000 ? Math.round(n * 100) / 100 : null;
+  }
+  var locker = fee(p.lockerFee), address = fee(p.addressFee);
+  if (locker === null || address === null) return { ok: false, message: 'A courier fee is an amount in rand, like 65.' };
+  var min = Math.floor(SF.num(p.minJars)), giveMin = p.minJars !== undefined && p.minJars !== '';
+  if (giveMin && (min < 1 || min > 24)) return { ok: false, message: 'Courier starts at between 1 and 24 jars.' };
+  var e = p.eft || {}, eft = {};
+  ['bank', 'holder', 'account', 'branch', 'type'].forEach(function (k) {
+    eft[k] = String(e[k] === undefined ? SF.eft()[k] : e[k]).trim().slice(0, 60);
+  });
+  if (p.on && locker === '' && address === '') {
+    return { ok: false, message: 'Put in a fee for a locker or an address (0 if you do not charge).' };
+  }
+  if (p.on && !eft.account) return { ok: false, message: 'Add your bank account number so customers know where to pay.' };
+  SF.set('courierOn', p.on ? 'yes' : 'no');
+  SF.set('courierName', String(p.name || '').trim().slice(0, 40));
+  SF.set('courierLockerFee', locker); SF.set('courierAddressFee', address);
+  if (giveMin) SF.set('courierMinJars', min);
+  SF.set('eft', eft);
+  // The audit trail names the setting, never the bank details.
+  SF.audit(ctx, 'saveCourier', '', (p.on ? 'courier on' : 'courier off'), 'ok');
+  return { ok: true };
+});
 
 /* =========================================================================
    4. ORDERS
@@ -374,7 +477,9 @@ SF.orders = function () {
       units: SF.num(o.Units), total: SF.num(o.Total), cost: SF.num(o.Cost),
       status: String(o.Status || 'reserved'),
       note: String(o.Note || ''),
-      paid: SF.payMethod(o.Paid)
+      paid: SF.payMethod(o.Paid),
+      // Courier orders only: {mode: 'locker'|'address', where, fee}. `where` is wiped once sent.
+      delivery: SF.json(o.Delivery, null)
     };
   });
 };
@@ -423,6 +528,13 @@ SF.action('catalogue', null, 'read', function (p) {
     asked: String((p && p.market) || ''),
     markets: SF.orderableMarkets(),
     maxPerLine: SF.num(SF.get('maxPerLine', 12)) || 12,
+    // Courier is for orders between markets only. Bank details are never listed here.
+    courier: home && SF.courier().on ? (function (c) {
+      var modes = [];
+      if (c.lockerFee !== null) modes.push({ id: 'locker', fee: c.lockerFee });
+      if (c.addressFee !== null) modes.push({ id: 'address', fee: c.addressFee });
+      return { name: c.name, minJars: c.minJars, modes: modes };
+    })(SF.courier()) : null,
     consentText: home
       ? SF.get('homeConsentText',
           'We keep your name and number only to arrange handing your order over, ' +
@@ -465,19 +577,43 @@ SF.action('placeOrder', null, 'write', function (p, ctx) {
   var built = SF.buildLines(p.lines, ctx, { max: SF.num(SF.get('maxPerLine', 12)) || 12, market: market });
   if (!built.ok) return built;
 
+  var delivery = null;
+  if (p.delivery) {
+    var c = SF.courier(), mode = String(p.delivery.mode || ''), where = String(p.delivery.where || '').trim().slice(0, 160);
+    if (!c.on || market !== SF.HOME) return { ok: false, message: 'Courier is not on right now. Choose collection instead.' };
+    if (!SF.courierEligible(built.lines, SF.products({ all: true }))) {
+      return { ok: false, message: 'Courier is for ' + c.minJars + ' or more jars, or a package.' };
+    }
+    var fee = mode === 'locker' ? c.lockerFee : mode === 'address' ? c.addressFee : null;
+    if (SF.COURIER_MODES.indexOf(mode) === -1 || fee === null) {
+      return { ok: false, message: 'Choose a locker or an address.' };
+    }
+    if (where.length < 6) {
+      return { ok: false, message: mode === 'locker' ? 'Tell us which locker.' : 'We still need the delivery address.' };
+    }
+    delivery = { mode: mode, where: where, fee: fee };
+  }
+
   var no = SF.nextOrderNo();
   SF.append('orders', {
     OrderNo: no, When: new Date(), MarketId: market, Channel: 'preorder',
     Customer: name, Phone: "'" + phone, Lines: JSON.stringify(built.lines),
     Units: built.units, Total: built.total, Cost: built.cost, Status: 'reserved',
     PaidAt: '', CollectedAt: '', Note: String(p.note || '').slice(0, 140),
-    Consent: new Date()
+    Consent: new Date(), Delivery: delivery ? JSON.stringify(delivery) : ''
   });
   SF.commitLines(built.lines, no, -1, market);
   SF.emit('order.placed', { orderNo: no, total: built.total, lines: built.lines }, ctx);
 
-  return { ok: true, orderNo: no, total: built.total, units: built.units, name: name,
-           note: String(p.note || '').slice(0, 140), market: SF.publicMarket(m) };
+  var reply = { ok: true, orderNo: no, total: built.total, units: built.units, name: name,
+                note: String(p.note || '').slice(0, 140), market: SF.publicMarket(m) };
+  if (delivery) {
+    // Only the person who just ordered sees the bank details, once, and they pay by EFT.
+    reply.delivery = { mode: delivery.mode, fee: delivery.fee, courier: SF.courier().name };
+    reply.toPay = Math.round((built.total + delivery.fee) * 100) / 100;
+    reply.eft = SF.eft();
+  }
+  return reply;
 });
 
 /* =========================================================================
@@ -526,11 +662,11 @@ SF.action('till', 'sell', 'read', function (p) {
                type: p.type, unit: p.unit, weighed: p.weighed, price: p.price,
                options: p.options, available: p.available };
     }),
-    unpaid: orders.filter(function (o) { return o.status === 'reserved'; })
+    unpaid: orders.filter(function (o) { return o.status === 'reserved' && !o.delivery; })
                   .sort(function (a, b) { return a.when - b.when; }),
     // Paid but not handed over: only happens with the Collect step on, or from
     // before it was switched off. The till offers to finish these.
-    waiting: orders.filter(function (o) { return o.status === 'paid' && o.channel === 'preorder'; })
+    waiting: orders.filter(function (o) { return o.status === 'paid' && o.channel === 'preorder' && !o.delivery; })
                    .sort(function (a, b) { return a.when - b.when; }),
     collect: SF.collectOn(),
     totals: t,
@@ -591,10 +727,11 @@ SF.action('markPaid', 'sell', 'write', function (p, ctx) {
   var o = SF.findOrder(p.orderNo);
   if (!o) return { ok: false, message: 'Order not found.' };
   if (o.status === 'cancelled') return { ok: false, message: 'That order was cancelled.' };
-  var now = new Date(), handOver = !SF.collectOn() && o.status !== 'collected';
+  // A courier order is paid by EFT and stays "paid" until it is sent, whatever Collect is set to.
+  var now = new Date(), handOver = !SF.collectOn() && o.status !== 'collected' && !o.delivery;
   SF.setCell('orders', o.row, 'Status', o.status === 'collected' || handOver ? 'collected' : 'paid');
   SF.setCell('orders', o.row, 'PaidAt', now);
-  SF.setCell('orders', o.row, 'Paid', SF.payMethod(p.paid));
+  SF.setCell('orders', o.row, 'Paid', o.delivery ? 'eft' : SF.payMethod(p.paid));
   SF.emit('order.paid', { orderNo: o.no, total: o.total }, ctx);
   if (handOver) {
     // No separate hand-over at this stall: paying at the table is collecting.
@@ -609,10 +746,33 @@ SF.action('markCollected', 'sell', 'write', function (p, ctx) {
   var o = SF.findOrder(p.orderNo);
   if (!o) return { ok: false, message: 'Order not found.' };
   if (o.status === 'reserved') return { ok: false, message: 'Take the money first.' };
+  if (o.delivery) return { ok: false, message: 'That one goes by courier. Use Sent once it is with the courier.' };
   SF.setCell('orders', o.row, 'Status', 'collected');
   SF.setCell('orders', o.row, 'CollectedAt', new Date());
   SF.emit('order.completed', { orderNo: o.no, total: o.total, lines: o.lines,
                                channel: 'preorder' }, ctx);
+  return { ok: true };
+});
+
+/**
+ * A courier order is with the courier. The order stays (so the numbers add up); the name, number,
+ * note and where it went are wiped now, not at the next daily clean-up.
+ */
+SF.action('markSent', 'sell', 'write', function (p, ctx) {
+  var o = SF.findOrder(p.orderNo);
+  if (!o) return { ok: false, message: 'Order not found.' };
+  if (!o.delivery) return { ok: false, message: 'That is not a courier order.' };
+  if (o.status === 'cancelled') return { ok: false, message: 'That order was cancelled.' };
+  if (o.status === 'collected') return { ok: true };
+  if (o.status === 'reserved') return { ok: false, message: 'Wait for the payment first.' };
+  SF.setCell('orders', o.row, 'Status', 'collected');
+  SF.setCell('orders', o.row, 'CollectedAt', new Date());
+  SF.setCell('orders', o.row, 'Customer', 'Customer');
+  SF.setCell('orders', o.row, 'Phone', '');
+  SF.setCell('orders', o.row, 'Note', '');
+  SF.wipeDelivery(o.row, JSON.stringify(o.delivery));
+  SF.emit('order.completed', { orderNo: o.no, total: o.total, lines: o.lines, channel: 'preorder' }, ctx);
+  SF.audit(ctx, 'markSent', o.no, 'sent by courier', 'ok');
   return { ok: true };
 });
 
@@ -622,6 +782,12 @@ SF.action('cancelOrder', 'orders', 'write', function (p, ctx) {
   if (o.status === 'cancelled') return { ok: true };
   SF.commitLines(o.lines, o.no, 1, o.marketId);
   SF.setCell('orders', o.row, 'Status', 'cancelled');
+  if (o.delivery) {
+    SF.wipeDelivery(o.row, JSON.stringify(o.delivery));
+    SF.setCell('orders', o.row, 'Customer', 'Customer');
+    SF.setCell('orders', o.row, 'Phone', '');
+    SF.setCell('orders', o.row, 'Note', '');
+  }
   SF.emit('order.cancelled', { orderNo: o.no }, ctx);
   return { ok: true };
 });
@@ -629,10 +795,22 @@ SF.action('cancelOrder', 'orders', 'write', function (p, ctx) {
 SF.action('queue', 'orders', 'read', function (p) {
   var market = SF.sellMarket(p && p.marketId);
   var all = SF.orders().filter(function (o) {
-    return o.marketId === market && o.channel === 'preorder' && o.status !== 'cancelled';
+    return o.marketId === market && o.channel === 'preorder' && o.status !== 'cancelled' && !o.delivery;
   }).sort(function (a, b) { return a.when - b.when; });
+  // Courier orders are for between markets: listed whichever market this phone is at.
+  var sendable = SF.orders().filter(function (o) {
+    return o.delivery && o.status !== 'cancelled';
+  }).sort(function (a, b) { return a.when - b.when; }).map(function (o) {
+    o.toPay = SF.toPay(o);
+    return o;
+  });
 
   return {
+    courier: {
+      unpaid: sendable.filter(function (o) { return o.status === 'reserved'; }),
+      toSend: sendable.filter(function (o) { return o.status === 'paid'; }),
+      sent: sendable.filter(function (o) { return o.status === 'collected'; }).reverse().slice(0, 12)
+    },
     waiting: all.filter(function (o) { return o.status === 'paid'; }),
     unpaid: all.filter(function (o) { return o.status === 'reserved'; }),
     done: all.filter(function (o) { return o.status === 'collected'; }).reverse().slice(0, 12),
@@ -1277,6 +1455,7 @@ SF.action('releaseUnpaid', 'settings', 'write', function (p, ctx) {
     if (o.marketId !== market || o.status !== 'reserved') return;
     SF.commitLines(o.lines, o.no, 1, o.marketId);
     SF.setCell('orders', o.row, 'Status', 'cancelled');
+    if (o.delivery) SF.wipeDelivery(o.row, JSON.stringify(o.delivery));
     n++;
   });
   return { ok: true, released: n };

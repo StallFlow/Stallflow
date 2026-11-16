@@ -128,7 +128,8 @@
         (d.homeOrders ? 'on' : 'off') + '</div><div class="s">For friends, family and WhatsApp ' +
         'orders when there is no market.</div></div><button class="' + (d.homeOrders ? 'bad' : 'ok') +
         ' sm" onclick="SFA.toggleHome(' + (d.homeOrders ? 'false' : 'true') + ')">' +
-        (d.homeOrders ? 'Switch off' : 'Switch on') + '</button></div>' : '') +
+        (d.homeOrders ? 'Switch off' : 'Switch on') + '</button></div>' +
+        '<button class="ghost block" style="margin-top:10px" onclick="SFA.courierSetup()">Courier to you: set up</button>' : '') +
       '</div>';
   }
 
@@ -819,6 +820,7 @@
     setHomeOrders: 'Orders between markets', setCollectStep: 'The Collect screen',
     saveLabelLook: 'The label look',
     reopenMarket: 'Reopening a market', 'cashup.record': 'A cash-up',
+    saveCourier: 'Courier to you', markSent: 'Sending an order by courier',
     editMarket: 'Changing a market', setMarketOrders: 'Pre-orders for one market',
     archiveMarket: 'Archiving a market', deleteMarket: 'Deleting a market'
   };
@@ -993,6 +995,41 @@
         eachMarket(id, function (m) { m.name = name; m.date = date; m.location = where; });
       });
       SF.toast('Saved');
+    },
+    /** Courier to you: switch on, the fees, the starting number of jars, and the bank details shown after ordering. */
+    courierSetup: function () {
+      SF.get('courierSettings').then(function (r) {
+        var res = r && r.data;
+        if (!res || !res.ok) { SF.toast('Could not reach the shop. This needs signal.', true); return; }
+        var e = res.eft || {};
+        function f(id, label, val, extra) {
+          return '<div class="field"><label for="' + id + '">' + label + '</label><input id="' + id + '" ' + (extra || '') +
+            ' maxlength="60" value="' + esc(val) + '"></div>';
+        }
+        SF.openSheet('<h2>Courier to you</h2>' +
+          '<div class="sub">For orders between markets. Customers pick a locker or an address and pay the courier fee on top, by EFT.</div>' +
+          '<div class="toggle" style="margin:0 0 12px"><div><div class="t">Courier</div></div>' +
+            '<select id="cron"><option value="no"' + (res.on ? '' : ' selected') + '>Off</option>' +
+            '<option value="yes"' + (res.on ? ' selected' : '') + '>On</option></select></div>' +
+          f('crnm', 'Courier name (shown to customers)', res.name) +
+          f('crlf', 'Fee to a locker, in rand (blank: not offered)', res.lockerFee, 'inputmode="decimal"') +
+          f('craf', 'Fee to an address, in rand (blank: not offered)', res.addressFee, 'inputmode="decimal"') +
+          f('crmj', 'Courier starts from this many jars', res.minJars, 'inputmode="numeric"') +
+          '<h3 style="margin:14px 0 6px">Where customers pay (EFT)</h3>' +
+          f('crbk', 'Bank', e.bank) + f('crho', 'Account holder', e.holder) +
+          f('crac', 'Account number', e.account, 'inputmode="numeric"') + f('crbr', 'Branch code', e.branch) +
+          f('crty', 'Account type', e.type) +
+          '<button class="block" onclick="SFA.courierSave()">Save</button>' +
+          '<button class="quiet block" style="margin-top:8px" onclick="SF.closeSheet()">Close</button>');
+      }).catch(function () { SF.toast('Could not reach the shop. This needs signal.', true); });
+    },
+    courierSave: function () {
+      var v = function (id) { return String(SF.el(id).value || '').trim(); };
+      var body = { on: v('cron') === 'yes', name: v('crnm'), lockerFee: v('crlf'), addressFee: v('craf'), minJars: v('crmj'),
+        eft: { bank: v('crbk'), holder: v('crho'), account: v('crac'), branch: v('crbr'), type: v('crty') } };
+      SF.closeSheet();
+      SF.write('saveCourier', body);
+      SF.toast(body.on ? 'Courier to you is on' : 'Courier to you is off');
     },
     marketOrders: function (id, open) {
       SF.closeSheet();

@@ -1510,7 +1510,7 @@ test('schema 11 adds the Orders and Archived headings to Markets', () => {
   const done = SF.migrate();
   assert.ok(done.some((d) => /^11:/.test(d)), done.join(' | '));
   assert.strictEqual(JSON.stringify(sheets.Markets.rows[0].slice(6, 8)), JSON.stringify(['Orders', 'Archived']));
-  assert.strictEqual(SF.SCHEMA, 11);
+  assert.ok(SF.SCHEMA >= 11);
   assert.strictEqual(SF.markets()[0].orders, true, 'blank means pre-orders on');
 });
 
@@ -1611,6 +1611,152 @@ test('only owners and managers change markets', () => {
   [['editMarket', { id: 'M01', name: 'Hack' }], ['archiveMarket', { id: 'M01' }], ['deleteMarket', { id: 'M01' }],
    ['setMarketOrders', { id: 'M01', open: false }]].forEach(([a, p]) =>
     assert.strictEqual(SF.dispatch(a, Object.assign({ token: c, opId: a }, p)).ok, false, a));
+});
+
+
+/* ---------- Courier to you ---------- */
+function courierShop(on) {
+  const env = shop(day(3));
+  const { SF } = env;
+  SF.append('products', { ProductId: 'P02', Name: 'Fig Jam', Type: 'stocked', Unit: 'each', Price: 80, Active: 'Yes', Sort: 20 });
+  SF.move('P02', 10, 'adjust', 'test');
+  SF.set('homeOrders', 'yes');
+  if (on !== false) {
+    const tok = ownerTok(SF);
+    const r = SF.dispatch('saveCourier', { token: tok, opId: 'cs' + (op++), on: true, name: 'The Courier Guy',
+      lockerFee: 60, addressFee: 95, minJars: 3,
+      eft: { bank: 'FNB', holder: 'Duxies', account: '62000000000', branch: '250655', type: 'Cheque' } });
+    assert.strictEqual(r.ok, true, r.message);
+    env.tok = tok;
+  }
+  return env;
+}
+const courierOrder = (SF, extra) => SF.dispatch('placeOrder', Object.assign({
+  opId: 'c' + (op++), name: 'Anna', phone: '082 123 4567', consent: true, market: 'home',
+  lines: [{ id: 'P01', qty: 2 }, { id: 'P02', qty: 1 }],
+  delivery: { mode: 'locker', where: 'Pudo locker, Centurion Mall' } }, extra || {}));
+
+test('the order page offers courier only between markets, and never shows bank details', () => {
+  const { SF } = courierShop();
+  const home = SF.dispatch('catalogue', { market: 'home' }).data;
+  assert.strictEqual(home.courier.minJars, 3);
+  assert.strictEqual(JSON.stringify(home.courier.modes), JSON.stringify([{ id: 'locker', fee: 60 }, { id: 'address', fee: 95 }]));
+  assert.strictEqual(SF.dispatch('catalogue', { market: 'M01' }).data.courier, null);
+  assert.ok(!/62000000000|FNB/.test(JSON.stringify(home)), 'bank details are not in the public catalogue');
+});
+
+test('courier is off until switched on, and needs a fee and a bank account', () => {
+  const { SF } = courierShop(false);
+  assert.strictEqual(SF.dispatch('catalogue', { market: 'home' }).data.courier, null);
+  assert.strictEqual(courierOrder(SF).ok, false);
+  const tok = ownerTok(SF);
+  assert.strictEqual(SF.dispatch('saveCourier', { token: tok, opId: 'x1', on: true }).ok, false, 'no fee');
+  assert.strictEqual(SF.dispatch('saveCourier', { token: tok, opId: 'x2', on: true, lockerFee: 60 }).ok, false, 'no bank account');
+  assert.strictEqual(SF.dispatch('saveCourier', { token: tok, opId: 'x3', on: true, lockerFee: 'lots', eft: { account: '1' } }).ok, false);
+  assert.strictEqual(SF.dispatch('saveCourier', { token: tok, opId: 'x4', on: true, lockerFee: '0', minJars: '', eft: { account: '1' } }).ok, true, 'a blank starting number keeps 3; a fee of 0 is allowed');
+  assert.strictEqual(SF.courier().minJars, 3);
+});
+
+test('a courier order adds the fee on top, shows the EFT details, and leaves the goods total alone', () => {
+  const { SF, sheets } = courierShop();
+  const r = courierOrder(SF);
+  assert.strictEqual(r.ok, true, r.message);
+  assert.strictEqual(r.total, 220);                    // 2 x 70 + 80: goods only
+  assert.strictEqual(r.toPay, 280);                    // plus the locker fee
+  assert.strictEqual(r.delivery.fee, 60);
+  assert.strictEqual(r.eft.account, '62000000000');
+  assert.strictEqual(SF.onHand().P01, 8);              // stock is reserved straight away
+  assert.strictEqual(SF.orders()[0].total, 220, 'the fee is not takings');
+  const a = courierOrder(SF, { phone: '083 000 0001', delivery: { mode: 'address', where: '12 Rose St, Irene' } });
+  assert.strictEqual(a.toPay, 315);
+});
+
+test('courier is refused for fewer than 3 jars, a missing place, a bad mode and a market day', () => {
+  const { SF } = courierShop();
+  assert.strictEqual(courierOrder(SF, { lines: [{ id: 'P01', qty: 2 }] }).ok, false);
+  assert.strictEqual(courierOrder(SF, { delivery: { mode: 'locker', where: '' } }).ok, false);
+  assert.strictEqual(courierOrder(SF, { delivery: { mode: 'drone', where: 'My roof, Pretoria' } }).ok, false);
+  assert.strictEqual(courierOrder(SF, { market: 'M01' }).ok, false, 'courier is only between markets');
+  assert.strictEqual(SF.onHand().P01, 10, 'a refused order reserves nothing');
+  assert.strictEqual(courierOrder(SF, { lines: [{ id: 'P01', qty: 3 }] }).ok, true);
+});
+
+test('3 or more of one jar qualifies, weighed goods do not count towards the 3', () => {
+  const { SF } = courierShop();
+  SF.append('products', { ProductId: 'P03', Name: 'Rusks', Type: 'weighed', Unit: 'kg', Price: 100, Active: 'Yes', Sort: 30 });
+  SF.move('P03', 10, 'adjust', 'test');
+  assert.strictEqual(courierOrder(SF, { lines: [{ id: 'P01', qty: 2 }, { id: 'P03', qty: 5 }] }).ok, false);
+});
+
+test('a package qualifies for courier whatever the jar count', () => {
+  const { SF } = courierShop();
+  SF.append('products', { ProductId: 'K01', Name: 'Gift box', Type: 'package', Unit: 'each', Price: 250, Active: 'Yes', Sort: 40 });
+  assert.strictEqual(SF.courierEligible([{ id: 'K01', qty: 1 }], SF.products({ all: true })), true);
+});
+
+test('a courier order is paid by EFT, stays paid until sent, and is wiped the moment it is sent', () => {
+  const { SF, sheets, tok } = courierShop();
+  const r = courierOrder(SF);
+  const q0 = SF.dispatch('queue', { token: tok, marketId: 'home' }).data;
+  assert.strictEqual(q0.unpaid.length, 0, 'not in the stall queue');
+  assert.strictEqual(q0.courier.unpaid.length, 1);
+  assert.strictEqual(q0.courier.unpaid[0].toPay, 280);
+  assert.strictEqual(SF.dispatch('markSent', { token: tok, opId: 'm1', orderNo: r.orderNo }).ok, false, 'not before payment');
+  assert.strictEqual(SF.dispatch('markCollected', { token: tok, opId: 'm2', orderNo: r.orderNo }).ok, false);
+  assert.strictEqual(SF.dispatch('markPaid', { token: tok, opId: 'm3', orderNo: r.orderNo, paid: 'cash' }).ok, true);
+  const o = SF.orders()[0];
+  assert.strictEqual(o.status, 'paid', 'paying does not hand a courier order over');
+  assert.strictEqual(o.paid, 'eft');
+  assert.strictEqual(SF.dispatch('queue', { token: tok, marketId: 'M01' }).data.courier.toSend.length, 1, 'listed at any market');
+  assert.strictEqual(o.delivery.where, 'Pudo locker, Centurion Mall');
+  assert.strictEqual(SF.dispatch('markSent', { token: tok, opId: 'm4', orderNo: r.orderNo }).ok, true);
+  const sent = SF.orders()[0];
+  assert.strictEqual(sent.status, 'collected');
+  assert.strictEqual(sent.customer + '|' + sent.phone + '|' + sent.delivery.where, 'Customer||');
+  assert.strictEqual(sent.delivery.fee, 60, 'the fee is kept for the books');
+  assert.ok(!/Centurion Mall|082 123 4567|Anna/.test(JSON.stringify(sheets.Orders.rows.slice(1)) + JSON.stringify(sheets.Audit.rows)),
+    'nothing about the customer is left in the sheet or the audit trail');
+});
+
+test('a cancelled courier order puts the stock back and wipes where it was going', () => {
+  const { SF, tok } = courierShop();
+  const r = courierOrder(SF);
+  assert.strictEqual(SF.onHand().P01, 8);
+  assert.strictEqual(SF.dispatch('cancelOrder', { token: tok, opId: 'k1', orderNo: r.orderNo }).ok, true);
+  assert.strictEqual(SF.onHand().P01, 10);
+  assert.strictEqual(SF.orders()[0].delivery.where, '');
+  assert.strictEqual(SF.orders()[0].customer, 'Customer');
+});
+
+test('the daily clean-up wipes a courier address that was never sent or cancelled by hand', () => {
+  const { SF } = courierShop();
+  const r = courierOrder(SF);
+  SF.dispatch('releaseUnpaid', { token: ownerTok(SF), opId: 'ru', marketId: 'HOME' });
+  assert.strictEqual(SF.orders()[0].status, 'cancelled');
+  assert.strictEqual(SF.orders()[0].delivery.where, '');
+  const again = courierOrder(SF, { phone: '083 000 0002' });
+  SF.dispatch('cancelOrder', { token: ownerTok(SF), opId: 'cc', orderNo: again.orderNo });
+  SF.purgeCustomers();
+  assert.strictEqual(SF.orders().every((o) => !o.delivery.where), true);
+});
+
+test('only people allowed to settings change courier, and the bank details stay out of the audit', () => {
+  const { SF, sheets } = courierShop();
+  SF.setPin('cashier', '1111');
+  const c = SF.dispatch('signIn', { pin: '1111', device: 'd' }).data.token;
+  assert.strictEqual(SF.dispatch('saveCourier', { token: c, opId: 'z', on: false }).ok, false);
+  assert.strictEqual(SF.dispatch('courierSettings', { token: c }).ok, false);
+  assert.ok(!/62000000000/.test(JSON.stringify(sheets.Audit.rows)));
+});
+
+test('schema 12 adds the Delivery heading to Orders', () => {
+  const { SF, sheets } = shop(day(3));
+  SF.set('schemaVersion', 11);
+  sheets.Orders.rows[0].length = 16;
+  const done = SF.migrate();
+  assert.ok(done.some((d) => /^12:/.test(d)), done.join(' | '));
+  assert.strictEqual(sheets.Orders.rows[0][16], 'Delivery');
+  assert.strictEqual(SF.SCHEMA, 12);
 });
 
 console.log(failures ? '\n' + failures + ' failed' : '\nall passed');

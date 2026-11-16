@@ -868,7 +868,8 @@
       ['till', 'collect'].forEach(function (v) {
         var d = SF.state.data[v];
         if (!d) return;
-        [].concat(d.unpaid || [], d.waiting || []).forEach(function (o) {
+        [].concat(d.unpaid || [], d.waiting || [],
+                  d.courier ? [].concat(d.courier.unpaid, d.courier.toSend) : []).forEach(function (o) {
           if (o.no === no) order = o;
         });
       });
@@ -906,10 +907,12 @@
         ['till', 'collect'].forEach(function (v) {
           var d = SF.state.data[v];
           if (!d) return;
-          ['unpaid', 'waiting'].forEach(function (list) {
-            if (!d[list]) return;
-            var i = indexOfNo(d[list], no);
-            if (i > -1) { lines = lines || d[list][i].lines; d[list].splice(i, 1); }
+          var lists = [d.unpaid, d.waiting];
+          if (d.courier) lists.push(d.courier.unpaid, d.courier.toSend);
+          lists.forEach(function (list) {
+            if (!list) return;
+            var i = indexOfNo(list, no);
+            if (i > -1) { lines = lines || list[i].lines; list.splice(i, 1); }
           });
         });
         // Put the stock back on screen straight away, the way the server will.
@@ -942,6 +945,32 @@
         }
       });
       SF.toast('Handed over');
+    },
+
+    /** Courier orders: the EFT has come in. It waits to be sent; it is never "handed over". */
+    payCourier: function (no) {
+      SF.write('markPaid', { orderNo: no, paid: 'eft' }, function () {
+        var c = (SF.state.data.collect || {}).courier;
+        if (!c) return;
+        var i = indexOfNo(c.unpaid, no);
+        if (i > -1) { var o = c.unpaid.splice(i, 1)[0]; o.status = 'paid'; c.toSend.push(o); }
+      });
+      SF.toast('Marked paid. Send it, then tap Sent.');
+    },
+    /** With the courier: the name, number and where it went are wiped by the server straight away. */
+    sendCourier: function (no) {
+      SF.write('markSent', { orderNo: no }, function () {
+        var c = (SF.state.data.collect || {}).courier;
+        if (!c) return;
+        var i = indexOfNo(c.toSend, no);
+        if (i > -1) {
+          var o = c.toSend.splice(i, 1)[0];
+          o.status = 'collected'; o.customer = 'Customer'; o.phone = '';
+          if (o.delivery) o.delivery.where = '';
+          c.sent.unshift(o);
+        }
+      });
+      SF.toast('Sent. The customer\'s details are cleared.');
     },
 
     scan: function () { SF.scan(); }
@@ -983,8 +1012,12 @@
             : 'The queue is empty. Everything ordered ahead has been handed over.') +
           '</div></div>';
 
-      var tb = SF.tabs('collect', [['queue', 'Queue'], ['topay', 'Still to pay'],
-                                   ['done', 'Handed over']]);
+      var cr = q.courier || { unpaid: [], toSend: [], sent: [] };
+      var tabs = [['queue', 'Queue'], ['topay', 'Still to pay'], ['done', 'Handed over']];
+      if (cr.unpaid.length + cr.toSend.length + cr.sent.length) {
+        tabs.push(['courier', 'Courier (' + (cr.unpaid.length + cr.toSend.length) + ')']);
+      }
+      var tb = SF.tabs('collect', tabs);
       var none = '<div class="empty" data-fempty="collect" style="display:none">Nobody by that ' +
         'name or number here. Try the other tabs.</div>';
       var find = SF.filters.bar('collect', { search: 'Find a name or order number',
@@ -1003,6 +1036,7 @@
             return row('!', 'var(--warn)', o,
               '<button class="ok sm" onclick="SFT.pay(\'' + o.no + '\')">Paid</button>', true);
           }).join('') : '<div class="empty">Everyone who ordered ahead has paid.</div>') + '</div>',
+        courier: find + none + courierCards(cr),
         done: find + none + '<div class="card"><h2>Handed over</h2>' +
           (q.done.length ? '<div class="done">' + q.done.map(function (o) {
             return row('✓', 'var(--ok)', o, '');
@@ -1019,6 +1053,33 @@
         '<div class="foot">StallFlow · collection</div></div>';
     }
   });
+
+  /** "Courier to you" orders: wait for the EFT, then send, then the details are wiped. */
+  function courierRow(o, action, cancellable) {
+    var d = o.delivery || {};
+    return '<div class="rowitem"' + SF.filters.row('collect', { text: findText(o) }) + '><div class="who"><b>' +
+      esc(o.customer) + '</b><span>' + esc(o.no) + ' \u00b7 ' + SF.countOf(o.units) +
+      (d.where ? '<br>' + (d.mode === 'locker' ? 'Locker: ' : 'Address: ') + esc(d.where) : '') +
+      (o.phone ? '<br>' + esc(o.phone) : '') +
+      (cancellable ? '<br><button class="quiet" onclick="SFT.cancel(\'' + o.no + '\')">cancel</button>' : '') +
+      '</span></div><span class="amt">' + money(o.toPay || o.total) + '</span>' + action + '</div>';
+  }
+  function courierCards(cr) {
+    return '<div class="card"><h2>Waiting for the EFT</h2>' +
+      '<div class="sub">Goods plus the courier fee, with the order number as the reference.</div>' +
+      (cr.unpaid.length ? cr.unpaid.map(function (o) {
+        return courierRow(o, '<button class="ok sm" onclick="SFT.payCourier(\'' + o.no + '\')">Paid</button>', true);
+      }).join('') : '<div class="empty">No courier orders waiting for payment.</div>') + '</div>' +
+      '<div class="card"><h2>To send</h2>' +
+      '<div class="sub">Paid. Book the courier with these details, then tap Sent: the name, number and ' +
+        'where it went are cleared at once.</div>' +
+      (cr.toSend.length ? cr.toSend.map(function (o) {
+        return courierRow(o, '<button class="sm" onclick="SFT.sendCourier(\'' + o.no + '\')">Sent</button>', true);
+      }).join('') : '<div class="empty">Nothing to send.</div>') + '</div>' +
+      (cr.sent.length ? '<div class="card"><h2>Sent</h2><div class="done">' + cr.sent.map(function (o) {
+        return courierRow(o, '', false);
+      }).join('') + '</div></div>' : '');
+  }
 
   function findText(o) {
     return [o.customer, o.no, o.no.replace(/\D/g, '')].concat((o.lines || []).map(function (l) {

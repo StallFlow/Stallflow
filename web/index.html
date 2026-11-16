@@ -72,6 +72,17 @@
   .consent label{text-transform:none;letter-spacing:0;font-size:13.5px;font-weight:500;
     color:var(--ink);margin:0;line-height:1.45}
 
+  .ship label{display:flex;gap:12px;align-items:center;text-transform:none;letter-spacing:0;font-size:15px;
+    font-weight:700;color:var(--ink);margin:0;padding:12px 14px;border:1.5px solid var(--rule);border-radius:12px;
+    background:var(--surface);min-height:48px;cursor:pointer}
+  .ship label+label{margin-top:8px}
+  .ship label.on{border-color:var(--brand);background:color-mix(in srgb, var(--brand) 8%, transparent)}
+  .ship input[type=radio]{width:22px;height:22px;min-height:0;flex:none;accent-color:var(--brand);margin:0}
+  .ship .fee{margin-left:auto;font-family:var(--mono);font-weight:800;white-space:nowrap}
+  .eft{text-align:left;background:var(--surface-2);border-radius:12px;padding:14px 15px;margin:14px 0}
+  .eft .r{display:flex;justify-content:space-between;gap:12px;padding:5px 0;font-size:14.5px}
+  .eft .r span{color:var(--muted)}
+  .eft .r b{text-align:right;word-break:break-all}
   .done{text-align:center;padding:30px 18px}
   .done .tick{width:66px;height:66px;border-radius:50%;background:var(--ok);color:#fff;
     font-size:34px;line-height:66px;margin:0 auto 16px}
@@ -88,7 +99,8 @@
 <script src="config.js"></script>
 <script>
 var CFG = window.STALLFLOW, DATA = null, CART = {}, CHOOSING = false;
-var FIND = '', CAT = 'all';   // the product search and category chip on this page
+var FIND = '', CAT = 'all';
+var SHIP = 'collect';   // 'collect', 'locker' or 'address': how an order of 3+ jars or a package gets to them   // the product search and category chip on this page
 /* A jar's QR opens …/?p=P01: take them straight to that product. */
 var PID = (function(){
   try { var p = new URLSearchParams(location.search).get('p') || ''; return /^[A-Za-z0-9_-]+$/.test(p) ? p : ''; }
@@ -234,6 +246,70 @@ function totals(){
   return { value: value, count: count };
 }
 
+/** Courier is offered between markets, for 3 or more jars (or a package) in the basket. */
+function courierOn(){
+  var c = DATA && DATA.courier;
+  if (!c || !c.modes || !c.modes.length) return null;
+  var jars = 0, pack = false;
+  Object.keys(CART).forEach(function(id){
+    var p = product(id);
+    if (!p) return;
+    if (p.type === 'package') pack = true; else if (!p.weighed) jars += CART[id];
+  });
+  return pack || jars >= c.minJars ? c : null;
+}
+function feeFor(mode){
+  var c = DATA && DATA.courier, f = null;
+  if (c) c.modes.forEach(function(m){ if (m.id === mode) f = m.fee; });
+  return f;
+}
+/** What the basket is worth to pay now: goods, plus the courier fee when it is going by courier. */
+function payNow(){
+  var t = totals(), f = courierOn() && SHIP !== 'collect' ? feeFor(SHIP) : null;
+  return { goods: t.value, fee: f, total: t.value + (f || 0) };
+}
+function shipCard(c){
+  if (SHIP !== 'collect' && feeFor(SHIP) === null) SHIP = 'collect';
+  var name = c.name ? ' with ' + esc(c.name) : '';
+  function opt(v, label, fee){
+    return '<label class="' + (SHIP === v ? 'on' : '') + '"><input type="radio" name="ship" value="' + v + '"' +
+      (SHIP === v ? ' checked' : '') + ' onchange="setShip(this.value)">' + label +
+      (fee === null ? '' : '<span class="fee">+ ' + money(fee) + '</span>') + '</label>';
+  }
+  var modes = {};
+  c.modes.forEach(function(m){ modes[m.id] = m.fee; });
+  return '<div class="card"><h2>How should we get it to you?</h2>' +
+    '<div class="sub">Courier to you' + name + ' \u2014 you pay the courier fee on top, by EFT.</div>' +
+    '<div class="ship">' + opt('collect', 'I will collect', null) +
+      (modes.locker !== undefined ? opt('locker', 'Courier to a locker', modes.locker) : '') +
+      (modes.address !== undefined ? opt('address', 'Courier to my address', modes.address) : '') +
+    '</div>' +
+    '<div class="field" id="cwf" style="margin-top:12px;display:' + (SHIP === 'collect' ? 'none' : '') + '">' +
+      '<label for="cw" id="cwl">' + (SHIP === 'locker' ? 'Which locker?' : 'Delivery address') + '</label>' +
+      '<input id="cw" maxlength="160" autocomplete="' + (SHIP === 'locker' ? 'off' : 'street-address') + '" ' +
+        'placeholder="' + (SHIP === 'locker' ? 'Locker name and town' : 'Street, suburb, town, postal code') + '"></div>' +
+    '<div class="muted small" id="cwn" style="display:' + (SHIP === 'collect' ? 'none' : '') + '">' +
+      'We use this only to send your order, and delete it as soon as it is sent.</div></div>';
+}
+/** A different way to receive it: change only what shows, so nothing typed so far is lost. */
+function setShip(v){
+  SHIP = v;
+  Array.prototype.forEach.call(document.querySelectorAll('.ship label'), function(l){
+    var r = l.querySelector('input'); l.className = r.checked ? 'on' : '';
+  });
+  var c = DATA.courier, on = v !== 'collect';
+  el('cwf').style.display = on ? '' : 'none'; el('cwn').style.display = on ? '' : 'none';
+  el('cwl').textContent = v === 'locker' ? 'Which locker?' : 'Delivery address';
+  el('cw').placeholder = v === 'locker' ? 'Locker name and town' : 'Street, suburb, town, postal code';
+  paintBasket();
+}
+function paintBasket(){
+  var pay = payNow(), a = el('amt'), n = el('feeline'), b = el('go');
+  if (a) a.textContent = money(pay.total);
+  if (n) n.textContent = pay.fee === null ? '' : money(pay.goods) + ' + ' + money(pay.fee) + ' courier';
+  if (b) b.textContent = pay.fee === null ? 'Reserve \u2014 pay at the stall' : 'Order \u2014 pay by EFT';
+}
+
 function hero(withMarket){
   var pr = DATA.profile, m = DATA.market;
   var others = (DATA.markets || []).filter(function(x){ return !m || x.id !== m.id; });
@@ -276,6 +352,11 @@ function chooser(){
 
 function draw(){
   var pr = DATA.profile, t = totals();
+  // Keep what has been typed: the page is redrawn when the basket changes.
+  var kept = {};
+  ['nm','ph','nt','cw'].forEach(function(id){ var e = el(id); if (e) kept[id] = e.value; });
+  var cur = courierOn();
+  if (!cur) SHIP = 'collect';
   if (!DATA.open || CHOOSING){ el('app').innerHTML = chooser(); return; }
   var head = hero(true);
   var anything = DATA.products.some(function(p){ return p.available === null || p.available > 0; });
@@ -311,6 +392,7 @@ function draw(){
     '<div class="wrap"><div class="card"><h2>Choose what you want</h2>' +
       '<div class="sub">Nothing is paid now. You pay at the table when you fetch it.</div>' +
       finder + list + '</div>' +
+      (cur ? shipCard(cur) : '') +
       '<div class="card"' + (t.count ? '' : ' style="display:none"') + '>' +
         '<h2>Who is it for?</h2>' +
         '<div class="sub">So we can call your name when it is ready.</div>' +
@@ -327,9 +409,12 @@ function draw(){
     (t.count
       ? '<div class="basket"><div class="line">' +
         '<span class="muted small">' + t.count + ' reserved</span>' +
-        '<span class="amt">' + money(t.value) + '</span></div>' +
+        '<span class="amt" id="amt">' + money(t.value) + '</span></div>' +
+        '<div class="muted small" id="feeline" style="text-align:right;margin:-6px 0 8px"></div>' +
         '<button class="block" id="go" onclick="submit()">Reserve — pay at the stall</button></div>'
       : '');
+  Object.keys(kept).forEach(function(id){ var e = el(id); if (e) e.value = kept[id]; });
+  paintBasket();
   applyFind();
   if (PID && !PID_SHOWN) {
     // Scanned from a jar: show that one, once, and leave the rest of the page alone after.
@@ -446,25 +531,32 @@ function submit(){
   }
   var lines = Object.keys(CART).map(function(id){ return { id:id, qty:CART[id] }; });
   if (!lines.length){ toast('Choose at least one thing.', true); return; }
+  var ship = courierOn() && SHIP !== 'collect' ? SHIP : '', where = ship ? (el('cw').value||'').trim() : '';
+  if (ship && where.length < 6){
+    toast(ship === 'locker' ? 'Tell us which locker.' : 'We still need the delivery address.', true);
+    el('cw').focus(); return;
+  }
+  var pay = payNow();
 
   var btn = el('go');
-  btn.disabled = true; btn.textContent = 'Reserving…';
+  btn.disabled = true; btn.textContent = ship ? 'Ordering…' : 'Reserving…';
 
   apiPost({ action:'placeOrder', opId:'c-' + Date.now().toString(36) + '-' +
               Math.random().toString(36).slice(2,8),
             market: DATA.market ? DATA.market.id : WANT,
-            name:name, phone:phone, note:el('nt').value||'', consent:true, lines:lines })
+            name:name, phone:phone, note:el('nt').value||'', consent:true, lines:lines,
+            delivery: ship ? { mode: ship, where: where } : undefined })
     .then(function(res){
       if (!res.ok){
         toast(res.message, true);
-        btn.disabled = false; btn.textContent = 'Reserve — pay at the stall';
+        btn.disabled = false; paintBasket();
         return loadCatalogue().then(function(r2){ if (r2.ok){ DATA = r2.data; draw(); } });
       }
       confirmed(res);
     })
     .catch(function(){
-      toast('That did not go through — check your signal and try again.', true);
-      btn.disabled = false; btn.textContent = 'Reserve — pay at the stall';
+      toast('That did not go through \u2014 check your signal and try again.', true);
+      btn.disabled = false; paintBasket();
     });
 }
 
@@ -484,9 +576,27 @@ function waText(res, lines){
     (m ? 'For: ' + (m.home ? 'between markets (collect by arrangement)'
                  : m.name + (m.date ? ', ' + prettyDate(m.date) : '')) + '\n' : '') +
     lines.map(function(l){ return '• ' + l; }).join('\n') + '\n' +
-    'Total: ' + money(res.total) + '\n' +
+    (res.delivery
+      ? 'Goods: ' + money(res.total) + '\nCourier to my ' + res.delivery.mode + ': ' + money(res.delivery.fee) +
+        '\nTotal to pay by EFT: ' + money(res.toPay) + '\n'
+      : 'Total: ' + money(res.total) + '\n') +
     (res.note ? 'Note: ' + res.note + '\n' : '') +
-    '\nPlease confirm, and send your banking details if I can pay ahead. Thank you!';
+    (res.delivery ? '\nI will send my proof of payment here. Thank you!'
+                  : '\nPlease confirm, and send your banking details if I can pay ahead. Thank you!');
+}
+
+/** After a courier order: where to pay, how much, and what to put as the reference. */
+function eftBox(res){
+  var e = res.eft || {}, d = res.delivery;
+  function r(k, v){ return v ? '<div class="r"><span>' + k + '</span><b>' + esc(v) + '</b></div>' : ''; }
+  return '<div class="say"><b>Pay by EFT to put it in the courier\u2019s hands.</b><br>' +
+    'Your order is put aside. We send it once your payment shows.</div>' +
+    '<div class="eft">' + r('Bank', e.bank) + r('Account holder', e.holder) + r('Account number', e.account) +
+      r('Branch code', e.branch) + r('Account type', e.type) + r('Reference', res.orderNo) +
+      r('Goods', money(res.total)) +
+      r('Courier to a ' + d.mode, money(d.fee)) + r('To pay', money(res.toPay)) + '</div>' +
+    '<p class="muted small">Use ' + esc(res.orderNo) + ' as the reference. We delete your delivery details as soon as ' +
+    'it is sent.</p>';
 }
 
 function confirmed(res){
@@ -508,9 +618,10 @@ function confirmed(res){
       '<div class="no">' + esc(res.orderNo) + '</div>' +
       '<p class="muted small">Put aside for you.</p>' +
       '<p style="font-size:26px;font-weight:800;margin:14px 0" class="num">' +
-        money(res.total) + '</p>' +
+        money(res.delivery ? res.toPay : res.total) + '</p>' +
       (res.market && res.market.home
-        ? '<div class="say"><b>We will be in touch to arrange the collection.</b><br>You pay when ' +
+        ? res.delivery ? eftBox(res)
+        : '<div class="say"><b>We will be in touch to arrange the collection.</b><br>You pay when ' +
           'you collect. Nothing has been charged.</div>'
         : '<div class="say"><b>Give your name at the stall' +
           (res.market && res.market.date ? ' on ' + esc(prettyDate(res.market.date)) : '') +

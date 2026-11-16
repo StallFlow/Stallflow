@@ -206,6 +206,16 @@ go through `SF.once` so a retried request never runs twice.
   `SF.markets()` leaves it out) so the id is never reused, and only when `SF.marketUse` finds no sale,
   unpaid reservation, cost or stock move. Neither the live market nor one with unpaid reservations
   can be archived or deleted (release them first: `releaseUnpaid` takes a `marketId`).
+- **Courier to you** (`SF.courier`, Domain.gs section 3b; settings `courierOn`, `courierName`,
+  `courierLockerFee`, `courierAddressFee`, `courierMinJars`, `eft`; Numbers › between markets ›
+  Courier to you: set up). Between-markets orders only, for `courierMinJars` (3) or more counted
+  items, or any `package`. The customer pays goods plus the fee by EFT. **The fee is never part of
+  an order's Total** (takings stay goods only): it lives in the order's `Delivery` JSON
+  (`{mode, where, fee}`, schema 12) beside where it goes. Courier orders stay out of the till and
+  stall queue and are handled on Collect › Courier: Paid (always EFT, never auto-handed over) then
+  Sent. **`markSent`, `cancelOrder`, `releaseUnpaid` and `purgeCustomers` wipe the name, number,
+  note and `Delivery.where` straight away**; `eft` details are returned only in the `placeOrder`
+  reply and never in `catalogue`, the audit trail or a log.
 - **Uncooked stock** (the `Pantry` tab) is a plain count list, not a ledger:
   nothing is sold from it, so `savePantry` overwrites the amount.
 - Server code is plain Apps Script (V8, no modules). Every `.gs` shares one

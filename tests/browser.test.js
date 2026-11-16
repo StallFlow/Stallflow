@@ -2581,6 +2581,115 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
     assert.ok(fs.existsSync(path.join(ROOT, 'web', 'core', 'vendor', 'jsQR.LICENSE.txt')));
   });
 
+  /* ---------- Courier to you ---------- */
+  const courierOn = (SF) => {
+    SF.set('courierOn', 'yes'); SF.set('courierName', 'The Courier Guy');
+    SF.set('courierLockerFee', 60); SF.set('courierAddressFee', 95); SF.set('courierMinJars', 3);
+    SF.set('eft', { bank: 'FNB', holder: 'Duxies Homemade', account: '62000000000', branch: '250655', type: 'Cheque' });
+  };
+  const plusJars = async (page, n) => {
+    for (let i = 0; i < n; i++) await page.click('.item:has-text("Apricot Jam") .stepper button[aria-label^="More"]');
+  };
+
+  await test('Courier: offered only from 3 jars, only between markets, and typing survives a change of basket', async () => {
+    const env = await phone({ hash: '#till', seed: (SF) => { courierOn(SF); addFuture(SF, 'M02', 'Spring Fair', 2); } });
+    const page = await customer(env, '?m=home');
+    await plusJars(page, 2);
+    assert.strictEqual(await page.locator('.ship').count(), 0, 'two jars: collection only');
+    await plusJars(page, 1);
+    assert.strictEqual(await page.locator('.ship input').count(), 3);
+    await page.fill('#nm', 'Anna Bester');
+    await page.check('input[value="locker"]');
+    assert.strictEqual((await page.textContent('#amt')).replace(/\s/g, ''), 'R270.00');
+    assert.ok(/R 210\.00 \+ R 60\.00 courier/.test(await page.textContent('#feeline')), await page.textContent('#feeline'));
+    assert.ok(/pay by EFT/.test(await page.textContent('#go')));
+    await page.click('.item:has-text("Marmalade") .stepper button[aria-label^="More"]');
+    assert.strictEqual(await page.inputValue('#nm'), 'Anna Bester', 'what was typed is kept');
+    assert.strictEqual(await page.isChecked('input[value="locker"]'), true);
+    await page.check('input[value="collect"]');
+    assert.ok(/Reserve/.test(await page.textContent('#go')));
+    assert.strictEqual(await page.isVisible('#cw'), false);
+    const market = await customer(env, '?m=M02');
+    await plusJars(market, 3);
+    assert.strictEqual(await market.locator('.ship').count(), 0, 'a market day has no courier');
+    await env.ctx.close();
+  });
+
+  await test('Courier: order to a locker, pay by EFT, staff mark it paid and sent, and the details are wiped', async () => {
+    const env = await phone({ hash: '#collect', seed: (SF) => { courierOn(SF); SF.set('collectStep', 'yes'); } });
+    const page = await customer(env, '?m=home');
+    await plusJars(page, 3);
+    await page.fill('#nm', 'Anna Bester'); await page.fill('#ph', '082 555 0101');
+    await page.check('input[value="locker"]');
+    await page.check('#cs'); await page.click('#go');              // no locker yet
+    assert.ok(/which locker/i.test(await page.textContent('#toast')));
+    await page.fill('#cw', 'Pudo locker, Centurion Mall');
+    await page.click('#go');
+    await page.waitForSelector('.done');
+    const text = await page.textContent('.done');
+    assert.ok(/62000000000/.test(text) && /250655/.test(text) && /FNB/.test(text), text);
+    assert.ok(/R 270\.00/.test(text), 'pays goods plus the fee');
+    const no = (await page.textContent('.done .no')).trim();
+    assert.ok(new RegExp('Reference' + no).test(text.replace(/\s/g, '')));
+    const row = env.sheets.Orders.rows.find((r) => r[4] === 'Anna Bester');
+    assert.ok(/Pudo locker/.test(row[16]), 'kept until it is sent');
+    assert.strictEqual(row[8], 210, 'takings are the goods only');
+
+    const staff = env.page;
+    await staff.evaluate(() => { SF.ls.set('sf.sellAt', 'home'); SF.ls.set('sf.tab.collect', 'courier'); SF.load('collect').then(() => SF.render()); });
+    await staff.waitForSelector('text=Waiting for the EFT');
+    assert.ok(/Locker: Pudo locker, Centurion Mall/.test(await staff.textContent('.wrap')));
+    assert.ok(/R 270\.00/.test(await staff.textContent('.wrap')));
+    await staff.click('button:has-text("Paid")');
+    await staff.waitForSelector('button:has-text("Sent")');
+    await staff.waitForFunction(() => !SF.state.pending || true);
+    await staff.click('button:has-text("Sent")');
+    await staff.waitForTimeout(1500);
+    const done = env.sheets.Orders.rows.find((r) => r[0] === no);
+    assert.strictEqual(done[10], 'collected');
+    assert.strictEqual(done[4], 'Customer'); assert.strictEqual(done[5], '');
+    assert.ok(!/Pudo|Centurion/.test(done[16]), 'where it went is gone');
+    assert.ok(!/Pudo|Centurion|555 0101|Anna/.test(JSON.stringify(env.sheets.Orders.rows.slice(1)) + JSON.stringify(env.sheets.Audit.rows)));
+    assert.ok(!/Anna|Pudo/.test(await staff.textContent('.wrap')), 'nor on the staff screen');
+    await env.ctx.close();
+  });
+
+  await test('Courier: the owner sets it up from the Numbers screen', async () => {
+    const env = await phone({ hash: '#numbers' });
+    const page = env.page;
+    await page.evaluate(() => SFA.courierSetup());
+    await page.waitForSelector('#cron');
+    await page.selectOption('#cron', 'yes');
+    await page.fill('#crlf', '60'); await page.fill('#craf', '95'); await page.fill('#crnm', 'The Courier Guy');
+    await page.fill('#crac', '62000000000'); await page.fill('#crbk', 'FNB');
+    await page.click('.sheet button:has-text("Save")');
+    await page.waitForTimeout(1500)
+    const c = env.SF.courier();
+    assert.strictEqual([c.on, c.lockerFee, c.addressFee, c.minJars].join('|'), 'true|60|95|3');
+    assert.strictEqual(env.SF.eft().account, '62000000000');
+    await env.ctx.close();
+  });
+
+  await test('Courier: the order page and the Collect tab fit a 320 px phone', async () => {
+    const env = await phone({ hash: '#collect', seed: (SF) => { courierOn(SF); SF.set('collectStep', 'yes'); } });
+    const page = await customer(env, '?m=home');
+    await page.setViewportSize({ width: 320, height: 640 });
+    await plusJars(page, 3);
+    await page.check('input[value="address"]');
+    await page.fill('#cw', '12 Rose Street, Irene, Centurion, 0157');
+    const wide = (pg) => pg.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+    assert.ok((await wide(page)) <= 0, 'order page wider than the phone by ' + await wide(page));
+    await page.fill('#nm', 'Anna Bester'); await page.fill('#ph', '082 555 0101'); await page.check('#cs'); await page.click('#go');
+    await page.waitForSelector('.done');
+    assert.ok((await wide(page)) <= 0, 'confirmation wider than the phone by ' + await wide(page));
+    const staff = env.page;
+    await staff.setViewportSize({ width: 320, height: 640 });
+    await staff.evaluate(() => { SF.ls.set('sf.sellAt', 'home'); SF.ls.set('sf.tab.collect', 'courier'); SF.load('collect').then(() => SF.render()); });
+    await staff.waitForSelector('text=Waiting for the EFT');
+    assert.ok((await wide(staff)) <= 0, 'Collect wider than the phone by ' + await wide(staff));
+    await env.ctx.close();
+  });
+
   await test('no page errors anywhere in the run', async () => {
     const env = await phone({ hash: '#numbers' });
     for (const h of ['#till', '#collect', '#stock', '#labels', '#numbers', '#settings', '#health', '#report']) {
