@@ -4,6 +4,13 @@
  */
 function sfDataFixes() {
   return [{
+    id: 'gift-boxes',
+    until: '2027-03-31',
+    what: 'Added the gift boxes (packages): Teacher\'s Thank You, Taste of Mzansi, Braai Box, Cheese Board Trio, Grown-ups Only, Sunday Breakfast, 12 Jars of Christmas and Jam Club',
+    // Safe to repeat until the date: a box that is already there is never touched, so a price or a
+    // switch-off done by hand wins. Nothing here moves stock; boxes sell out until the jars are cooked.
+    run: function () { return sfAddPackages(); }
+  }, {
     id: 'lizard-own-id',
     what: 'Lizard resin ornament moved off the id it shared with Apricot Jam, and its stock with it',
     // The ornament was given P01, which Apricot Jam already has, so one extra jar showed on
@@ -111,4 +118,67 @@ function sfDataFixes() {
       return removed;
     }
   }];
+}
+
+/**
+ * The gift boxes and bundles (packages). Each one is a product of type `package`; what goes in
+ * the box is its Contents (see SF.packageSlots in Domain.gs). Jars are looked up by name and
+ * size, never by a made-up id, because the ids on the live till are whatever the sheet gave them.
+ * Prices include the box. `jar` is a fixed jar [name, size]; `pick` lets the buyer choose.
+ */
+var DUXIE_PACKAGES = [
+  { name: "Teacher's Thank You", variant: '2 x 125 ml', price: 85,
+    slots: [{ pick: 2, size: '125 ml', label: 'Any two 125 ml jars' }] },
+  { name: 'Taste of Mzansi', variant: '3 x 125 ml', price: 135,
+    slots: [{ jar: ['Makataan', '125 ml'] }, { jar: ['Guavadilla', '125 ml'] }, { jar: ['Peachdilla', '125 ml'] }] },
+  { name: 'Braai Box', variant: '3 x 352 ml', price: 220,
+    slots: [{ jar: ['Tomato Chilli', '352 ml'] }, { jar: ['Tomato Ginger', '352 ml'] }, { jar: ['Strawberry Chilli', '352 ml'] }] },
+  { name: 'Cheese Board Trio', variant: '3 x 352 ml', price: 220,
+    slots: [{ jar: ['Fig', '352 ml'] }, { jar: ['Fig Chunky', '352 ml'] }, { jar: ['Red Grapefruit Marmalade', '352 ml'] }] },
+  { name: 'Grown-ups Only', variant: '2 x 352 ml + 125 ml', price: 230,
+    slots: [{ jar: ['Strawberry Gin', '352 ml'] }, { jar: ['Orange Marmalade Whiskey', '352 ml'] },
+            { pick: 1, size: '125 ml', label: 'Any one 125 ml jar' }] },
+  { name: 'Sunday Breakfast', variant: '2 x 352 ml + biscuits', price: 230,
+    slots: [{ pick: 1, size: '352 ml', cats: ['Marmalades'], label: 'One marmalade (352 ml)' },
+            { pick: 1, size: '352 ml', cats: ['Jams'], label: 'One jam (352 ml)' },
+            { jar: ['Butter Biscuits', '300 g pack'] }] },
+  { name: '12 Jars of Christmas', variant: '12 x 125 ml', price: 480,
+    slots: [{ pick: 12, size: '125 ml', numbered: true, label: 'Twelve 125 ml jars, numbered 1 to 12' }] },
+  // Recurring monthly billing is not part of StallFlow: this is a box sold once a month, so each
+  // month it is sold again. The buyer picks the two jars (Marian can narrow the choice to the
+  // flavour of the month with a `from` list).
+  { name: 'Jam Club (monthly)', variant: '2 x 352 ml', price: 150,
+    slots: [{ pick: 2, size: '352 ml', label: 'Two 352 ml jars (the flavour of the month)' }] }
+];
+
+/** Add the packages that are not there yet. Safe to repeat: a package already there is left as it is. */
+function sfAddPackages() {
+  var have = {}, added = 0;
+  SF.rows('products').forEach(function (r) { have[String(r.Name).trim().toLowerCase()] = true; });
+  // Every open of the app runs this until the date, so stop early (cheaply) once all are there.
+  if (DUXIE_PACKAGES.every(function (pk) { return have[pk.name.toLowerCase()]; })) return false;
+  var all = SF.products({ all: true });
+  var find = function (name, size) {
+    return all.filter(function (p) {
+      return p.type !== 'package' && String(p.name).trim().toLowerCase() === name.toLowerCase() && p.variant === size;
+    })[0];
+  };
+  DUXIE_PACKAGES.forEach(function (pk, i) {
+    if (have[pk.name.toLowerCase()]) return;
+    var contents = [], ok = true;
+    pk.slots.forEach(function (s) {
+      if (s.jar) {
+        var jar = find(s.jar[0], s.jar[1]);
+        if (jar) contents.push({ id: jar.id, qty: 1 }); else ok = false;
+      } else contents.push(s);
+    });
+    if (!ok) return;                      // a jar it needs is not on the sheet yet: try again at the next open
+    SF.append('products', {
+      ProductId: SF.nextProductId(), Name: pk.name, Variant: pk.variant, Type: 'package', Category: 'Gift boxes',
+      Unit: 'each', Price: pk.price, Capacity: 0, Options: '[]', Active: 'Yes', Sort: 5000 + i * 10,
+      Contents: JSON.stringify(contents)
+    });
+    added++;
+  });
+  return added > 0;
 }

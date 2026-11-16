@@ -216,6 +216,19 @@ go through `SF.once` so a retried request never runs twice.
   Sent. **`markSent`, `cancelOrder`, `releaseUnpaid` and `purgeCustomers` wipe the name, number,
   note and `Delivery.where` straight away**; `eft` details are returned only in the `placeOrder`
   reply and never in `catalogue`, the audit trail or a log.
+- **Packages (bundles)** (`SF.PACKAGE`, Domain.gs section 1b; Products `Contents`, schema 13).
+  A product of type `package` holds no stock of its own. `Contents` is a JSON list of slots:
+  `{id, qty}` (a fixed jar) or `{pick, size, cats?, from?, label?, numbered?}` (jars the buyer
+  chooses, repeats allowed). Boxes available = the lowest stock among the contents (`SF.fillPackages`;
+  a switched-off content jar makes it 0). Selling one writes each content jar as an ordinary `sale`
+  Movement and stores the jars on the order line (`contents`, whole line; `chosen`, in order, for a
+  numbered box); cancelling puts back exactly those jars (`SF.commitLines`). A box with a pick slot is one
+  box per line (the till and order page add it on its own, with `picks`: one list of jar ids per pick slot).
+  `buildLines` counts jars across all lines of an order, boxes included. Made-to-order contents
+  (biscuits) use capacity and appear on the kitchen board, never as stock. Packages stay out of
+  stocktakes, stock value, `adjustStock` and `addBatch`, and `saveProduct` cannot make or retype one.
+  A package's price includes its box; its cost is the jars only (the box cost is not tracked). They are
+  added by the stall's Fixes (`gift-boxes`, `sfAddPackages`), which finds jars by name and size, never by id.
 - **Uncooked stock** (the `Pantry` tab) is a plain count list, not a ledger:
   nothing is sold from it, so `savePantry` overwrites the amount.
 - Server code is plain Apps Script (V8, no modules). Every `.gs` shares one

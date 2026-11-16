@@ -158,7 +158,6 @@ function sfApplyStocktake() {
   var existing = {};
   SF.rows('products').forEach(function (p) { existing[key(p.Name, p.Variant)] = p; });
   var hand = SF.onHand();
-  var next = SF.rows('products').length;
   var wanted = {}, r = { added: 0, updated: 0, off: 0, moved: 0, jars: 0, costed: 0 };
 
   sfStocktakeRows().forEach(function (row, i) {
@@ -174,8 +173,8 @@ function sfApplyStocktake() {
       });
       r.updated++;
     } else {
-      next++;
-      id = 'P' + ('00' + next).slice(-2);
+      // Never a number that is already in use (a package or a hand-added product may hold one).
+      id = SF.nextProductId();
       SF.append('products', {
         ProductId: id, Name: name, Variant: variant, Type: row[3], Category: row[2],
         Unit: 'each', Price: row[4], Capacity: 0, Options: '[]', Active: 'Yes',

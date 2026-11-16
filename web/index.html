@@ -83,6 +83,17 @@
   .eft .r{display:flex;justify-content:space-between;gap:12px;padding:5px 0;font-size:14.5px}
   .eft .r span{color:var(--muted)}
   .eft .r b{text-align:right;word-break:break-all}
+  .contents{font-size:13.5px;color:var(--muted);margin-top:3px;line-height:1.4}
+  .boxbtn{min-height:44px;padding:8px 14px;border-radius:12px;border:1.5px solid var(--brand);background:var(--surface);
+    color:var(--brand);font:inherit;font-weight:700;cursor:pointer}
+  .boxes{margin-top:12px}
+  .boxes .bx{background:var(--surface-2);border-radius:12px;padding:11px 13px;margin-top:8px;font-size:14px}
+  .boxes .bx b{display:block;font-size:15px}
+  .boxes .bx .rm{float:right;background:none;border:0;color:var(--brand);font:inherit;font-weight:700;min-height:0;cursor:pointer}
+  #boxsheet{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:50;display:flex;align-items:flex-end;justify-content:center}
+  #boxsheet .panel{background:var(--paper);width:100%;max-width:560px;max-height:92vh;overflow:auto;
+    border-radius:18px 18px 0 0;padding:18px 16px 24px}
+  #boxsheet select{width:100%;min-height:48px;font:inherit;margin-bottom:10px}
   .done{text-align:center;padding:30px 18px}
   .done .tick{width:66px;height:66px;border-radius:50%;background:var(--ok);color:#fff;
     font-size:34px;line-height:66px;margin:0 auto 16px}
@@ -99,6 +110,7 @@
 <script src="config.js"></script>
 <script>
 var CFG = window.STALLFLOW, DATA = null, CART = {}, CHOOSING = false;
+var BOXES = [];   // packages with jars the customer chose: {id, picks: [[jar ids] per choice], names: [...]}
 var FIND = '', CAT = 'all';
 var SHIP = 'collect';   // 'collect', 'locker' or 'address': how an order of 3+ jars or a package gets to them   // the product search and category chip on this page
 /* A jar's QR opens …/?p=P01: take them straight to that product. */
@@ -216,7 +228,7 @@ var FIRST = CFG.api ? loadCatalogue() : null;
     DATA_FRESH = true;
     cacheWrite(res.data);
     // Do not redraw under someone who has already started choosing or typing.
-    var leave = shown && (Object.keys(CART).length || typing());
+    var leave = shown && (Object.keys(CART).length || BOXES.length || typing());
     adopt(res.data);
     if (!leave) draw();
   }).catch(function(){
@@ -243,6 +255,11 @@ function totals(){
     value += p.price * CART[id];
     count += p.weighed ? 1 : CART[id];
   });
+  BOXES.forEach(function(b){
+    var p = product(b.id);
+    if (!p) return;
+    value += p.price; count += 1;
+  });
   return { value: value, count: count };
 }
 
@@ -256,6 +273,7 @@ function courierOn(){
     if (!p) return;
     if (p.type === 'package') pack = true; else if (!p.weighed) jars += CART[id];
   });
+  if (BOXES.length) pack = true;
   return pack || jars >= c.minJars ? c : null;
 }
 function feeFor(mode){
@@ -391,7 +409,7 @@ function draw(){
   el('app').innerHTML = head +
     '<div class="wrap"><div class="card"><h2>Choose what you want</h2>' +
       '<div class="sub">Nothing is paid now. You pay at the table when you fetch it.</div>' +
-      finder + list + '</div>' +
+      finder + list + boxList() + '</div>' +
       (cur ? shipCard(cur) : '') +
       '<div class="card"' + (t.count ? '' : ' style="display:none"') + '>' +
         '<h2>Who is it for?</h2>' +
@@ -484,14 +502,19 @@ function itemRow(p){
   var price = money(p.price) + (p.weighed ? ' per ' + esc(p.unit) : '');
   var shown = p.weighed ? qty(have, p.unit) : String(have);
 
+  var choosing = p.type === 'package' && (p.slots || []).some(function(s){ return s.kind === 'pick'; });
+  var inBoxes = BOXES.filter(function(b){ return b.id === p.id; }).length;
   return '<div class="item' + (out ? ' out' : '') + (p.id === PID ? ' hl' : '') + '" id="it-' + esc(p.id) + '" data-text="' +
     esc([p.name, p.variant, p.category].join(' ').toLowerCase()) + '">' +
     '<div class="info"><div class="nm">' + esc(p.name) +
       (p.variant ? ' <span class="muted small">' + esc(p.variant) + '</span>' : '') + '</div>' +
       '<div class="meta">' + price + ' &nbsp; ' + left +
       (p.weighed ? '<br><span class="muted">Weighed at the stall — this reserves about ' +
-        'that much.</span>' : '') + '</div></div>' +
-    (out ? '' :
+        'that much.</span>' : '') + '</div>' +
+      (p.type === 'package' ? '<div class="contents">' + esc(boxSummary(p)) + '</div>' : '') + '</div>' +
+    (out ? '' : choosing ?
+      '<div class="stepper"><button class="boxbtn" onclick="openBox(\'' + p.id + '\')">' +
+        (inBoxes ? 'Add another' : 'Choose jars') + '</button></div>' :
       '<div class="stepper">' +
         '<button aria-label="Less ' + esc(p.name) + '" onclick="bump(\'' + p.id + '\',-1)"' +
           (have ? '' : ' disabled') + '>&minus;</button>' +
@@ -499,6 +522,103 @@ function itemRow(p){
         '<button aria-label="More ' + esc(p.name) + '" onclick="bump(\'' + p.id + '\',1)">+</button>' +
       '</div>') +
   '</div>';
+}
+
+/** What is in a package, in a line: "Makataan 125 ml, Guavadilla 125 ml, Peachdilla 125 ml". */
+function boxSummary(p){
+  return (p.slots || []).map(function(s){
+    if (s.kind === 'fixed') return (s.qty > 1 ? s.qty + ' × ' : '') + s.name;
+    return s.label;
+  }).join(' + ') + ' · box included';
+}
+
+/** Jars already in the basket (plain jars, fixed boxes and chosen boxes): id -> count. */
+function jarsInBasket(){
+  var used = {};
+  function add(id, n){ used[id] = (used[id] || 0) + n; }
+  Object.keys(CART).forEach(function(id){
+    var p = product(id);
+    if (!p) return;
+    if (p.type === 'package') (p.slots || []).forEach(function(s){ if (s.kind === 'fixed') add(s.id, s.qty * CART[id]); });
+    else add(id, CART[id]);
+  });
+  BOXES.forEach(function(b){
+    var p = product(b.id);
+    (p ? p.slots : []).forEach(function(s){ if (s.kind === 'fixed') add(s.id, s.qty); });
+    b.picks.forEach(function(list){ list.forEach(function(j){ add(j, 1); }); });
+  });
+  return used;
+}
+
+/** The pop-up for a box with choices: one drop-down per jar, listing only what is on the shelf. */
+function openBox(id){
+  var p = product(id);
+  if (!p) return;
+  var used = jarsInBasket(), html = '<h2>' + esc(p.name) + '</h2><div class="sub">' + money(p.price) +
+    ' · box included. Choose the jars.</div>';
+  var at = 0;
+  (p.slots || []).forEach(function(s){
+    if (s.kind !== 'pick') return;
+    html += '<div class="cat" style="margin-top:12px">' + esc(s.label) + '</div>';
+    for (var j = 0; j < s.n; j++){
+      html += '<label for="bp-' + at + '-' + j + '">Jar ' + (j + 1) + '</label>' +
+        '<select id="bp-' + at + '-' + j + '"><option value="">Choose…</option>' +
+        s.choices.filter(function(c){ return c.available === null || c.available - (used[c.id] || 0) > 0; }).map(function(c){
+          return '<option value="' + esc(c.id) + '">' + esc(c.name) + (c.variant ? ' ' + esc(c.variant) : '') + '</option>';
+        }).join('') + '</select>';
+    }
+    at++;
+  });
+  var d = document.createElement('div');
+  d.id = 'boxsheet';
+  d.innerHTML = '<div class="panel" role="dialog" aria-label="' + esc(p.name) + '">' + html +
+    '<button class="block" data-id="' + esc(p.id) + '" onclick="addBox(this.getAttribute(\'data-id\'))">Add to my order</button>' +
+    '<button class="block ghost" style="margin-top:8px" onclick="closeBox()">Cancel</button></div>';
+  document.body.appendChild(d);
+}
+function closeBox(){ var d = el('boxsheet'); if (d) d.remove(); }
+
+function addBox(id){
+  var p = product(id);
+  if (!p) return;
+  var picks = [], names = [], at = 0, ok = true, used = jarsInBasket(), mine = {};
+  (p.slots || []).forEach(function(s){
+    if (s.kind !== 'pick') return;
+    var list = [];
+    for (var j = 0; j < s.n; j++){
+      var v = (el('bp-' + at + '-' + j) || {}).value || '';
+      if (!v){ ok = false; continue; }
+      list.push(v);
+      var c = s.choices.filter(function(x){ return x.id === v; })[0];
+      names.push((s.numbered ? (j + 1) + '. ' : '') + (c ? c.name + (c.variant ? ' ' + c.variant : '') : v));
+      mine[v] = (mine[v] || 0) + 1;
+    }
+    picks.push(list); at++;
+  });
+  if (!ok){ toast('Choose every jar first.', true); return; }
+  var short = null;
+  (p.slots || []).forEach(function(s){
+    if (s.kind !== 'pick') return;
+    s.choices.forEach(function(c){
+      if (mine[c.id] && c.available !== null && (used[c.id] || 0) + mine[c.id] > c.available) short = c.name;
+    });
+  });
+  if (short){ toast('Not enough ' + short + ' left for that.', true); return; }
+  BOXES.push({ id: id, picks: picks, names: names });
+  closeBox();
+  draw();
+  toast('Added ' + p.name);
+}
+function dropBox(i){ BOXES.splice(i, 1); draw(); }
+
+/** The boxes in the basket, so the customer can check the jars and take one out. */
+function boxList(){
+  if (!BOXES.length) return '';
+  return '<div class="boxes">' + BOXES.map(function(b, i){
+    var p = product(b.id);
+    return '<div class="bx"><button class="rm" onclick="dropBox(' + i + ')" aria-label="Take out ' + esc(p ? p.name : '') + '">remove</button>' +
+      '<b>' + esc(p ? p.name : '') + ' — ' + money(p ? p.price : 0) + '</b>' + b.names.map(esc).join(', ') + '</div>';
+  }).join('') + '</div>';
 }
 
 function bump(id, dir){
@@ -530,6 +650,7 @@ function submit(){
     el('cs').focus(); return;
   }
   var lines = Object.keys(CART).map(function(id){ return { id:id, qty:CART[id] }; });
+  BOXES.forEach(function(b){ lines.push({ id:b.id, qty:1, picks:b.picks }); });
   if (!lines.length){ toast('Choose at least one thing.', true); return; }
   var ship = courierOn() && SHIP !== 'collect' ? SHIP : '', where = ship ? (el('cw').value||'').trim() : '';
   if (ship && where.length < 6){
@@ -607,9 +728,13 @@ function confirmed(res){
     return (p.weighed ? qty(CART[id], p.unit) : CART[id] + ' ×') + ' ' + p.name +
       (p.variant ? ' ' + p.variant : '') + ' — ' + money(p.price * CART[id]);
   }).filter(Boolean);
+  BOXES.forEach(function(b){
+    var p = product(b.id); if (!p) return;
+    lines.push('1 × ' + p.name + ' — ' + money(p.price) + ' (' + b.names.join(', ') + ')');
+  });
   var wa = waNumber(pr.whatsapp);
   var waLink = wa ? 'https://wa.me/' + wa + '?text=' + encodeURIComponent(waText(res, lines)) : '';
-  CART = {};
+  CART = {}; BOXES = [];
   el('app').innerHTML =
     '<div class="hero"><h1>' + esc(pr.name) + '</h1>' +
       (pr.tagline ? '<div class="tag">' + esc(pr.tagline) + '</div>' : '') + '</div>' +

@@ -134,6 +134,30 @@
              units: line.qty };
   }
 
+  /** What is in a package line, for staff to pack: the jars chosen (numbered when it is a numbered box). */
+  function boxText(l) {
+    if (!l || l.type !== 'package') return '';
+    var what = (l.chosen && l.chosen.length) ? l.chosen
+      : (l.contents || []).map(function (c) { return (c.qty > 1 ? c.qty + ' × ' : '') + c.name; });
+    return what.length ? ' <span class="muted small">' + what.map(esc).join(', ') + '</span>' : '';
+  }
+
+  /** The jars in a whole package line: one box's jars times how many boxes. */
+  function scaleBox(l) {
+    return (l.per || []).map(function (c) { return { id: c.id, name: c.name, qty: c.qty * l.qty, made: c.made }; });
+  }
+
+  /** Jars the basket already holds, whole boxes included: id -> count. */
+  function cartJars(skipKey) {
+    var used = {};
+    cart.forEach(function (l) {
+      if (l.key === skipKey) return;
+      if (l.type === 'package') (l.contents || []).forEach(function (c) { if (!c.made) used[c.id] = (used[c.id] || 0) + c.qty; });
+      else used[l.id] = (used[l.id] || 0) + l.units;
+    });
+    return used;
+  }
+
   function cartTotals() {
     var total = 0, count = 0;
     cart.forEach(function (l) { total += l.total; count += l.type === 'weighed' ? 1 : l.qty; });
@@ -144,6 +168,11 @@
     if (product.available === null) return null;
     var inCart = 0;
     cart.forEach(function (l) { if (l.id === product.id) inCart += l.units; });
+    if (product.type === 'package') return product.available - inCart;
+    // A jar that is also inside a box in the basket is not free for a plain sale.
+    cart.forEach(function (l) {
+      if (l.type === 'package') (l.contents || []).forEach(function (c) { if (c.id === product.id && !c.made) inCart += c.qty; });
+    });
     return product.available - inCart;
   }
 
@@ -172,7 +201,7 @@
           '<ul class="items">' + (o.lines || []).map(function (l) {
             var opts = (l.options || []).map(function (x) { return x.name || x.choice; }).join(', ');
             return '<li><b>' + (l.type === 'weighed' ? qty(l.units, l.unit) : l.qty + ' ×') + '</b> ' +
-              esc(l.name) + (opts ? ' <span class="muted small">' + esc(opts) + '</span>' : '') +
+              esc(l.name) + (opts ? ' <span class="muted small">' + esc(opts) + '</span>' : '') + boxText(l) +
               '<span class="num">' + money(l.total) + '</span></li>';
           }).join('') + '</ul>' +
           (o.note ? '<div class="note">“' + esc(o.note) + '”</div>' : '') + '</div>';
@@ -367,7 +396,7 @@
   function basketLines() {
     return cart.map(function (l, i) {
       var opts = (l.options || []).map(function (o) { return o.name || o.choice; }).join(', ');
-      var name = esc(l.name) + (opts ? ' <span class="muted small">' + esc(opts) + '</span>' : '');
+      var name = esc(l.name) + (opts ? ' <span class="muted small">' + esc(opts) + '</span>' : '') + boxText(l);
       if (l.type === 'weighed') {
         return '<div class="l"><span class="what">' + qty(l.qty, l.unit) + ' × ' + name +
           ' <button class="quiet" onclick="SFT.drop(' + i + ')">remove</button></span>' +
@@ -437,6 +466,7 @@
       var p = SF.find(SF.state.data.till.products, id);
       if (!p) return;
       if (p.weighed) return SFT.weigh(p);
+      if (p.type === 'package') return SFT.box(p);
       if ((p.options || []).length) return SFT.options(p);
       pickName = null;   // back to the jams for the next item
       SFT.add(p, 1, []);
@@ -467,6 +497,92 @@
       SF.toast('Added ' + p.name);
     },
 
+    /* ---- Packages (gift boxes) ---- */
+
+    /** Add a package: a fixed one goes straight in; one with choices opens the jar pickers first. */
+    box: function (p) {
+      var picks = (p.slots || []).filter(function (s) { return s.kind === 'pick'; });
+      if (!picks.length) { pickName = null; SFT.addBox(p, [], 1); return; }
+      var used = cartJars();
+      var html = '<h2>' + esc(p.name) + '</h2><div class="sub">' + money(p.price) + ' · choose the jars</div>';
+      picks.forEach(function (s, si) {
+        html += '<div class="boxslot"><b>' + esc(s.label) + '</b>';
+        for (var j = 0; j < s.n; j++) {
+          html += '<div class="field"><label for="bp-' + si + '-' + j + '">' + (s.numbered || s.n > 1 ? 'Jar ' + (j + 1) : 'Jar') + '</label>' +
+            '<select id="bp-' + si + '-' + j + '" class="bigsel"><option value="">Choose…</option>' +
+            s.choices.filter(function (c) { return c.available === null || c.available - (used[c.id] || 0) > 0; }).map(function (c) {
+              return '<option value="' + esc(c.id) + '">' + esc(c.name) + (c.variant ? ' ' + esc(c.variant) : '') + '</option>';
+            }).join('') + '</select></div>';
+        }
+        html += '</div>';
+      });
+      SF.openSheet(html + '<button class="block" data-id="' + esc(p.id) + '" onclick="SFT.confirmBox(this.getAttribute(\'data-id\'))">Add to the till</button>');
+    },
+
+    confirmBox: function (id) {
+      var p = SF.find(SF.state.data.till.products, id);
+      if (!p) return;
+      var picks = [], chosen = [];
+      var ok = (p.slots || []).filter(function (s) { return s.kind === 'pick'; }).every(function (s, si) {
+        var mine = [];
+        for (var j = 0; j < s.n; j++) { var b = SF.el('bp-' + si + '-' + j); mine.push(b ? b.value : ''); }
+        if (mine.some(function (v) { return !v; })) return false;
+        picks.push(mine);
+        return true;
+      });
+      if (!ok) { SF.toast('Choose every jar first.', true); return; }
+      SF.closeSheet();
+      pickName = null;
+      SFT.addBox(p, picks, 1);
+    },
+
+    /** Work out the jars in one box (per box), from its fixed jars and the chosen ones. */
+    boxContents: function (p, picks) {
+      var per = [], seen = {}, names = [], at = 0;
+      function put(id, name, n, made) {
+        if (!seen[id]) { seen[id] = { id: id, name: name, qty: 0, made: !!made }; per.push(seen[id]); }
+        seen[id].qty += n;
+      }
+      (p.slots || []).forEach(function (s) {
+        if (s.kind === 'fixed') { put(s.id, s.name, s.qty, s.made); return; }
+        var mine = picks[at++] || [];
+        mine.forEach(function (jid, j) {
+          var c = s.choices.filter(function (x) { return x.id === jid; })[0];
+          var nm = c ? c.name + (c.variant ? ' ' + c.variant : '') : jid;
+          put(jid, nm, 1, false);
+          names.push((s.numbered ? (j + 1) + '. ' : '') + nm);
+        });
+      });
+      return { per: per, chosen: names };
+    },
+
+    addBox: function (p, picks, n) {
+      var box = SFT.boxContents(p, picks), choosing = picks.length > 0;
+      var left = availableNow(p);
+      if (left !== null && n > left) { SF.toast('Only ' + qty(left, p.unit) + ' of ' + p.name + ' left.', true); return; }
+      var used = cartJars(), short = null;
+      box.per.forEach(function (c) {
+        if (c.made) return;
+        var jar = SF.find(SF.state.data.till.products, c.id);
+        if (jar && jar.available !== null && (used[c.id] || 0) + c.qty * n > jar.available) short = c.name;
+      });
+      if (short) { SF.toast('Not enough ' + short + ' left for the ' + p.name + '.', true); return; }
+      var existing = null, key = p.id + '|' + (choosing ? 'box' + SF.uid() : 'fixed');
+      if (!choosing) cart.forEach(function (l) { if (l.key === key) existing = l; });
+      if (existing) {
+        existing.qty += n; existing.total = existing.each * existing.qty; existing.units = existing.qty;
+        existing.contents = scaleBox(existing);
+      } else {
+        var line = { key: key, id: p.id, name: p.name + (p.variant ? ' ' + p.variant : ''), unit: 'each', type: 'package',
+                     qty: n, options: [], each: p.price, total: p.price * n, units: n, per: box.per,
+                     picks: picks, chosen: box.chosen };
+        line.contents = scaleBox(line);
+        cart.push(line);
+      }
+      SF.render();
+      SF.toast('Added ' + p.name);
+    },
+
     openBasket: function () {
       if (!cart.length) return;
       var t = cartTotals();
@@ -487,6 +603,20 @@
       n = Math.floor(Number(n));
       if (!(n > 0)) { SFT.drop(i); return; }
       var p = SF.find(SF.state.data.till.products, l.id);
+      if (l.type === 'package') {
+        if ((l.picks || []).length) {
+          if (n > 1) SF.toast('Add each box on its own, so each gets its own jars.', true);
+          SF.render(); refreshBasket(); return;
+        }
+        var other = cartJars(l.key), over = null;
+        (l.per || []).forEach(function (c) {
+          var jar = SF.find(SF.state.data.till.products, c.id);
+          if (!c.made && jar && jar.available !== null && (other[c.id] || 0) + c.qty * n > jar.available) over = c.name;
+        });
+        if (over) { SF.toast('Not enough ' + over + ' left for ' + n + ' of ' + l.name + '.', true); SF.render(); refreshBasket(); return; }
+        l.qty = n; l.total = l.each * n; l.units = n; l.contents = scaleBox(l);
+        SF.render(); refreshBasket(); return;
+      }
       if (p) {
         var left = availableNow(p);
         if (left !== null && n > left + l.units) {
@@ -779,8 +909,10 @@
       var change = method === 'cash' ? Math.round((tendered - t.total) * 100) / 100 : 0;
       var how = method;
       var lines = cart.map(function (l) {
-        return { id: l.id, qty: l.qty, options: (l.options || []).map(function (o) {
+        var out = { id: l.id, qty: l.qty, options: (l.options || []).map(function (o) {
           return { group: o.group, choice: o.choice }; }) };
+        if (l.type === 'package' && (l.picks || []).length) out.picks = l.picks;
+        return out;
       });
       var snapshot = cart.slice();
       cart = [];
@@ -795,6 +927,18 @@
         snapshot.forEach(function (l) {
           [till, stock].forEach(function (d) {
             if (!d) return;
+            if (l.type === 'package') {
+              // The box has no stock of its own: its jars come off the shelf.
+              (l.contents || []).forEach(function (c) {
+                var jar = SF.find(d.products, c.id);
+                if (!jar || c.made) return;
+                if (jar.available !== null && jar.available !== undefined) jar.available -= c.qty;
+                if (jar.onHand !== undefined) jar.onHand -= c.qty;
+              });
+              var bx = SF.find(d.products, l.id);
+              if (bx && bx.available !== null && bx.available !== undefined) bx.available = Math.max(0, bx.available - l.units);
+              return;
+            }
             var p = SF.find(d.products, l.id);
             if (p && p.available !== null && p.available !== undefined) p.available -= l.units;
             if (p && p.onHand !== undefined) p.onHand -= l.units;
@@ -883,7 +1027,7 @@
           order.lines.map(function (l) {
             return '<div class="rowitem"><div class="who"><b>' +
               (l.type === 'weighed' ? qty(l.units, l.unit) : l.qty + ' ×') + ' ' +
-              esc(l.name) + '</b></div><span class="amt">' + money(l.total) + '</span></div>';
+              esc(l.name) + '</b>' + boxText(l) + '</div><span class="amt">' + money(l.total) + '</span></div>';
           }).join('') +
         '</div>' +
         '<div class="notice ' + (paid ? 'bad' : 'warn') + '" style="border-radius:10px;' +
@@ -918,6 +1062,19 @@
         // Put the stock back on screen straight away, the way the server will.
         (lines || []).forEach(function (l) {
           if (l.type === 'made') return;
+          if (l.type === 'package') {
+            ['till', 'stock'].forEach(function (v) {
+              var d = SF.state.data[v];
+              if (!d) return;
+              (l.contents || []).forEach(function (c) {
+                var jar = SF.find(d.products, c.id);
+                if (!jar || c.made) return;
+                if (jar.available !== null && jar.available !== undefined) jar.available += c.qty;
+                if (jar.onHand !== undefined) jar.onHand += c.qty;
+              });
+            });
+            return;
+          }
           ['till', 'stock'].forEach(function (v) {
             var d = SF.state.data[v];
             if (!d) return;
@@ -1001,7 +1158,7 @@
           '<div class="nm">' + esc(next.customer) + '</div>' +
           '<div class="no">' + esc(next.no) + '</div>' +
           '<div class="what">' + next.lines.map(function (l) {
-            return (l.type === 'weighed' ? qty(l.units, l.unit) : l.qty + ' ×') + ' ' + esc(l.name);
+            return (l.type === 'weighed' ? qty(l.units, l.unit) : l.qty + ' ×') + ' ' + esc(l.name) + boxText(l);
           }).join('<br>') + '</div>' +
           '<div class="waited">' + esc(waited(next)) + ' · paid</div>' +
           '<button onclick="SFT.collect(\'' + next.no + '\')">Handed over — next please</button>' +
@@ -1312,7 +1469,7 @@
   }
 
   function runCard(s, v) {
-    var opts = s.products.filter(function (p) { return p.active; }).map(function (p) {
+    var opts = s.products.filter(function (p) { return p.active && p.type !== 'package'; }).map(function (p) {
       return '<option value="' + p.id + '">' + esc(p.name) +
         (p.variant ? ' · ' + esc(p.variant) : '') + '</option>';
     }).join('') || '<option value="">Add a product first</option>';
@@ -1752,13 +1909,17 @@
     var uncategorised = s.products.some(function (p) { return !p.category; });
     var rows = s.products.map(function (p) {
       var show = [p.active ? 'onsale' : 'hidden'];
-      if (p.type !== 'made') show.push(p.onHand <= 0 ? 'out' : p.onHand <= 4 ? 'low' : 'instock');
-      var left = p.type === 'made' ? (p.available === null ? 1e9 : p.available) : p.onHand;
+      var box = p.type === 'package';
+      if (box) show.push(p.available !== null && p.available <= 0 ? 'out' : p.available !== null && p.available <= 2 ? 'low' : 'instock');
+      else if (p.type !== 'made') show.push(p.onHand <= 0 ? 'out' : p.onHand <= 4 ? 'low' : 'instock');
+      var left = p.type === 'made' || box ? (p.available === null ? 1e9 : p.available) : p.onHand;
       var state = p.pending ? '<span class="tag">Saving\u2026</span>'
         : !p.active ? '<span class="tag">Hidden</span>'
         : p.type === 'made'
           ? '<span class="tag ok">' + (p.available === null ? 'to order'
               : p.available + ' left today') + '</span>'
+        : box ? (p.available !== null && p.available <= 0 ? '<span class="tag bad">Sold out</span>'
+              : '<span class="tag ' + (p.available !== null && p.available <= 2 ? 'warn' : 'ok') + '">' + (p.available === null ? 'to order' : p.available + (p.available === 1 ? ' box' : ' boxes')) + '</span>')
         : p.onHand <= 0 ? '<span class="tag bad">Sold out</span>'
         : p.onHand <= 4 ? '<span class="tag warn">' + qty(p.onHand, p.unit) + '</span>'
         : '<span class="tag ok">' + qty(p.onHand, p.unit) + '</span>';
@@ -1791,7 +1952,7 @@
         (p.pending ? '' : '<div class="pacts"><button class="quiet" data-id="' + id + '" data-on="' + (p.active ? 'false' : 'true') +
           '" onclick="SFS.toggle(this.getAttribute(\'data-id\'),this.getAttribute(\'data-on\')===\'true\')">' +
           (p.active ? 'hide' : 'show') + '</button>' +
-          (p.type !== 'made'
+          (p.type !== 'made' && !box
             ? '<button class="quiet" data-id="' + id + '" onclick="SFS.adjust(this.getAttribute(\'data-id\'))">adjust stock</button>' : '') +
         '</div>') + '</div>';
     }).join('');

@@ -2690,6 +2690,98 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
     await env.ctx.close();
   });
 
+
+  /* ---------- Packages (gift boxes) ---------- */
+  const withBoxes = (SF) => {
+    const jar = (id, name, v, cat, n, price) => {
+      SF.append('products', { ProductId: id, Name: name, Variant: v, Type: 'stocked', Category: cat, Unit: 'each', Price: price, Active: 'Yes', Sort: 100 });
+      if (n) SF.move(id, n, 'adjust', 'test');
+    };
+    jar('J1', 'Makataan', '125 ml', 'Jams', 3, 40); jar('J2', 'Guavadilla', '125 ml', 'Jams', 3, 40);
+    jar('J3', 'Peachdilla', '125 ml', 'Jams', 0, 40); jar('J4', 'Fig', '125 ml', 'Jams', 4, 50);
+    const box = (id, name, price, slots) => SF.append('products', { ProductId: id, Name: name, Variant: '', Type: 'package', Category: 'Gift boxes',
+      Unit: 'each', Price: price, Active: 'Yes', Sort: 5000, Contents: JSON.stringify(slots) });
+    box('K1', 'Teacher Thank You', 85, [{ pick: 2, size: '125 ml', label: 'Any two 125 ml jars' }]);
+    box('K2', 'Taste of Mzansi', 135, [{ id: 'J1', qty: 1 }, { id: 'J2', qty: 1 }, { id: 'J3', qty: 1 }]);
+    box('K3', 'Duo Box', 90, [{ id: 'J1', qty: 1 }, { id: 'J2', qty: 1 }]);
+    SF.set('homeOrders', 'yes');
+  };
+
+  await test('Packages: the order page lists a box with its jars, shows sold out, and a chosen box reserves its jars', async () => {
+    const env = await phone({ hash: '#till', seed: (SF) => { withBoxes(SF); courierOn(SF); } });
+    const page = await customer(env, '?m=home');
+    assert.ok(/Makataan 125 ml \+ Guavadilla 125 ml \+ Peachdilla 125 ml/.test(await page.textContent('.item:has-text("Taste of Mzansi")')));
+    assert.ok(/Sold out/.test(await page.textContent('.item:has-text("Taste of Mzansi")')), 'Peachdilla is at 0');
+    assert.strictEqual(await page.locator('.item:has-text("Taste of Mzansi") .stepper').count(), 0);
+    await page.click('.item:has-text("Teacher Thank You") button:has-text("Choose jars")');
+    await page.waitForSelector('#boxsheet select');
+    assert.strictEqual(await page.locator('#boxsheet select').count(), 2);
+    assert.ok(!/Peachdilla/.test(await page.textContent('#boxsheet')), 'a jar that is finished is not offered');
+    await page.click('#boxsheet button:has-text("Add to my order")');
+    assert.ok(/Choose every jar/.test(await page.textContent('#toast')));
+    await page.selectOption('#bp-0-0', 'J1'); await page.selectOption('#bp-0-1', 'J4');
+    await page.click('#boxsheet button:has-text("Add to my order")');
+    assert.strictEqual(await page.locator('#boxsheet').count(), 0);
+    assert.ok(/Makataan 125 ml, Fig 125 ml/.test(await page.textContent('.boxes')));
+    assert.strictEqual((await page.textContent('#amt')).replace(/\s/g, ''), 'R85.00');
+    assert.strictEqual(await page.locator('.ship input').count(), 3, 'a package can go by courier');
+    await page.fill('#nm', 'Anna Bester'); await page.fill('#ph', '082 555 0101'); await page.check('#cs');
+    await page.check('input[value="locker"]'); await page.fill('#cw', 'Pudo locker, Centurion Mall');
+    await page.click('#go');
+    await page.waitForSelector('.done');
+    assert.ok(/R 145\.00/.test(await page.textContent('.done')), 'R85 box + R60 courier');
+    const on = env.SF.onHand();
+    assert.deepStrictEqual([on.J1, on.J4, on.K1], [2, 3, undefined]);
+    const row = env.sheets.Orders.rows.find((r) => r[4] === 'Anna Bester');
+    assert.strictEqual(row[8], 85);
+    assert.ok(/Fig 125 ml/.test(row[6]));
+    await env.ctx.close();
+  });
+
+  await test('Packages: a fixed box takes the lowest jar stock, and the till sells a chosen box and takes its jars off', async () => {
+    const env = await phone({ hash: '#till', seed: withBoxes });
+    const page = env.page;
+    await page.waitForFunction(() => SF.state.data.till);
+    assert.strictEqual(env.SF.products().find((p) => p.id === 'K3').available, 3);
+    await page.evaluate(() => { SF.ls.set('sf.tillcat', 'Gift boxes'); SF.render(); });
+    assert.ok(/SOLD OUT/.test(await page.textContent('#tilesbox .tile:has-text("Taste of Mzansi")')));
+    await page.click('#tilesbox .tile:has-text("Teacher Thank You")');
+    await page.waitForSelector('#bp-0-1');
+    await page.click('.sheet button:has-text("Add to the till")');
+    assert.ok(/Choose every jar/.test(await page.textContent('#toast')));
+    await page.selectOption('#bp-0-0', 'J2'); await page.selectOption('#bp-0-1', 'J2');
+    await page.click('.sheet button:has-text("Add to the till")');
+    await page.click('#tilesbox .tile:has-text("Duo Box")');
+    await openBasket(page);
+    assert.ok(/Guavadilla 125 ml, Guavadilla 125 ml/.test(await page.textContent('#basketbody')) || /Guavadilla/.test(await page.textContent('#basketbody')));
+    await page.click('#basketbody button:has-text("Take payment")');
+    await page.click('.sheet button:has-text("Exact")');
+    await page.click('#doSale');
+    await page.waitForFunction(() => !SF.outbox.pending().length);
+    const on = env.SF.onHand();
+    assert.deepStrictEqual([on.J1, on.J2], [2, 0], 'two Guavadilla in the Teacher box and one in the Duo; Makataan one');
+    const sale = env.sheets.Orders.rows.slice(1).find((r) => r[3] === 'till');
+    assert.strictEqual(sale[8], 175);
+    // the Stock screen shows boxes, not a stock count, and no stock adjustment
+    await page.evaluate(() => { SF.ls.set('sf.tab.stock', 'shelf'); location.hash = '#stock'; SF.load('stock').then(() => SF.render()); });
+    await page.waitForSelector('#shelf-K2');
+    assert.ok(/Sold out/.test(await page.textContent('#shelf-K2')));
+    assert.strictEqual(await page.locator('#shelf-K3 button:has-text("adjust stock")').count(), 0);
+    assert.strictEqual(await page.locator('#shelf-J1 button:has-text("adjust stock")').count(), 1);
+    await env.ctx.close();
+  });
+
+  await test('Packages: the order page and the box picker fit a 320 px phone', async () => {
+    const env = await phone({ hash: '#till', seed: withBoxes });
+    const page = await customer(env, '?m=home');
+    await page.setViewportSize({ width: 320, height: 640 });
+    await page.click('.item:has-text("Teacher Thank You") button:has-text("Choose jars")');
+    await page.waitForSelector('#boxsheet select');
+    const wide = (pg) => pg.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+    assert.ok((await wide(page)) <= 0, 'wider than the phone by ' + await wide(page));
+    await env.ctx.close();
+  });
+
   await test('no page errors anywhere in the run', async () => {
     const env = await phone({ hash: '#numbers' });
     for (const h of ['#till', '#collect', '#stock', '#labels', '#numbers', '#settings', '#health', '#report']) {

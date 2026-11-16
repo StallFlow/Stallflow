@@ -501,7 +501,7 @@ test('a stall data fix runs once, only changes what is still as it was, and neve
   SF.append('markets', { MarketId: 'M03', Name: 'Blairegowrie Church Market', Date: day(0), Location: 'Christ Church Blairgowrie, Gordon Avenue', Status: 'planned' });
   vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'stalls', 'duxies', 'Fixes.gs'), 'utf8'), ctx);
   const row = () => SF.rows('markets').filter((m) => m.MarketId === 'M03')[0];
-  assert.strictEqual(SF.runDataFixes().length, 2, 'both one-off fixes ran');
+  assert.strictEqual(SF.runDataFixes().length, 3, 'both one-off fixes ran, and the gift boxes that need no named jar');
   assert.strictEqual(row().Name, 'Blairegowrie Craft Market');
   assert.ok(/Domus Dei Campus, 39 Malcolm Road/.test(row().Location), row().Location);
   // typed in by hand afterwards: the fix is spent and never overwrites it
@@ -1756,7 +1756,187 @@ test('schema 12 adds the Delivery heading to Orders', () => {
   const done = SF.migrate();
   assert.ok(done.some((d) => /^12:/.test(d)), done.join(' | '));
   assert.strictEqual(sheets.Orders.rows[0][16], 'Delivery');
-  assert.strictEqual(SF.SCHEMA, 12);
+  assert.ok(SF.SCHEMA >= 12);
+});
+
+/* ---------- Packages (bundles) ---------- */
+function packShop() {
+  const env = courierShop(true);
+  const { SF } = env;
+  const jar = (id, name, variant, cat, n, price) => {
+    SF.append('products', { ProductId: id, Name: name, Variant: variant, Type: 'stocked', Category: cat, Unit: 'each', Price: price, Active: 'Yes', Sort: 100 });
+    if (n) SF.move(id, n, 'adjust', 'test');
+  };
+  jar('J1', 'Makataan', '125 ml', 'Jams', 3, 40);
+  jar('J2', 'Guavadilla', '125 ml', 'Jams', 5, 40);
+  jar('J3', 'Peachdilla', '125 ml', 'Jams', 2, 40);
+  jar('J4', 'Fig', '125 ml', 'Jams', 4, 50);
+  jar('J5', 'Orange Marmalade', '352 ml', 'Marmalades', 6, 70);
+  jar('J6', 'Strawberry', '352 ml', 'Jams', 6, 70);
+  jar('J7', 'Tomato Chilli', '352 ml', 'Chutney-style jams', 0, 70);
+  SF.append('products', { ProductId: 'B1', Name: 'Butter Biscuits', Variant: '300 g pack', Type: 'made', Category: 'Biscuits', Unit: 'each', Price: 70, Capacity: 0, Active: 'Yes', Sort: 200 });
+  const pack = (id, name, price, slots) => SF.append('products', { ProductId: id, Name: name, Type: 'package', Category: 'Gift boxes', Unit: 'each', Price: price, Active: 'Yes', Sort: 5000, Contents: JSON.stringify(slots) });
+  pack('K1', 'Taste of Mzansi', 135, [{ id: 'J1', qty: 1 }, { id: 'J2', qty: 1 }, { id: 'J3', qty: 1 }]);
+  pack('K2', "Teacher's Thank You", 85, [{ pick: 2, size: '125 ml' }]);
+  pack('K3', 'Sunday Breakfast', 230, [{ pick: 1, size: '352 ml', cats: ['Marmalades'] }, { pick: 1, size: '352 ml', cats: ['Jams'] }, { id: 'B1', qty: 1 }]);
+  pack('K4', 'Braai Box', 220, [{ id: 'J7', qty: 1 }, { id: 'J6', qty: 1 }]);
+  return env;
+}
+const stockOf = (SF, id) => SF.onHand()[id] || 0;
+const pk = (SF, id) => SF.products({ all: true }).find((p) => p.id === id);
+const sellPack = (SF, tok, lines, extra) => SF.dispatch('sell', Object.assign({ token: tok, opId: 'pk' + (op++), lines, marketId: 'M01', paid: 'cash' }, extra || {}));
+
+test('a package can be sold as often as its scarcest jar allows, and shows sold out when a jar is at 0', () => {
+  const { SF } = packShop();
+  assert.strictEqual(pk(SF, 'K1').available, 2, 'lowest of 3, 5 and 2');
+  assert.strictEqual(pk(SF, 'K4').available, 0, 'Tomato Chilli is at 0');
+  assert.strictEqual(pk(SF, 'K2').available, 7, 'two 125 ml jars each: 14 jars (3+5+2+4) over 2');
+  assert.strictEqual(pk(SF, 'K1').onHand, 0, 'a package keeps no stock of its own');
+  const r = order(SF, { market: 'home', lines: [{ id: 'K4', qty: 1 }] });
+  assert.strictEqual(r.ok, false);
+  assert.ok(/Tomato Chilli/.test(r.message), r.message);
+});
+
+test('selling a package takes each jar off through the ledger, at the package price, and nothing for the box itself', () => {
+  const { SF, sheets, tok } = packShop();
+  const before = SF.rows('movements').length;
+  const r = sellPack(SF, tok, [{ id: 'K1', qty: 2 }]);
+  assert.strictEqual(r.ok, true, r.message);
+  assert.strictEqual(r.data ? 0 : 0, 0);
+  assert.deepStrictEqual([stockOf(SF, 'J1'), stockOf(SF, 'J2'), stockOf(SF, 'J3')], [1, 3, 0]);
+  const moves = SF.rows('movements').slice(before);
+  assert.strictEqual(moves.length, 3);
+  assert.ok(moves.every((m) => m.Type === 'sale' && m.ProductId !== 'K1'));
+  const o = SF.orders().pop();
+  assert.strictEqual(o.total, 270);
+  assert.strictEqual(o.lines[0].contents.length, 3);
+  assert.strictEqual(pk(SF, 'K1').available, 0, 'sold out now');
+  assert.strictEqual(sellPack(SF, tok, [{ id: 'K1', qty: 1 }]).ok, false);
+});
+
+test('cancelling a package order puts the very same jars back', () => {
+  const { SF, tok } = packShop();
+  const r = order(SF, { market: 'home', lines: [{ id: 'K1', qty: 1 }] });
+  assert.strictEqual(r.ok, true, r.message);
+  assert.strictEqual(stockOf(SF, 'J3'), 1);
+  assert.strictEqual(SF.dispatch('cancelOrder', { token: tok, opId: 'cx' + (op++), orderNo: r.orderNo }).ok, true);
+  assert.deepStrictEqual([stockOf(SF, 'J1'), stockOf(SF, 'J2'), stockOf(SF, 'J3')], [3, 5, 2]);
+});
+
+test('a package with choices needs the right number of eligible jars, one box per line', () => {
+  const { SF, tok } = packShop();
+  const go = (extra) => sellPack(SF, tok, [Object.assign({ id: 'K2', qty: 1 }, extra)]);
+  assert.strictEqual(go({}).ok, false, 'no jars chosen');
+  assert.strictEqual(go({ picks: [['J1']] }).ok, false, 'one jar of two');
+  assert.strictEqual(go({ picks: [['J1', 'J5']] }).ok, false, 'a 352 ml jar is not a 125 ml jar');
+  assert.strictEqual(go({ picks: [['J1', 'NOPE']] }).ok, false);
+  assert.strictEqual(sellPack(SF, tok, [{ id: 'K2', qty: 2, picks: [['J1', 'J2']] }]).ok, false, 'two boxes need two sets of picks');
+  assert.strictEqual(stockOf(SF, 'J1'), 3, 'nothing moved on a refusal');
+  assert.strictEqual(go({ picks: [['J1', 'J2']] }).ok, true);
+  assert.deepStrictEqual([stockOf(SF, 'J1'), stockOf(SF, 'J2')], [2, 4]);
+  assert.strictEqual(go({ picks: [['J3', 'J3']] }).ok, true, 'the same flavour twice is allowed while there is stock');
+  assert.strictEqual(stockOf(SF, 'J3'), 0);
+  assert.strictEqual(go({ picks: [['J3', 'J1']] }).ok, false, 'Peachdilla is finished');
+});
+
+test('jars in two lines of one order are counted together', () => {
+  const { SF } = packShop();
+  // J3 has 2: a box takes 1 and a plain jar line asks for 2
+  const r = order(SF, { market: 'home', lines: [{ id: 'K1', qty: 1 }, { id: 'J3', qty: 2 }] });
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(stockOf(SF, 'J3'), 2);
+  assert.strictEqual(order(SF, { market: 'home', lines: [{ id: 'J3', qty: 1 }, { id: 'K1', qty: 1 }] }).ok, true);
+  assert.strictEqual(stockOf(SF, 'J3'), 0);
+});
+
+test('a numbered box keeps the order of its jars, and biscuits in a box use capacity, not stock', () => {
+  const { SF, tok } = packShop();
+  SF.append('products', { ProductId: 'K5', Name: 'Twelve', Type: 'package', Unit: 'each', Price: 480, Active: 'Yes', Sort: 1,
+    Contents: JSON.stringify([{ pick: 3, size: '125 ml', numbered: true }]) });
+  assert.strictEqual(sellPack(SF, tok, [{ id: 'K5', qty: 1, picks: [['J4', 'J1', 'J4']] }]).ok, true);
+  const o = SF.orders().pop();
+  assert.deepStrictEqual(Array.from(o.lines[0].chosen), ['1. Fig 125 ml', '2. Makataan 125 ml', '3. Fig 125 ml']);
+  assert.strictEqual(stockOf(SF, 'J4'), 2);
+  const before = SF.rows('movements').length;
+  const b = sellPack(SF, tok, [{ id: 'K3', qty: 1, picks: [['J5'], ['J6']] }]);
+  assert.strictEqual(b.ok, true, b.message);
+  assert.strictEqual(SF.rows('movements').length - before, 2, 'a marmalade and a jam, no movement for the biscuits');
+  assert.strictEqual(sellPack(SF, tok, [{ id: 'K3', qty: 1, picks: [['J6'], ['J6']] }]).ok, false, 'a jam is not a marmalade');
+  assert.strictEqual(SF.orders().pop().lines[0].contents.filter((c) => c.made).length, 1);
+});
+
+test('packages stay out of stock counts, stock value and stock changes, and cannot be made by hand', () => {
+  const { SF, tok } = packShop();
+  assert.ok(!SF.dispatch('countState', { token: tok }).data.products.some((p) => p.id === 'K1'));
+  SF.dispatch('countStart', { token: tok, opId: 'cs' + (op++) });
+  assert.strictEqual(JSON.parse(SF.rows('stockcounts')[0].Snapshot).K1, undefined);
+  assert.strictEqual(SF.dispatch('adjustStock', { token: tok, opId: 'a' + (op++), productId: 'K1', qty: 5, reason: 'x' }).ok, false);
+  assert.strictEqual(SF.dispatch('addBatch', { token: tok, opId: 'b' + (op++), productId: 'K1', made: 2, lines: [{ label: 'x', qty: 1, price: 10 }] }).ok, false);
+  assert.strictEqual(SF.dispatch('saveProduct', { token: tok, opId: 'n' + (op++), name: 'New box', type: 'package', price: 100 }).ok, false);
+  const edit = SF.dispatch('saveProduct', { token: tok, opId: 'e' + (op++), productId: 'K1', name: 'Taste of Mzansi', price: 140, type: 'stocked' });
+  assert.strictEqual(edit.ok, true);
+  assert.strictEqual(pk(SF, 'K1').type, 'package', 'type and contents survive an edit');
+  assert.strictEqual(pk(SF, 'K1').price, 140);
+  assert.strictEqual(pk(SF, 'K1').slots.length, 3);
+});
+
+test('the order page and till list packages with their choices, and a package is courier-eligible', () => {
+  const { SF, tok } = packShop();
+  const cat = SF.dispatch('catalogue', { market: 'home' }).data.products.find((p) => p.id === 'K2');
+  assert.strictEqual(cat.type, 'package');
+  assert.strictEqual(cat.slots[0].kind, 'pick');
+  assert.ok(cat.slots[0].choices.every((c) => c.variant === '125 ml'));
+  assert.ok(!('cost' in cat));
+  const till = SF.dispatch('till', { token: tok, marketId: 'M01' }).data.products.find((p) => p.id === 'K1');
+  assert.strictEqual(till.slots.length, 3);
+  const r = SF.dispatch('placeOrder', { opId: 'pc' + (op++), name: 'Anna', phone: '082 123 4567', consent: true, market: 'home',
+    lines: [{ id: 'K1', qty: 1 }], delivery: { mode: 'locker', where: 'Pudo locker, Centurion Mall' } });
+  assert.strictEqual(r.ok, true, r.message);
+  assert.strictEqual(r.toPay, 135 + 60);
+});
+
+test('the gift boxes fix finds jars by name and size, adds each box once, and leaves hand edits alone', () => {
+  const env = shop(day(3));
+  const { SF, ctx } = env;
+  const st = vm.createContext(Object.assign({}, { SF, SpreadsheetApp: {} }));
+  ['Costing.gs', 'Stocktake.gs'].forEach((f) => vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'stalls', 'duxies', f), 'utf8'), st));
+  SF.pots = () => st.sfPots(); SF.newPot = (n) => st.sfNewPot(n);
+  st.sfApplyStocktake();
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'stalls', 'duxies', 'Fixes.gs'), 'utf8'), ctx);
+  assert.ok(SF.runDataFixes().some((w) => /gift boxes/.test(w)));
+  const boxes = SF.products({ all: true }).filter((p) => p.type === 'package');
+  assert.strictEqual(boxes.length, 8);
+  const by = (n) => boxes.find((p) => p.name === n);
+  assert.strictEqual(boxes.map((p) => p.price).sort((a, b) => a - b).join(','), '85,135,150,220,220,230,230,480');
+  assert.strictEqual(by('Taste of Mzansi').available, 0, 'Makataan 125 ml is at 0');
+  assert.strictEqual(by('Braai Box').available, 6, 'Tomato Chilli 9, Tomato Ginger 10 (352 ml), Strawberry Chilli 6');
+  assert.strictEqual(by('Cheese Board Trio').available, 0, 'Fig Chunky 352 ml is at 0');
+  assert.strictEqual(by('Grown-ups Only').available, 1, 'Strawberry Gin 352 ml: 1');
+  assert.ok(by('Sunday Breakfast').available > 0);
+  assert.ok(by('12 Jars of Christmas').available >= 1);
+  const ids = SF.rows('products').map((r) => r.ProductId);
+  assert.strictEqual(new Set(ids).size, ids.length, 'no id is reused');
+  // a hand edit wins; a second run adds nothing
+  SF.setCell('products', by('Braai Box').row, 'Price', 240);
+  SF.setCell('products', by('Jam Club (monthly)').row, 'Active', 'No');
+  assert.strictEqual(SF.runDataFixes().length, 0);
+  assert.strictEqual(SF.products({ all: true }).filter((p) => p.type === 'package').length, 8);
+  assert.strictEqual(SF.products({ all: true }).find((p) => p.name === 'Braai Box').price, 240);
+  // the stocktake leaves the boxes alone and the stock total is unchanged
+  const boxIds = boxes.map((p) => p.id);
+  st.sfApplyStocktake();
+  assert.strictEqual(SF.rows('movements').filter((m) => boxIds.indexOf(String(m.ProductId)) !== -1).length, 0, 'no stock was ever written for a box');
+  assert.strictEqual(new Set(SF.rows('products').map((r) => r.ProductId)).size, SF.rows('products').length);
+});
+
+test('schema 13 adds the Contents heading to Products', () => {
+  const { SF, sheets } = shop(day(3));
+  SF.set('schemaVersion', 12);
+  sheets.Products.rows[0].length = 11;
+  const done = SF.migrate();
+  assert.ok(done.some((d) => /^13:/.test(d)), done.join(' | '));
+  assert.strictEqual(sheets.Products.rows[0][11], 'Contents');
+  assert.strictEqual(SF.SCHEMA, 13);
 });
 
 console.log(failures ? '\n' + failures + ' failed' : '\nall passed');
