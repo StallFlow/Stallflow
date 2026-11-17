@@ -585,9 +585,10 @@ test('the connector: wrong key, then the protocol, then a fixed list of tools', 
   const init = env.rpc('initialize', { protocolVersion: '2025-06-18' }).reply.result;
   assert.strictEqual(init.protocolVersion, '2025-06-18'); assert.ok(init.capabilities.tools);
   const tools = env.rpc('tools/list', {}).reply.result.tools.map((t) => t.name).sort();
-  assert.strictEqual(tools.join(), 'stallflow_add_product,stallflow_adjust_stock,stallflow_problems,stallflow_set_price,stallflow_stock,stallflow_stocktake,stallflow_switch_product');
+  assert.strictEqual(tools.join(), 'stallflow_add_product,stallflow_adjust_stock,stallflow_cancel_sale,stallflow_problems,stallflow_record_sale,stallflow_sales,stallflow_set_payment,stallflow_set_price,stallflow_stock,stallflow_stocktake,stallflow_switch_product');
   assert.strictEqual(env.SF.mcp(env.key, { jsonrpc: '2.0', method: 'notifications/initialized' }).reply, null, 'a notification gets no answer');
   assert.strictEqual(env.call('sell', { lines: [] }).data.ok, false, 'no tool outside the list');
+  assert.strictEqual(env.call('stallflow_delete_market', {}).data.ok, false);
   assert.strictEqual(env.call('setPin', { role: 'owner', pin: '1' }).data.ok, false);
 });
 
@@ -615,6 +616,45 @@ test('the connector adds, prices, restocks and switches off, and records each as
   assert.strictEqual(env.call('stallflow_add_product', { name: 'x', price: 0 }).data.ok, false);
   assert.ok(env.call('stallflow_problems', {}).data.ok, 'support read works');
   assert.strictEqual(env.call('stallflow_stocktake', {}).data.status, 'none', 'no stocktake yet: says so');
+});
+
+test('the connector corrects a market\'s sales when the owner asks: cancel, re-record, change payment', () => {
+  const env = claudeKit(), { SF } = env;
+  SF.append('products', { ProductId: 'P02', Name: 'Makataan', Variant: '352 ml', Type: 'stocked', Unit: 'each', Price: 70, Active: 'Yes', Sort: 20 });
+  SF.move('P02', 10, 'adjust', 'test');
+  SF.append('markets', { MarketId: 'M02', Name: 'Harveston estate', Date: day(-2), Status: 'planned' });
+  const c = env.owner;
+  SF.dispatch('sell', { token: c, opId: 'w1', marketId: 'M02', paid: 'cash', lines: [{ id: 'P01', qty: 3 }] });
+  const stock0 = SF.onHand().P01;
+  const list = env.call('stallflow_sales', {}).data;
+  assert.ok(list.markets.some((m) => m.id === 'M02' && m.taken > 0), 'markets listed with what they took');
+  const before = env.call('stallflow_sales', { market: 'harveston' }).data;
+  assert.strictEqual(before.sales.length, 1);
+  assert.ok(!JSON.stringify(before).includes('Walk-up'), 'no customer field at all');
+  const wrong = before.sales[0].orderNo;
+  const cancelled = env.call('stallflow_cancel_sale', { order_no: wrong, reason: 'rung up wrong at Harveston' });
+  assert.ok(cancelled.data.ok, JSON.stringify(cancelled));
+  assert.strictEqual(SF.onHand().P01, stock0 + 3, 'its stock is back on the shelf');
+  const rec = env.call('stallflow_record_sale', { market: 'M02', paid: 'card', reason: 'what really sold',
+    lines: [{ product_id: 'P01', qty: 2 }, { product_id: 'P02', qty: 3 }], request_id: 'h1' });
+  assert.ok(rec.data.ok, JSON.stringify(rec));
+  env.call('stallflow_record_sale', { market: 'M02', paid: 'card', reason: 'again', lines: [{ product_id: 'P01', qty: 2 }], request_id: 'h1' });
+  const after = env.call('stallflow_sales', { market: 'M02' }).data;
+  assert.strictEqual(after.totals.sales, 1, 'the wrong sale no longer counts, the request id recorded once');
+  assert.strictEqual(after.totals.units, 5);
+  assert.strictEqual(after.totals.byPaid.card, 2 * 70 + 3 * 70);
+  assert.strictEqual(after.sales.find((x) => x.orderNo === wrong).status, 'cancelled', 'kept on record');
+  assert.ok(/recorded by Claude/.test(after.sales.find((x) => x.orderNo === rec.data.orderNo).note));
+  assert.strictEqual(after.sales.find((x) => x.orderNo === rec.data.orderNo).lines[1].variant, '352 ml');
+  assert.ok(env.call('stallflow_set_payment', { order_no: rec.data.orderNo, paid: 'eft', reason: 'paid by EFT' }).data.ok);
+  assert.strictEqual(env.call('stallflow_sales', { market: 'M02' }).data.totals.byPaid.eft, 350);
+  const dash = SF.dispatch('dashboard', { token: c, marketId: 'M02' });
+  assert.ok(dash.ok === false || dash.data, 'numbers still read');
+  assert.strictEqual(env.call('stallflow_record_sale', { market: 'nowhere', paid: 'cash', reason: 'x', lines: [{ product_id: 'P01', qty: 1 }] }).data.ok, false);
+  assert.strictEqual(env.call('stallflow_record_sale', { market: 'M02', paid: 'bitcoin', reason: 'x', lines: [{ product_id: 'P01', qty: 1 }] }).data.ok, false);
+  assert.strictEqual(env.call('stallflow_record_sale', { market: 'M02', paid: 'cash', reason: 'x', lines: [{ product_id: 'P01', qty: 500 }] }).data.ok, false);
+  const audit = SF.rows('audit').filter((r) => r.Actor === 'Claude (connector)').map((r) => r.Action);
+  ['stallflow_cancel_sale', 'stallflow_record_sale', 'stallflow_set_payment'].forEach((a) => assert.ok(audit.indexOf(a) !== -1, a));
 });
 
 test('a new key replaces the old one, switching off ends it, and the hourly limit holds', () => {

@@ -6,8 +6,12 @@
    fixed list of jobs: read stock, add a product, change a price, add or take
    off stock, switch a product off or on, and read problem reports.
 
-   It can never touch money, orders, markets, PINs or who has access, and a
-   product is only ever switched off, never deleted. Every call is written to
+   Since November 2026 it can also correct the books when the owner asks: read a
+   market's sales, cancel a wrong sale (stock goes back, the sale stays on record
+   as cancelled), record a missed sale and change how a sale was paid. Each
+   correction is noted on the sale itself and in the audit trail. It can never
+   touch markets, PINs or who has access, never sees customers' names or numbers,
+   and a product is only ever switched off, never deleted. Every call is written to
    the audit trail as "Claude (connector)" with what was asked. The key is
    kept only as a hash and is shown once; switching it off ends access at once.
    ========================================================================= */
@@ -69,6 +73,29 @@ SF.action('assistantStatus', 'people', 'read', function (p, ctx) {
 });
 
 /* ---- the tools Claude is given: each one is a fixed, named job ---- */
+
+/** A market for the sales tools: its id, its name (unique, any case), or "home". */
+SF.assistantMarket = function (q) {
+  q = String(q || '').trim();
+  if (/^home$|^between markets$/i.test(q)) q = SF.HOME;
+  var all = SF.markets(), hit = all.filter(function (m) { return m.id === q; });
+  if (!hit.length) hit = all.filter(function (m) { return m.name.toLowerCase() === q.toLowerCase(); });
+  if (!hit.length) hit = all.filter(function (m) { return m.name.toLowerCase().indexOf(q.toLowerCase()) !== -1; });
+  if (hit.length !== 1) {
+    return { ok: false, message: hit.length ? 'More than one market matches "' + q.slice(0, 40) + '": use its id.'
+                                            : 'No market matches "' + q.slice(0, 40) + '". Call stallflow_sales without a market for the list.' };
+  }
+  var m = hit[0];
+  return { ok: true, id: m.id, name: m.name, date: m.date };
+};
+SF.assistantCtx = function (what) { return { role: 'assistant', user: 'Claude (connector)', device: 'connector', action: what }; };
+/** Say on the sale itself that it was a correction (the Note column; never a customer's details). */
+SF.assistantNote = function (orderNo, text) {
+  var o = SF.findOrder(orderNo);
+  if (!o) return;
+  var note = (o.note ? o.note + ' · ' : '') + String(text).slice(0, 120);
+  SF.setCell('orders', o.row, 'Note', note.slice(0, 200));
+};
 
 function sfAssistantProduct(p) {
   return { id: p.id, name: p.name, variant: p.variant, category: p.category, type: p.type,
@@ -154,6 +181,97 @@ SF.ASSISTANT_TOOLS = {
         }),
         notCountedButInStock: review.filter(function (r) { return r.counted === null && r.startExpected; })
           .map(function (r) { return { id: r.id, name: r.name, variant: r.variant, expectedAtStart: r.startExpected, appNow: now[r.id] }; }) };
+    }
+  },
+  stallflow_sales: {
+    write: false,
+    description: 'Read-only: without "market", every market with its id, date and what it took. With "market" (an id such as M07, a name, or "home" for between markets): every sale there with its order number, time, how it was paid, status and the jars on it. No customer names or numbers. Use this before correcting a sale.',
+    props: { market: { type: 'string', description: 'Market id, name, or "home"' } }, need: [],
+    run: function (a) {
+      var orders = SF.orders();
+      if (!a.market) {
+        return { ok: true, markets: SF.markets().map(function (m) {
+          var sold = orders.filter(function (o) { return o.marketId === m.id && (o.status === 'paid' || o.status === 'collected'); });
+          return { id: m.id === SF.HOME ? 'home' : m.id, name: m.name, date: m.date, status: m.status,
+                   sales: sold.length, units: sold.reduce(function (t, o) { return t + o.units; }, 0),
+                   taken: Math.round(sold.reduce(function (t, o) { return t + o.total; }, 0) * 100) / 100 };
+        }) };
+      }
+      var m = SF.assistantMarket(a.market);
+      if (!m.ok) return m;
+      var mine = orders.filter(function (o) { return o.marketId === m.id; });
+      var size = {};
+      SF.products({ all: true }).forEach(function (p) { size[p.id] = p.variant; });
+      var live = mine.filter(function (o) { return o.status === 'paid' || o.status === 'collected'; });
+      var byPaid = { cash: 0, card: 0, eft: 0 };
+      live.forEach(function (o) { byPaid[o.paid] += o.total; });
+      return { ok: true, market: { id: m.id === SF.HOME ? 'home' : m.id, name: m.name, date: m.date },
+        totals: { sales: live.length, units: live.reduce(function (t, o) { return t + o.units; }, 0),
+                  taken: Math.round(live.reduce(function (t, o) { return t + o.total; }, 0) * 100) / 100, byPaid: byPaid },
+        sales: mine.map(function (o) {
+          return { orderNo: o.no, time: o.time, channel: o.channel, status: o.status, paid: o.paid,
+                   total: o.total, note: o.channel === 'till' ? o.note : '',
+                   lines: o.lines.map(function (l) {
+                     return { productId: l.id, name: l.name, variant: size[l.id] || '', qty: l.qty, units: l.units,
+                              price: l.price, total: l.total };
+                   }) };
+        }) };
+    }
+  },
+  stallflow_cancel_sale: {
+    write: true,
+    description: 'Correct the books: cancel one wrong sale. Its stock goes back on the shelf and it stops counting in the takings; the sale stays on record as cancelled. Use stallflow_sales first to find the order number, and give the reason the owner gave.',
+    props: { order_no: { type: 'string', description: 'Order number, e.g. I012' },
+             reason: { type: 'string', description: 'Why, in the owner\'s words' } },
+    need: ['order_no', 'reason'],
+    run: function (a) {
+      var o = SF.findOrder(a.order_no);
+      if (!o) return { ok: false, message: 'No sale ' + String(a.order_no).slice(0, 20) + '.' };
+      if (o.status === 'reserved') return { ok: false, message: 'That is an unpaid pre-order, not a sale. The owner releases those in the app.' };
+      var res = SF.CORE_ACTIONS.cancelOrder.fn({ orderNo: o.no }, SF.assistantCtx('cancel_sale'));
+      if (res && res.ok !== false) SF.assistantNote(o.no, 'cancelled by Claude: ' + a.reason);
+      return res && res.ok !== false ? { ok: true, cancelled: o.no, returnedToStock: o.units, total: o.total } : res;
+    }
+  },
+  stallflow_record_sale: {
+    write: true,
+    description: 'Correct the books: record a sale that was missed or rung up wrong, under the market it really happened at, at today\'s prices, with how it was paid. Stock comes off the shelf as for any sale. Check stallflow_stock for product ids and stallflow_sales for what is already there, so nothing is counted twice.',
+    props: { market: { type: 'string', description: 'Market id, name, or "home"' },
+             paid: { type: 'string', enum: ['cash', 'card', 'eft'] },
+             lines: { type: 'array', description: 'What was sold', items: { type: 'object',
+               properties: { product_id: { type: 'string' }, qty: { type: 'number' } }, required: ['product_id', 'qty'] } },
+             reason: { type: 'string', description: 'Why, in the owner\'s words' } },
+    need: ['market', 'paid', 'lines', 'reason'],
+    run: function (a) {
+      var m = SF.assistantMarket(a.market);
+      if (!m.ok) return m;
+      if (SF.PAY_METHODS.indexOf(String(a.paid)) === -1) return { ok: false, message: 'Paid must be cash, card or eft.' };
+      var lines = Array.isArray(a.lines) ? a.lines : [];
+      if (!lines.length || lines.length > 30) return { ok: false, message: 'Give between 1 and 30 lines.' };
+      for (var i = 0; i < lines.length; i++) {
+        var q = SF.num(lines[i] && lines[i].qty);
+        if (!(q > 0) || q > 50) return { ok: false, message: 'Each line needs a quantity from 1 to 50.' };
+      }
+      var res = SF.CORE_ACTIONS.sell.fn({ marketId: m.id === SF.HOME ? 'home' : m.id, paid: a.paid,
+        lines: lines.map(function (l) { return { id: String(l.product_id), qty: SF.num(l.qty) }; }) }, SF.assistantCtx('record_sale'));
+      if (res && res.ok !== false) SF.assistantNote(res.orderNo, 'recorded by Claude: ' + a.reason);
+      return res;
+    }
+  },
+  stallflow_set_payment: {
+    write: true,
+    description: 'Correct the books: change how one sale was paid (cash, card or eft), for a sale rung up with the wrong payment. Nothing else changes.',
+    props: { order_no: { type: 'string' }, paid: { type: 'string', enum: ['cash', 'card', 'eft'] },
+             reason: { type: 'string' } },
+    need: ['order_no', 'paid'],
+    run: function (a) {
+      var o = SF.findOrder(a.order_no);
+      if (!o) return { ok: false, message: 'No sale ' + String(a.order_no).slice(0, 20) + '.' };
+      if (o.status === 'cancelled' || o.status === 'reserved') return { ok: false, message: 'That sale is ' + o.status + '.' };
+      if (SF.PAY_METHODS.indexOf(String(a.paid)) === -1) return { ok: false, message: 'Paid must be cash, card or eft.' };
+      SF.setCell('orders', o.row, 'Paid', String(a.paid));
+      SF.assistantNote(o.no, 'payment ' + o.paid + ' → ' + a.paid + ' by Claude' + (a.reason ? ': ' + a.reason : ''));
+      return { ok: true, orderNo: o.no, was: o.paid, now: String(a.paid) };
     }
   },
   stallflow_problems: {
@@ -365,8 +483,9 @@ SF.connCall = function (c, name, args) {
   var asked = String(args.reason || args.name || args.product_id || args.note || '').slice(0, 120);
   var go = function () {
     var res = tool.run(args);
-    SF.audit(ctx, name, args.product_id || args.name || '',
-             JSON.stringify({ asked: asked, qty: args.qty, price: args.price, on: args.on }).slice(0, 250) +
+    SF.audit(ctx, name, args.product_id || args.order_no || args.market || args.name || '',
+             JSON.stringify({ asked: asked, qty: args.qty, price: args.price, on: args.on, paid: args.paid,
+                              lines: Array.isArray(args.lines) ? args.lines.length : undefined }).slice(0, 250) +
              (res && res.ok === false ? ' → ' + res.message : ''),
              res && res.ok === false ? 'refused' : 'ok');
     return res;
