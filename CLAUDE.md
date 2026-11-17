@@ -191,8 +191,12 @@ go through `SF.once` so a retried request never runs twice.
   app via `me.admin`; PIN mode has no admin, so it cannot be set up there). The admin makes a key in
   Settings; Claude calls `<api>?mcp=KEY` (MCP over HTTP) and can only run the
   fixed tools in `SF.ASSISTANT_TOOLS` (read stock, add a product, set a price,
-  adjust stock, switch a product on or off, read problems, read the latest stocktake). Never money,
-  orders, markets, PINs or people; products are switched off, never deleted.
+  adjust stock, switch a product on or off, read problems, read the latest stocktake) and, since
+  Nov 2026 at Jacques's request, correct the books when the owner asks: `stallflow_sales` (read a
+  market's sales, no customer details), `stallflow_cancel_sale` (through `cancelOrder`: stock back,
+  sale kept as cancelled), `stallflow_record_sale` (through `sell`), `stallflow_set_payment`. Each
+  correction is written on the sale's Note and in the audit. Never markets, PINs or people; never
+  customers' names or numbers; products are switched off, never deleted.
   Only the key's hash is stored; every call is audited as `Claude (connector)`.
   A new tool must be added to that list and justified; do not widen it casually.
 - **ChatGPT as a design connector** (`server/Support.gs`, `SF.DESIGN_TOOLS`; relay in `tools/chatgpt/`):

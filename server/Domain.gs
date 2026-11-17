@@ -372,6 +372,9 @@ SF.buildLines = function (rawLines, ctx, opts) {
       priced.cost = boxCost;
     } else {
       var free = product.available === null ? null : product.available - (used[product.id] || 0);
+      // A correction made through the Claude connector records what really left the table, even if
+      // the app's count says none were left: the count was wrong, not the sale.
+      if (ctx && ctx.correction) free = null;
       if (free !== null && priced.units > free + 1e-9) {
         var word = product.type === 'made' ? 'left to make today' : 'left';
         return {
