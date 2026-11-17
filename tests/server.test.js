@@ -388,7 +388,7 @@ test('the Duxies stocktake loads prices and counts, and running it twice changes
   assert.strictEqual(find('Strawberry', '125 ml').onHand, 17);
   assert.strictEqual(find('Strawberry', '352 ml').price, 70);
   assert.strictEqual(find('Fig', '125 ml').price, 50);
-  assert.strictEqual(find('Orange Marmalade Whiskey', 'Medium (odd bottle)').price, 60);
+  assert.strictEqual(find('Orange Marmalade Whiskey', '250 ml').price, 60);
   assert.strictEqual(find('Butter Biscuits', '300 g pack').type, 'made');
   assert.strictEqual(first.jars, 225);
   const big = find('Strawberry', '352 ml').cost, small = find('Strawberry', '125 ml').cost;
@@ -431,7 +431,7 @@ test('the Duxies stocktake loads prices and counts, and running it twice changes
   assert.strictEqual(nu.isNew, true);
   const q = SF.dispatch('stock', { token: tok }).data.pots.find((x) => x.name === 'Quince');
   assert.strictEqual(q.sizes.length, 3, 'a new jam gets all three sizes on the shelf list');
-  assert.strictEqual(JSON.stringify(q.sizes.map((x) => x.variant)), JSON.stringify(['352 ml', 'Medium (odd bottle)', '125 ml']));
+  assert.strictEqual(JSON.stringify(q.sizes.map((x) => x.variant)), JSON.stringify(['352 ml', '250 ml', '125 ml']));
   assert.strictEqual(SF.dispatch('cookPot', { token: tok, opId: 'c5', name: 'Strawberry',
                                               lines: pot.lines, jars: {} }).ok, false);
 });
@@ -773,6 +773,22 @@ test('a new product never takes an id that is already in use', () => {
   const ids = SF.rows('products').map((x) => x.ProductId);
   assert.strictEqual(new Set(ids).size, ids.length, 'every id is unique');
   assert.strictEqual(SF.products({ all: true }).filter((x) => x.id === 'P01')[0].onHand, 10, 'Apricot Jam is untouched');
+});
+
+test('the middle jar size is renamed to 250 ml, and nothing else about the product changes', () => {
+  const env = shop(day(3));
+  const { SF, ctx } = env;
+  SF.append('products', { ProductId: 'P77', Name: 'Apricot', Variant: 'Medium (odd bottle)', Category: 'Jams', Type: 'stocked', Unit: 'each', Price: 50, Active: 'Yes', Sort: 30 });
+  SF.append('products', { ProductId: 'P78', Name: 'Fig', Variant: 'Medium jar, by hand', Category: 'Jams', Type: 'stocked', Unit: 'each', Price: 60, Active: 'Yes', Sort: 31 });
+  SF.move('P77', 2, 'adjust', 'test');
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'stalls', 'duxies', 'Fixes.gs'), 'utf8'), ctx);
+  const fix = vm.runInContext('sfDataFixes()', ctx).filter((f) => f.id === 'medium-is-250ml')[0];
+  assert.strictEqual(fix.run(), true);
+  const p = SF.products({ all: true });
+  const a = p.find((x) => x.id === 'P77');
+  assert.strictEqual(a.variant, '250 ml'); assert.strictEqual(a.price, 50); assert.strictEqual(a.onHand, 2);
+  assert.strictEqual(p.find((x) => x.id === 'P78').variant, 'Medium jar, by hand', 'a hand edit is left alone');
+  assert.strictEqual(fix.run(), false, 'running it again changes nothing');
 });
 
 test('the shared-id mistake is repaired: the ornament gets its own id and takes its stock with it', () => {
@@ -1560,17 +1576,17 @@ test('the stocktake puts every jam on the list in all three sizes, and stock onl
   ctx.sfApplyStocktake();
   const ps = SF.products();
   const jams = ctx.STOCKTAKE.jams.map((j) => j[0]);
-  jams.forEach((n) => ['352 ml', 'Medium (odd bottle)', '125 ml'].forEach((v) => {
+  jams.forEach((n) => ['352 ml', '250 ml', '125 ml'].forEach((v) => {
     assert.ok(ps.find((p) => p.name === n && p.variant === v), n + ' ' + v + ' is on the list');
   }));
   const apricot = (v) => ps.find((p) => p.name === 'Apricot' && p.variant === v);
   assert.ok(ps.find((p) => p.name === 'Pineapple / Granadilla' && p.variant === '125 ml'), 'the small Pineapple / Granadilla jar is on the list');
-  assert.strictEqual(apricot('Medium (odd bottle)').onHand, 0, 'a size never counted starts at none');
-  assert.strictEqual(apricot('Medium (odd bottle)').price, 50);
+  assert.strictEqual(apricot('250 ml').onHand, 0, 'a size never counted starts at none');
+  assert.strictEqual(apricot('250 ml').price, 50);
   assert.strictEqual(apricot('125 ml').onHand, 1, 'counted stock is kept');
-  assert.strictEqual(ps.find((p) => p.name === 'Strawberry Gin' && p.variant === 'Medium (odd bottle)').price, 60, 'a premium jam gets the premium price in a new size');
+  assert.strictEqual(ps.find((p) => p.name === 'Strawberry Gin' && p.variant === '250 ml').price, 60, 'a premium jam gets the premium price in a new size');
   assert.strictEqual(ps.find((p) => p.name === 'Fig Chunky' && p.variant === '125 ml').price, 50);
-  assert.ok(apricot('Medium (odd bottle)').cost > 0, 'and its cost is worked out');
+  assert.ok(apricot('250 ml').cost > 0, 'and its cost is worked out');
 });
 
 test('Add the missing sizes adds only what is missing and never touches stock or prices already there', () => {
@@ -1592,7 +1608,7 @@ test('Add the missing sizes adds only what is missing and never touches stock or
   assert.strictEqual(keep.price, 72, 'her price is untouched'); assert.strictEqual(keep.onHand, 2, 'her stock is untouched');
   assert.strictEqual(ps.find((p) => p.id === 'P51').active, false, 'a size she switched off stays off');
   assert.strictEqual(ps.filter((p) => p.name === 'Mulberry').length, 3, 'and is not added a second time');
-  const added = ps.find((p) => p.name === 'Apricot' && p.variant === 'Medium (odd bottle)');
+  const added = ps.find((p) => p.name === 'Apricot' && p.variant === '250 ml');
   assert.strictEqual(added.onHand, 0); assert.strictEqual(added.price, 50); assert.strictEqual(added.active, true);
   assert.strictEqual(SF.dispatch('stock', { token: tok }).data.sizesMissing, 0);
   const again = SF.dispatch('addJamSizes', { token: tok, opId: 'ads2' });

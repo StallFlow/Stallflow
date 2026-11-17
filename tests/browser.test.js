@@ -2542,7 +2542,7 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
     const env = await phone({ hash: '#stock', seed: (SF) => {
       SF.append('products', { ProductId: 'P20', Name: 'Apricot', Variant: '352 ml', Type: 'stocked', Category: 'Jams', Unit: 'each', Price: 70, Active: 'Yes', Sort: 1 });
       // what the stall's own file does, in miniature
-      const want = ['352 ml', 'Medium (odd bottle)', '125 ml'];
+      const want = ['352 ml', '250 ml', '125 ml'];
       SF.missingSizes = () => want.filter((v) => !SF.rows('products').some((p) => p.Name === 'Apricot' && p.Variant === v)).map((v) => ({ name: 'Apricot', size: v }));
       SF.addJamSizes = () => { const m = SF.missingSizes(); m.forEach((x, i) => SF.append('products', { ProductId: 'P3' + i, Name: 'Apricot', Variant: x.size, Type: 'stocked', Category: 'Jams', Unit: 'each', Price: 50, Active: 'Yes', Sort: 20 + i })); return { added: m.length, costed: 0 }; };
     } });
@@ -2561,8 +2561,8 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
     const env = await phone({ hash: '#till', seed: (SF) => {
       SF.append('markets', { MarketId: 'M02', Name: 'Spring Fair', Date: day(3), Status: 'planned' });
       SF.set('activeMarket', 'M02');
-      [['P30', 'Apricot', '352 ml', 4], ['P31', 'Apricot', 'Medium (odd bottle)', 0], ['P32', 'Apricot', '125 ml', 0],
-       ['P33', 'Mulberry', '352 ml', 0], ['P34', 'Mulberry', 'Medium (odd bottle)', 0], ['P35', 'Mulberry', '125 ml', 0]].forEach((x, i) => {
+      [['P30', 'Apricot', '352 ml', 4], ['P31', 'Apricot', '250 ml', 0], ['P32', 'Apricot', '125 ml', 0],
+       ['P33', 'Mulberry', '352 ml', 0], ['P34', 'Mulberry', '250 ml', 0], ['P35', 'Mulberry', '125 ml', 0]].forEach((x, i) => {
         SF.append('products', { ProductId: x[0], Name: x[1], Variant: x[2], Type: 'stocked', Category: 'Jams', Unit: 'each', Price: 60, Active: 'Yes', Sort: 100 + i });
         if (x[3]) SF.move(x[0], x[3], 'adjust', 't');
       });

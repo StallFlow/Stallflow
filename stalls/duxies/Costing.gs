@@ -84,7 +84,7 @@ var COSTING = {
   // How full each size is compared with a 352 ml jar, and what the jar costs.
   sizes: {
     L: { share: 1,         bottle: 8.64 },
-    M: { share: 250 / 352, bottle: 8.64 },   // odd bottles: estimate, ~250 ml
+    M: { share: 250 / 352, bottle: 8.64 },   // the 250 ml size (odd bottles)
     S: { share: 125 / 352, bottle: 7.80 }
   },
 

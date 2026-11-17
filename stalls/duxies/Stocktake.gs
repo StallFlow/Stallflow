@@ -18,7 +18,7 @@ var STOCKTAKE = {
 
   sizes: {
     L: '352 ml',
-    M: 'Medium (odd bottle)',
+    M: '250 ml',
     S: '125 ml'
   },
 
@@ -36,7 +36,7 @@ var STOCKTAKE = {
   // What a premium jam costs in a size its own list above does not name.
   premiumDefault: { L: 80, M: 60, S: 50 },
 
-  // name, 352 ml, medium, 125 ml. Every jam comes in all three sizes. null =
+  // name, 352 ml, 250 ml, 125 ml. Every jam comes in all three sizes. null =
   // not counted: the size is on the list at 0 and the stocktake leaves its stock alone.
   jams: [
     ['3 Fruit Marmalade',               12, 1, 7],

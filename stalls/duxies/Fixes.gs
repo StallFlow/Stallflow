@@ -4,6 +4,20 @@
  */
 function sfDataFixes() {
   return [{
+    id: 'medium-is-250ml',
+    what: 'The middle jar size is called 250 ml (it was "Medium (odd bottle)")',
+    // Only the size label changes, and only where it still reads exactly as it did: ids, prices,
+    // stock and past sales stay as they are.
+    run: function () {
+      var n = 0;
+      SF.rows('products').forEach(function (r) {
+        if (String(r.Variant) !== 'Medium (odd bottle)') return;
+        SF.setCell('products', r._row, 'Variant', '250 ml');
+        n++;
+      });
+      return n > 0;
+    }
+  }, {
     id: 'gift-boxes',
     until: '2027-03-31',
     what: 'Added the gift boxes (packages): Teacher\'s Thank You, Taste of Mzansi, Braai Box, Cheese Board Trio, Grown-ups Only, Sunday Breakfast, 12 Jars of Christmas and Jam Club',

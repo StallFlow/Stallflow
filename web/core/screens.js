@@ -1373,7 +1373,7 @@
       (cook.isNew || !cook.pot.sizes.length
         ? '<div class="notice" style="border-radius:10px;margin-top:14px"><span>This is a new jam. Put in ' +
           'what goes into one pot, then tap <strong>Save as the usual recipe</strong>. It is added to your ' +
-          'shelf list in all three sizes (352 ml R70, medium R50, 125 ml R40), and then you can cook it.</span></div>'
+          'shelf list in all three sizes (352 ml R70, 250 ml R50, 125 ml R40), and then you can cook it.</span></div>'
         : '<h3 class="step">2. How many jars did you fill?</h3>' + sizes +
           '<div id="cookanswer"></div>' +
           '<button class="block bigbtn" id="cookgo" onclick="SFS.cookSave()"></button>');
@@ -1425,10 +1425,10 @@
       : on === 'cupboard' ? pantryCard(s)
       : on === 'count' ? (window.SFCount ? SFCount.render() : '')
       : runHistory(s, v);
-    // Every jam in all three sizes (352 ml, medium, 125 ml), so each can be counted and cooked.
+    // Every jam in all three sizes (352 ml, 250 ml, 125 ml), so each can be counted and cooked.
     var sizesCard = s.sizesMissing > 0 && on !== 'count'
       ? '<div class="card stale"><b>' + s.sizesMissing + ' jam size' + (s.sizesMissing === 1 ? ' is' : 's are') +
-          ' missing.</b> Every jam should come in all three sizes: 352 ml, medium and 125 ml. This adds the ' +
+          ' missing.</b> Every jam should come in all three sizes: 352 ml, 250 ml and 125 ml. This adds the ' +
           'missing ones at the usual prices with none in stock, ready to count or cook. Sizes already there ' +
           'are not touched.<button class="block" id="addsizes" style="margin-top:10px" onclick="SFS.addSizes()">' +
           'Add the missing sizes</button></div>'
