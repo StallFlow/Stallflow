@@ -88,7 +88,10 @@ SF.assistantMarket = function (q) {
   var m = hit[0];
   return { ok: true, id: m.id, name: m.name, date: m.date };
 };
-SF.assistantCtx = function (what) { return { role: 'assistant', user: 'Claude (connector)', device: 'connector', action: what }; };
+SF.assistantCtx = function (what) {
+  return { role: 'assistant', user: 'Claude (connector)', device: 'connector', action: what,
+           correction: what === 'record_sale' };
+};
 /** Say on the sale itself that it was a correction (the Note column; never a customer's details). */
 SF.assistantNote = function (orderNo, text) {
   var o = SF.findOrder(orderNo);
@@ -235,7 +238,7 @@ SF.ASSISTANT_TOOLS = {
   },
   stallflow_record_sale: {
     write: true,
-    description: 'Correct the books: record a sale that was missed or rung up wrong, under the market it really happened at, at today\'s prices, with how it was paid. Stock comes off the shelf as for any sale. Check stallflow_stock for product ids and stallflow_sales for what is already there, so nothing is counted twice.',
+    description: 'Correct the books: record a sale that was missed or rung up wrong, under the market it really happened at, at today\'s prices, with how it was paid. Stock comes off the shelf as for any sale, even when the app\'s count says none were left (the jars really went). Check stallflow_stock for product ids and stallflow_sales for what is already there, so nothing is counted twice.',
     props: { market: { type: 'string', description: 'Market id, name, or "home"' },
              paid: { type: 'string', enum: ['cash', 'card', 'eft'] },
              lines: { type: 'array', description: 'What was sold', items: { type: 'object',

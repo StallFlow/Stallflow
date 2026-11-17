@@ -653,6 +653,12 @@ test('the connector corrects a market\'s sales when the owner asks: cancel, re-r
   assert.strictEqual(env.call('stallflow_record_sale', { market: 'nowhere', paid: 'cash', reason: 'x', lines: [{ product_id: 'P01', qty: 1 }] }).data.ok, false);
   assert.strictEqual(env.call('stallflow_record_sale', { market: 'M02', paid: 'bitcoin', reason: 'x', lines: [{ product_id: 'P01', qty: 1 }] }).data.ok, false);
   assert.strictEqual(env.call('stallflow_record_sale', { market: 'M02', paid: 'cash', reason: 'x', lines: [{ product_id: 'P01', qty: 500 }] }).data.ok, false);
+  const p2 = SF.onHand().P02;
+  assert.ok(env.call('stallflow_record_sale', { market: 'M02', paid: 'card', reason: 'sold, though the count said none',
+    lines: [{ product_id: 'P02', qty: p2 + 2 }] }).data.ok, 'a correction records what really sold');
+  assert.strictEqual(SF.onHand().P02, -2, 'the count goes below zero, so the next stocktake shows it');
+  assert.strictEqual(SF.dispatch('sell', { token: c, opId: 'w9', marketId: 'M02', lines: [{ id: 'P02', qty: 1 }] }).ok, false,
+    'the till itself still cannot sell what is not there');
   const audit = SF.rows('audit').filter((r) => r.Actor === 'Claude (connector)').map((r) => r.Action);
   ['stallflow_cancel_sale', 'stallflow_record_sale', 'stallflow_set_payment'].forEach((a) => assert.ok(audit.indexOf(a) !== -1, a));
 });
