@@ -68,6 +68,12 @@ go through `SF.once` so a retried request never runs twice.
 - `SF.PLATFORM.admins` are owner on every stall and cannot be changed from a
   stall. Everyone else is a row in the stall's `Users` tab.
 - Any email that has a Google account works; it does not have to be Gmail.
+- **When Google's button script will not load** (some Android Chrome phones: data saver, a
+  blocking DNS, weak signal), `loadGoogle` tries twice, then the screen offers **Sign in with
+  Google** on Google's own page (`SF.googleRedirect`: same tab, `response_type=id_token`, a
+  `state` kept in `sf.gredirect`). Coming back, `googleReturn` (first thing in `init`) checks the
+  state, removes the token from the address at once and sends it to `signInGoogle` like the
+  button's. The app's `/app/` address must be in the OAuth client's Authorized redirect URIs.
 
 ## Rules that are easy to break
 

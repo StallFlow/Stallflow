@@ -879,6 +879,28 @@ test('the Caroline test market is removed only while nothing is recorded against
   assert.strictEqual(fix.run(), false);
 });
 
+test('the live Caroline test market: its test pre-order cancelled, the last real market goes live, Caroline is deleted', () => {
+  const env = shop(day(-8));                         // M01: a real market, been and gone
+  const { SF, ctx } = env;
+  SF.append('markets', { MarketId: 'M02', Name: 'Harveston estate', Date: day(-8 + 1), Status: 'planned' });
+  SF.append('markets', { MarketId: 'M04', Name: 'Caroline', Date: '2027-11-01', Location: 'Lyttelton', Status: 'cashed up' });
+  SF.set('activeMarket', 'M04');
+  SF.setPin('owner', '4321');
+  const tok = SF.dispatch('signIn', { pin: '4321', device: 'd' }).data.token;
+  SF.set('preordersOpen', 'yes');
+  const o = order(SF, { market: 'M04' });
+  assert.ok(o.ok, JSON.stringify(o));
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'stalls', 'duxies', 'Fixes.gs'), 'utf8'), ctx);
+  const fix = vm.runInContext('sfDataFixes()', ctx).filter((f) => f.id === 'caroline-test-market-deleted')[0];
+  assert.strictEqual(fix.run(), false, 'not while a pre-order is still open against it');
+  SF.dispatch('cancelOrder', { token: tok, opId: 'c1', orderNo: o.orderNo });
+  assert.strictEqual(fix.run(), true);
+  assert.strictEqual(SF.activeMarket(), 'M02', 'the most recent real market is live');
+  assert.ok(!SF.markets().some((m) => m.id === 'M04'), 'Caroline is gone from every list');
+  assert.strictEqual(SF.onHand().P01, 10, 'the stock is all back');
+  assert.strictEqual(fix.run(), false, 'running it again changes nothing');
+});
+
 test('uncooked stock is a list she can add to and update', () => {
   const { SF } = shop(day(3));
   SF.setPin('owner', '4321');

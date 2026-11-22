@@ -577,18 +577,80 @@ window.SF = (function () {
 
   /** Google's sign-in button script, loaded once and only when needed. */
   var gsi = null;
-  function loadGoogle() {
-    if (gsi) return gsi;
-    gsi = new Promise(function (resolve, reject) {
+  function loadGoogleOnce() {
+    return new Promise(function (resolve, reject) {
       var s = document.createElement('script');
       s.src = 'https://accounts.google.com/gsi/client';
       s.async = true;
-      var late = setTimeout(function () { gsi = null; reject(new Error('timeout')); }, 10000);
+      var late = setTimeout(function () { reject(new Error('timeout')); }, 10000);
       s.onload = function () { clearTimeout(late); resolve(); };
-      s.onerror = function () { clearTimeout(late); gsi = null; reject(new Error('gsi')); };
+      s.onerror = function () { clearTimeout(late); if (s.parentNode) s.parentNode.removeChild(s); reject(new Error('gsi')); };
       document.head.appendChild(s);
     });
+  }
+  /** A weak signal often drops the first try: one more go, after a breath, before giving up. */
+  function loadGoogle() {
+    if (gsi) return gsi;
+    gsi = loadGoogleOnce().catch(function (e) {
+      if (e && e.message === 'timeout') throw e;
+      return new Promise(function (r) { setTimeout(r, 1500); }).then(loadGoogleOnce);
+    });
+    gsi.catch(function () { gsi = null; });
     return gsi;
+  }
+
+  /* ---- Google sign-in on Google's own page (no script needed) -------------
+     Some Android phones will not load Google's button script (a data saver, a
+     blocking DNS, a flaky signal). Google's own sign-in page still works: the
+     phone goes there in the same tab and comes back to the app with an ID token
+     in the address (#id_token=…), which goes to signInGoogle exactly like the
+     button's. The state value proves the answer is for the request this phone
+     made; the address is cleaned at once so the token never stays in history.
+     Needs the app's address in the Google client's "Authorized redirect URIs". */
+  function googleRedirect() {
+    var cfg = LS.get('sf.authcfg', null);
+    if (!cfg || !cfg.clientId) { paintSignIn(); return; }
+    var rnd = function () { return Math.random().toString(36).slice(2) + Date.now().toString(36); };
+    var state = rnd(), nonce = rnd();
+    LS.set('sf.gredirect', { state: state, at: Date.now() });
+    reportAuthError('redirect', 'started');
+    location.href = 'https://accounts.google.com/o/oauth2/v2/auth?client_id=' + encodeURIComponent(cfg.clientId) +
+      '&redirect_uri=' + encodeURIComponent(location.origin + location.pathname) +
+      '&response_type=id_token&scope=openid%20email&prompt=select_account' +
+      '&state=' + encodeURIComponent(state) + '&nonce=' + encodeURIComponent(nonce);
+  }
+
+  /** Back from Google's page? Take the token out of the address and sign in with it. */
+  function googleReturn() {
+    var h = String(location.hash || '');
+    if (!/[#&](id_token|error|state)=/.test(h)) return false;
+    var q = {};
+    h.replace(/^#/, '').split('&').forEach(function (kv) {
+      var i = kv.indexOf('=');
+      if (i > 0) q[decodeURIComponent(kv.slice(0, i))] = decodeURIComponent(kv.slice(i + 1).replace(/\+/g, ' '));
+    });
+    try { history.replaceState(null, '', location.pathname + location.search + '#till'); } catch (e) { location.hash = '#till'; }
+    var asked = LS.get('sf.gredirect', null);
+    LS.set('sf.gredirect', null);
+    var cfg = LS.get('sf.authcfg', null) || { google: true };
+    if (q.error || !q.id_token) {
+      reportAuthError('redirect', 'denied');
+      drawSignIn(cfg, 'Google did not sign you in. Tap the button to try again.');
+      return true;
+    }
+    if (!asked || asked.state !== q.state || Date.now() - asked.at > 15 * 60e3) {
+      reportAuthError('redirect', 'state-mismatch');
+      drawSignIn(cfg, 'That sign-in was not started from this phone just now. Please sign in again.');
+      return true;
+    }
+    reportAuthError('redirect', 'returned');
+    el('view').innerHTML = '<div class="wrap" style="max-width:420px;padding-top:40px">' +
+      '<div class="card"><div class="loading">Checking…</div></div></div>';
+    signInWith('signInGoogle', { credential: q.id_token }).then(function (res) {
+      if (!res.ok) { drawSignIn(cfg, res.message); return; }
+      start();
+    }).catch(function () { drawGoogleSignIn(cfg, '', ['network', 'unreachable']); });
+    return true;
   }
 
   /**
@@ -1138,6 +1200,9 @@ window.SF = (function () {
           '<div id="gsitrouble"></div>' +
           '<div style="text-align:center;margin-top:14px">' +
             '<button class="ghost sm" id="gsiretry" onclick="SF.retryGoogle()">Google showing an error? Try again</button></div>' +
+          '<div style="text-align:center;margin-top:8px">' +
+            '<button class="quiet sm" id="gsiredirect" onclick="SF.googleRedirect()" ' +
+              'style="text-decoration:underline">Still stuck? Sign in on Google\'s own page</button></div>' +
           '<p class="muted small" style="margin-top:12px;text-align:center">' +
             'Not on the list yet? Ask the owner to add your email address under ' +
             'More &rsaquo; People.</p>' +
@@ -1189,8 +1254,11 @@ window.SF = (function () {
       })();
     }).catch(function (e) {
       var b = el('gsi');
-      if (b) b.innerHTML = '';
-      showTrouble('load', e && e.message === 'timeout' ? 'timeout' : 'blocked');
+      // The button cannot load here, so Google's own page becomes the main way in.
+      if (b) b.innerHTML = '<button class="block" onclick="SF.googleRedirect()">Sign in with Google</button>';
+      showTrouble('load', e && e.message === 'timeout' ? 'timeout' : 'blocked',
+        'Google\'s sign-in button could not load on this phone. Tap Sign in with Google: it opens ' +
+        'Google\'s own page and brings you straight back.');
     });
   }
 
@@ -1307,7 +1375,8 @@ window.SF = (function () {
     if (density) document.documentElement.setAttribute('data-density', density);
 
     var auth = LS.get('sf.auth', null);
-    if (auth && auth.token) {
+    if (googleReturn()) { /* back from Google's own sign-in page: that takes it from here */ }
+    else if (auth && auth.token) {
       S.token = auth.token; S.role = auth.role; S.user = auth.user || ''; start();
     }
     else paintSignIn();
@@ -1328,7 +1397,7 @@ window.SF = (function () {
     init: init, start: start, speed: speed, render: render, load: load, go: go, route: route,
     signOut: signOut, forceSignOut: forceSignOut, toggleTheme: toggleTheme,
     // data
-    state: S, write: write, sync: sync, get: get, post: post, retryGoogle: retryGoogle,
+    state: S, write: write, sync: sync, get: get, post: post, retryGoogle: retryGoogle, googleRedirect: googleRedirect,
     cache: Cache, outbox: Outbox, site: SITE, ls: LS,
     // extension
     plugin: plugin, screen: screen, screens: screens, allScreens: allScreens,

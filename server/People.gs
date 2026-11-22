@@ -68,9 +68,9 @@ SF.action('authConfig', null, 'read', function () {
    the owner can see the pattern (Health check). Never a token, an email or free
    text: stage and code come from fixed lists, and at most 40 reports an hour
    are kept, so nobody can fill the Audit tab by calling this. */
-SF.AUTH_STAGES = ['load', 'render', 'init', 'network', 'refused', 'webview', 'offline', 'retry'];
+SF.AUTH_STAGES = ['load', 'render', 'init', 'network', 'refused', 'webview', 'offline', 'retry', 'redirect'];
 SF.AUTH_CODES = ['blocked', 'timeout', 'no-button', 'init-threw', 'unreachable', 'token-not-accepted',
-                 'embedded', 'offline', 'tapped'];
+                 'embedded', 'offline', 'tapped', 'started', 'returned', 'denied', 'state-mismatch'];
 SF.AUTH_BROWSERS = ['chrome', 'chrome-android', 'chrome-ios', 'safari', 'safari-ios', 'firefox', 'samsung', 'webview', 'other'];
 
 SF.authLogAllowed = function () {

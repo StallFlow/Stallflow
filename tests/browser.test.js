@@ -92,6 +92,10 @@ function server() {
         gh.push(JSON.parse(opts.payload));
         return { getResponseCode: () => 201, getContentText: () => JSON.stringify({ html_url: 'https://github.com/o/r/issues/9' }) };
       }
+      // Google's token check: a token that starts GOOD- is a real sign-in for boss@x.com.
+      const m = /tokeninfo\?id_token=(GOOD-[^&]*)/.exec(url);
+      if (m) return { getResponseCode: () => 200, getContentText: () => JSON.stringify({ aud: ctx.SF.PLATFORM.googleClientId,
+        iss: 'https://accounts.google.com', email_verified: 'true', exp: String(Math.floor(Date.now() / 1000) + 600), email: 'boss@x.com' }) };
       return { getResponseCode: () => 400, getContentText: () => '{}' };
     } },
     ScriptApp: { getService: () => ({ getUrl: () => 'https://example/exec' }) },
@@ -2228,6 +2232,42 @@ const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
     await page.waitForFunction(() => window.__gsi.loads === 2);
     assert.strictEqual(await page.evaluate(() => window.__gsi.cancels), 1, 'the old request was cancelled');
     assert.strictEqual(await page.evaluate(() => window.__gsi.inits), 2);
+    await env.ctx.close();
+  });
+
+  await test('Google sign-in: when the button script will not load, Sign in with Google goes to Google\'s own page', async () => {
+    const env = await signedOutWithGoogle('blocked');
+    const page = env.page;
+    await page.waitForSelector('#gsi button:has-text("Sign in with Google")', { timeout: 20000 });
+    assert.ok(/brings you straight back/.test(await page.textContent('#gsitrouble')));
+    let went = null;
+    await env.ctx.route('https://accounts.google.com/o/oauth2/**', (r) => { went = r.request().url(); r.fulfill({ status: 200, contentType: 'text/html', body: 'google' }); });
+    await page.click('#gsi button:has-text("Sign in with Google")');
+    await page.waitForFunction(() => document.body.textContent === 'google');
+    const u = new URL(went);
+    assert.strictEqual(u.searchParams.get('response_type'), 'id_token');
+    assert.strictEqual(u.searchParams.get('client_id'), 'x.apps.googleusercontent.com');
+    assert.ok(/\/duxies\/app\/$/.test(u.searchParams.get('redirect_uri')), u.searchParams.get('redirect_uri'));
+    const state = u.searchParams.get('state');
+    assert.ok(state && u.searchParams.get('nonce'));
+    // Google sends the phone back with the token in the address.
+    await page.goto(base + '#id_token=GOOD-abc&state=' + encodeURIComponent(state) + '&token_type=Bearer');
+    await page.waitForFunction(() => window.SF && SF.state && SF.state.ready, null, { timeout: 15000 });
+    assert.ok(!/id_token/.test(page.url()), 'the token is taken out of the address: ' + page.url());
+    assert.strictEqual(await page.evaluate(() => SF.state.user), 'boss@x.com');
+    assert.ok(authLog(env).some((l) => /^redirect returned/.test(l)), authLog(env).join(' | '));
+    await env.ctx.close();
+  });
+
+  await test('Google sign-in: a token in the address that this phone did not ask for is refused', async () => {
+    const env = await signedOutWithGoogle('blocked');
+    const page = env.page;
+    await page.waitForSelector('#gsi button:has-text("Sign in with Google")', { timeout: 20000 });
+    await page.goto('about:blank');                       // Google's answer is always a fresh page load
+    await page.goto(base + '#id_token=GOOD-forged&state=somebody-else');
+    await page.waitForFunction(() => /not started from this phone/.test(document.getElementById('view').textContent));
+    assert.strictEqual(await page.evaluate(() => SF.state.token || ''), '');
+    assert.ok(!/id_token/.test(page.url()));
     await env.ctx.close();
   });
 
