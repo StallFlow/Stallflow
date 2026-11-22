@@ -4,6 +4,28 @@
  */
 function sfDataFixes() {
   return [{
+    id: 'caroline-test-market-deleted',
+    what: 'The Caroline test market was deleted (its test sale cancelled first)',
+    // Caroline (dated 2027-11-01) was made to try the app out. Its one test pre-order was cancelled
+    // on 22 Nov, so nothing real is recorded against it. If it is still the live market, the most
+    // recent real market becomes live instead (its day has passed, so the usual order link lists the
+    // markets that are open). Then it is deleted the normal way: marked deleted, id never reused.
+    run: function () {
+      var car = SF.markets().filter(function (m) {
+        return /^caroline$/i.test(m.name.trim()) && m.date === '2027-11-01';
+      })[0];
+      if (!car || SF.marketUse(car.id).used) return false;
+      if (SF.activeMarket() === car.id) {
+        var real = SF.markets().filter(function (m) {
+          return m.id !== SF.HOME && m.id !== car.id && /^\d{4}-\d{2}-\d{2}$/.test(m.date) && m.date <= SF.today();
+        }).sort(function (a, b) { return a.date < b.date ? 1 : a.date > b.date ? -1 : 0; })[0];
+        if (!real) return false;
+        SF.set('activeMarket', real.id);
+      }
+      var res = SF.CORE_ACTIONS.deleteMarket.fn({ id: car.id }, { role: 'system', user: 'data fix' });
+      return !!(res && res.ok);
+    }
+  }, {
     id: 'medium-is-250ml',
     what: 'The middle jar size is called 250 ml (it was "Medium (odd bottle)")',
     // Only the size label changes, and only where it still reads exactly as it did: ids, prices,
